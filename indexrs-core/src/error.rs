@@ -33,6 +33,10 @@ pub enum IndexError {
     /// The requested segment does not exist in the index.
     #[error("segment not found: {0}")]
     SegmentNotFound(SegmentId),
+
+    /// An error occurred while walking the directory tree.
+    #[error("walk error: {0}")]
+    Walk(String),
 }
 
 /// Convenience type alias for `std::result::Result<T, IndexError>`.

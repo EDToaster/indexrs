@@ -1,3 +1,4 @@
+pub mod binary;
 pub mod codec;
 pub mod content;
 pub mod error;
@@ -9,7 +10,12 @@ pub mod posting;
 pub mod search;
 pub mod trigram;
 pub mod types;
+pub mod walker;
 
+pub use binary::{
+    is_binary_content, is_binary_extension, is_binary_path, should_index_file,
+    DEFAULT_MAX_FILE_SIZE,
+};
 pub use codec::{
     decode_delta_varint, decode_positional_postings, encode_delta_varint,
     encode_positional_postings,
@@ -24,3 +30,4 @@ pub use posting::PostingListBuilder;
 pub use search::{FileMatch, LineMatch, SearchResult};
 pub use trigram::{extract_trigrams, extract_unique_trigrams};
 pub use types::{FileId, Language, SegmentId, SymbolKind, Trigram};
+pub use walker::{DirectoryWalkerBuilder, WalkedFile, Walker};

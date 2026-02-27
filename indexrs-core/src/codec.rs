@@ -164,8 +164,8 @@ pub fn encode_positional_postings(postings: &[(u32, u32)]) -> Vec<u8> {
 
         // Write delta-encoded offsets
         let mut prev_offset = 0u32;
-        for j in group_start..group_end {
-            let offset = postings[j].1;
+        for posting in &postings[group_start..group_end] {
+            let offset = posting.1;
             let delta = offset - prev_offset;
             buf.write_varint(delta).expect("write to Vec<u8> cannot fail");
             prev_offset = offset;

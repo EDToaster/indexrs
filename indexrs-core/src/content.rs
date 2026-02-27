@@ -86,7 +86,7 @@ impl ContentStoreWriter {
     /// metadata index for later retrieval via [`ContentStoreReader::read_content`].
     pub fn add_content(&mut self, content: &[u8]) -> std::io::Result<(u64, u32)> {
         let compressed = zstd::bulk::compress(content, ZSTD_COMPRESSION_LEVEL)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         let offset = self.current_offset;
         let compressed_len = compressed.len() as u32;

@@ -146,8 +146,7 @@ impl TrigramIndexReader {
             }
             let _ = prev; // suppress unused warning
 
-            let file_postings_end = data_start + cursor.position() as usize;
-            file_postings_end
+            data_start + cursor.position() as usize
         };
 
         Ok(TrigramIndexReader {
