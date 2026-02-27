@@ -1,0 +1,1037 @@
+//! Segment lifecycle manager with background compaction.
+//!
+//! [`SegmentManager`] is the primary entry point for indexing operations. It
+//! owns the [`IndexState`](crate::index_state::IndexState), tracks active
+//! segments, builds new segments from files, applies incremental changes with
+//! tombstoning, and compacts fragmented segments.
+//!
+//! # Concurrency
+//!
+//! - A writer `Mutex` ensures only one indexing or compaction operation runs
+//!   at a time.
+//! - Readers call `snapshot()` for a lock-free view of the current segment list.
+//! - Compaction can run in the background via `compact_background()`.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+
+use crate::changes::ChangeEvent;
+use crate::error::IndexError;
+use crate::index_state::{IndexState, SegmentList};
+use crate::metadata::FileMetadata;
+use crate::segment::{InputFile, Segment, SegmentWriter};
+use crate::tombstone::{self, TombstoneSet};
+use crate::types::{FileId, SegmentId};
+
+/// Default maximum number of segments before compaction is recommended.
+const DEFAULT_MAX_SEGMENTS: usize = 10;
+
+/// Default tombstone ratio threshold for compaction.
+const DEFAULT_MAX_TOMBSTONE_RATIO: f32 = 0.30;
+
+/// Segment lifecycle manager.
+///
+/// The primary entry point for all indexing operations. Owns the `IndexState`
+/// (for snapshot isolation), a writer mutex (serializes indexing/compaction),
+/// and a monotonic segment ID counter.
+pub struct SegmentManager {
+    /// Base directory for the index (e.g. `.indexrs/`). Segments live
+    /// under `<base_dir>/segments/`. Reserved for future use (e.g. recovery).
+    #[allow(dead_code)]
+    base_dir: PathBuf,
+
+    /// The directory where segment subdirectories are created.
+    segments_dir: PathBuf,
+
+    /// Atomic counter for assigning monotonically increasing segment IDs.
+    next_id: AtomicU32,
+
+    /// The index state holding the current segment list. Readers get
+    /// lock-free snapshots; the writer mutex below serializes mutations.
+    state: IndexState,
+
+    /// Serializes write operations (add_segment, index_files, apply_changes,
+    /// compact). Only one write operation can run at a time.
+    write_lock: Mutex<()>,
+}
+
+impl SegmentManager {
+    /// Create a new segment manager, scanning existing segments from disk.
+    ///
+    /// If `base_dir` does not exist, it is created along with the `segments/`
+    /// subdirectory. Any existing `seg_NNNN/` directories are loaded and the
+    /// segment ID counter is set past the highest existing ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `base_dir` - The index root directory (e.g. `.indexrs/`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `IndexError::Io` if directory creation or segment loading fails.
+    pub fn new(base_dir: &Path) -> Result<Self, IndexError> {
+        let segments_dir = base_dir.join("segments");
+        fs::create_dir_all(&segments_dir)?;
+
+        let state = IndexState::new();
+        let mut max_id: u32 = 0;
+        let mut segments: Vec<Arc<Segment>> = Vec::new();
+
+        // Scan for existing seg_NNNN directories
+        let mut entries: Vec<_> = fs::read_dir(&segments_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("seg_") && e.path().is_dir()
+            })
+            .collect();
+
+        // Sort by name to load in order
+        entries.sort_by_key(|e| e.file_name());
+
+        for entry in entries {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(id_str) = name.strip_prefix("seg_") {
+                if let Ok(id) = id_str.parse::<u32>() {
+                    let segment = Segment::open(&entry.path(), SegmentId(id))?;
+                    if id >= max_id {
+                        max_id = id + 1;
+                    }
+                    segments.push(Arc::new(segment));
+                }
+            }
+        }
+
+        if !segments.is_empty() {
+            state.publish(segments);
+        }
+
+        Ok(SegmentManager {
+            base_dir: base_dir.to_path_buf(),
+            segments_dir,
+            next_id: AtomicU32::new(max_id),
+            state,
+            write_lock: Mutex::new(()),
+        })
+    }
+
+    /// Return the next monotonically increasing segment ID.
+    ///
+    /// Thread-safe via `AtomicU32::fetch_add`.
+    pub fn next_segment_id(&self) -> SegmentId {
+        SegmentId(self.next_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Take a lock-free snapshot of the current segment list.
+    ///
+    /// Delegates to `IndexState::snapshot()`. The returned `SegmentList` is
+    /// a frozen view that remains valid regardless of concurrent writes.
+    pub fn snapshot(&self) -> SegmentList {
+        self.state.snapshot()
+    }
+
+    /// Add a pre-built segment to the active segment list.
+    ///
+    /// Acquires the writer lock, appends the segment to the current list,
+    /// and publishes the new list atomically.
+    pub fn add_segment(&self, segment: Arc<Segment>) {
+        let _guard = self.write_lock.lock().unwrap();
+        let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+        segments.push(segment);
+        self.state.publish(segments);
+    }
+
+    /// Find all (segment_index, file_id) pairs for a given relative path
+    /// across the current segments.
+    ///
+    /// Searches segments in order, checking metadata for path matches.
+    /// This is used by `apply_changes()` to locate entries that need tombstoning.
+    fn find_file_in_segments(segments: &[Arc<Segment>], path: &str) -> Vec<(usize, FileId)> {
+        let mut results = Vec::new();
+        for (seg_idx, segment) in segments.iter().enumerate() {
+            let reader = match segment.metadata_reader() {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let tombstones = segment.load_tombstones().unwrap_or_default();
+
+            for entry in reader.iter_all() {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                if entry.path == path && !tombstones.contains(entry.file_id) {
+                    results.push((seg_idx, entry.file_id));
+                }
+            }
+        }
+        results
+    }
+
+    /// Build a new segment from input files and add it to the index.
+    ///
+    /// Allocates a new segment ID, builds the segment via `SegmentWriter`,
+    /// and atomically publishes it. The writer lock is held for the duration
+    /// of the build.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IndexError` if the segment build fails (I/O error, etc.).
+    pub fn index_files(&self, files: Vec<InputFile>) -> Result<(), IndexError> {
+        let _guard = self.write_lock.lock().unwrap();
+        let seg_id = self.next_segment_id();
+        let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+        let segment = writer.build(files)?;
+        let segment = Arc::new(segment);
+
+        let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+        segments.push(segment);
+        self.state.publish(segments);
+
+        Ok(())
+    }
+
+    /// Apply a batch of file change events to the index.
+    ///
+    /// For each change:
+    /// - **Modified/Deleted/Renamed**: tombstones the old entry in whatever
+    ///   segment currently holds it.
+    /// - **Created/Modified/Renamed**: reads the file from `repo_dir` and
+    ///   includes it in a new segment.
+    ///
+    /// If any files need new entries, a new segment is built and published.
+    /// Tombstones are written to the affected segments' `tombstones.bin` files.
+    ///
+    /// # Arguments
+    ///
+    /// * `repo_dir` - The repository root directory for reading file contents.
+    /// * `changes` - The list of change events to process.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IndexError` if reading files, building segments, or writing
+    /// tombstones fails.
+    pub fn apply_changes(
+        &self,
+        repo_dir: &Path,
+        changes: &[ChangeEvent],
+    ) -> Result<(), IndexError> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        let _guard = self.write_lock.lock().unwrap();
+        let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+
+        // Track tombstones to write per segment index
+        let mut tombstone_updates: std::collections::HashMap<usize, TombstoneSet> =
+            std::collections::HashMap::new();
+
+        // Collect files that need new entries
+        let mut new_files: Vec<InputFile> = Vec::new();
+
+        for change in changes {
+            let path_str = change.path.to_string_lossy().to_string();
+
+            // Tombstone old entries if needed
+            if tombstone::needs_tombstone(&change.kind) {
+                let locations = Self::find_file_in_segments(&current_segments, &path_str);
+                for (seg_idx, file_id) in locations {
+                    tombstone_updates
+                        .entry(seg_idx)
+                        .or_default()
+                        .insert(file_id);
+                }
+            }
+
+            // Read new content if needed
+            if tombstone::needs_new_entry(&change.kind) {
+                let full_path = repo_dir.join(&change.path);
+                if full_path.exists() {
+                    let content = fs::read(&full_path)?;
+                    let mtime = full_path
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .map(|t| {
+                            t.duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                        })
+                        .unwrap_or(0);
+                    new_files.push(InputFile {
+                        path: path_str,
+                        content,
+                        mtime,
+                    });
+                }
+            }
+        }
+
+        // Write tombstones to affected segments
+        for (seg_idx, new_tombstones) in &tombstone_updates {
+            let segment = &current_segments[*seg_idx];
+            let mut existing = segment.load_tombstones()?;
+            existing.merge(new_tombstones);
+            existing.write_to(&segment.dir_path().join("tombstones.bin"))?;
+        }
+
+        // Build new segment if there are files to add
+        let mut updated_segments = current_segments;
+        if !new_files.is_empty() {
+            let seg_id = self.next_segment_id();
+            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+            let segment = writer.build(new_files)?;
+            updated_segments.push(Arc::new(segment));
+        }
+
+        self.state.publish(updated_segments);
+        Ok(())
+    }
+
+    /// Check whether the index should be compacted.
+    ///
+    /// Returns `true` if:
+    /// - The number of segments exceeds the threshold (default 10), or
+    /// - Any segment's tombstone ratio exceeds the threshold (default 30%).
+    pub fn should_compact(&self) -> bool {
+        let snap = self.state.snapshot();
+
+        if snap.len() > DEFAULT_MAX_SEGMENTS {
+            return true;
+        }
+
+        for segment in snap.iter() {
+            if segment.entry_count() == 0 {
+                continue;
+            }
+            let tombstones = match segment.load_tombstones() {
+                Ok(ts) => ts,
+                Err(_) => continue,
+            };
+            if tombstones.tombstone_ratio(segment.entry_count()) > DEFAULT_MAX_TOMBSTONE_RATIO {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Compact all segments into a single new segment.
+    ///
+    /// Reads all non-tombstoned entries from every segment, builds a new
+    /// merged segment via `SegmentWriter`, atomically swaps the segment list,
+    /// then deletes the old segment directories.
+    ///
+    /// This is a no-op if there are 0 segments, or if there is exactly 1
+    /// segment with no tombstones.
+    ///
+    /// The core logic is synchronous and testable. For background execution,
+    /// use `compact_background()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IndexError` if reading segments, building the merged segment,
+    /// or deleting old directories fails.
+    pub fn compact(&self) -> Result<(), IndexError> {
+        let _guard = self.write_lock.lock().unwrap();
+        let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+
+        // No-op if empty
+        if current_segments.is_empty() {
+            return Ok(());
+        }
+
+        // No-op if single segment with no tombstones
+        if current_segments.len() == 1 {
+            let ts = current_segments[0].load_tombstones()?;
+            if ts.is_empty() {
+                return Ok(());
+            }
+        }
+
+        // Collect all non-tombstoned entries from all segments
+        let mut merged_files: Vec<InputFile> = Vec::new();
+
+        for segment in &current_segments {
+            let tombstones = segment.load_tombstones()?;
+            let reader = segment.metadata_reader()?;
+
+            for entry_result in reader.iter_all() {
+                let entry: FileMetadata = entry_result?;
+
+                // Skip tombstoned entries
+                if tombstones.contains(entry.file_id) {
+                    continue;
+                }
+
+                // Read the original content from the content store
+                let content = segment
+                    .content_reader()
+                    .read_content(entry.content_offset, entry.content_len)?;
+
+                merged_files.push(InputFile {
+                    path: entry.path,
+                    content,
+                    mtime: entry.mtime_epoch_secs,
+                });
+            }
+        }
+
+        // Build the merged segment
+        let seg_id = self.next_segment_id();
+        let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+        let merged_segment = writer.build(merged_files)?;
+
+        // Collect old directory paths before we publish (so we know what to delete)
+        let old_dirs: Vec<PathBuf> = current_segments
+            .iter()
+            .map(|s| s.dir_path().to_path_buf())
+            .collect();
+
+        // Publish the new segment list (just the merged segment)
+        self.state.publish(vec![Arc::new(merged_segment)]);
+
+        // Delete old segment directories (best-effort; errors are logged but not fatal)
+        for old_dir in old_dirs {
+            let _ = fs::remove_dir_all(&old_dir);
+        }
+
+        Ok(())
+    }
+
+    /// Run compaction in the background via `tokio::spawn`.
+    ///
+    /// Returns a `JoinHandle` that resolves to the compaction result.
+    /// The caller can `await` or ignore it.
+    ///
+    /// # Panics
+    ///
+    /// The `SegmentManager` must be wrapped in an `Arc` for this method
+    /// to work, since the spawned task needs a `'static` reference.
+    pub fn compact_background(self: &Arc<Self>) -> tokio::task::JoinHandle<Result<(), IndexError>> {
+        let this = Arc::clone(self);
+        tokio::spawn(async move { this.compact() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::changes::ChangeKind;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_new_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+        let snap = manager.snapshot();
+        assert!(snap.is_empty());
+    }
+
+    #[test]
+    fn test_next_segment_id_monotonic() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+        let id0 = manager.next_segment_id();
+        let id1 = manager.next_segment_id();
+        let id2 = manager.next_segment_id();
+
+        assert_eq!(id0, SegmentId(0));
+        assert_eq!(id1, SegmentId(1));
+        assert_eq!(id2, SegmentId(2));
+    }
+
+    #[test]
+    fn test_add_segment() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let segments_dir = base_dir.join("segments");
+        fs::create_dir_all(&segments_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Build a segment externally and add it
+        let seg_id = manager.next_segment_id();
+        let writer = SegmentWriter::new(&segments_dir, seg_id);
+        let segment = writer
+            .build(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+
+        manager.add_segment(Arc::new(segment));
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].segment_id(), SegmentId(0));
+        assert_eq!(snap[0].entry_count(), 1);
+    }
+
+    #[test]
+    fn test_index_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        let files = vec![
+            InputFile {
+                path: "src/main.rs".to_string(),
+                content: b"fn main() { println!(\"hello\"); }".to_vec(),
+                mtime: 1700000000,
+            },
+            InputFile {
+                path: "src/lib.rs".to_string(),
+                content: b"pub fn add(a: i32, b: i32) -> i32 { a + b }".to_vec(),
+                mtime: 1700000001,
+            },
+        ];
+
+        manager.index_files(files).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 2);
+
+        // Verify metadata accessible
+        let meta = snap[0].get_metadata(FileId(0)).unwrap().unwrap();
+        assert_eq!(meta.path, "src/main.rs");
+    }
+
+    #[test]
+    fn test_index_files_multiple_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        manager
+            .index_files(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+
+        manager
+            .index_files(vec![InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap[0].segment_id(), SegmentId(0));
+        assert_eq!(snap[1].segment_id(), SegmentId(1));
+    }
+
+    #[test]
+    fn test_index_files_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+        manager.index_files(vec![]).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1); // empty segment is still added
+        assert_eq!(snap[0].entry_count(), 0);
+    }
+
+    // ---- apply_changes tests ----
+
+    #[test]
+    fn test_apply_changes_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        // Write a file to the "repo"
+        fs::write(repo_dir.join("new.rs"), b"fn new() {}").unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("new.rs"),
+            kind: ChangeKind::Created,
+        }];
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 1);
+
+        let meta = snap[0].get_metadata(FileId(0)).unwrap().unwrap();
+        assert_eq!(meta.path, "new.rs");
+    }
+
+    #[test]
+    fn test_apply_changes_modify() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // First, index the original file
+        fs::write(repo_dir.join("a.rs"), b"fn a() {}").unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+
+        // Now modify the file on disk
+        fs::write(repo_dir.join("a.rs"), b"fn a_updated() {}").unwrap();
+
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("a.rs"),
+            kind: ChangeKind::Modified,
+        }];
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        // Should have 2 segments: original + new
+        assert_eq!(snap.len(), 2);
+
+        // The old entry in segment 0 should be tombstoned
+        let ts = snap[0].load_tombstones().unwrap();
+        assert_eq!(ts.len(), 1);
+        assert!(ts.contains(FileId(0)));
+
+        // The new segment should have the updated file
+        let meta = snap[1].get_metadata(FileId(0)).unwrap().unwrap();
+        assert_eq!(meta.path, "a.rs");
+    }
+
+    #[test]
+    fn test_apply_changes_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Index original file
+        manager
+            .index_files(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("a.rs"),
+            kind: ChangeKind::Deleted,
+        }];
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        // Still 1 segment, but the file is tombstoned
+        assert_eq!(snap.len(), 1);
+        let ts = snap[0].load_tombstones().unwrap();
+        assert_eq!(ts.len(), 1);
+        assert!(ts.contains(FileId(0)));
+    }
+
+    #[test]
+    fn test_apply_changes_mixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Index two files
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "a.rs".to_string(),
+                    content: b"fn a() {}".to_vec(),
+                    mtime: 100,
+                },
+                InputFile {
+                    path: "b.rs".to_string(),
+                    content: b"fn b() {}".to_vec(),
+                    mtime: 100,
+                },
+            ])
+            .unwrap();
+
+        // Create a new file, modify b.rs, delete a.rs
+        fs::write(repo_dir.join("c.rs"), b"fn c() {}").unwrap();
+        fs::write(repo_dir.join("b.rs"), b"fn b_v2() {}").unwrap();
+
+        let changes = vec![
+            ChangeEvent {
+                path: PathBuf::from("a.rs"),
+                kind: ChangeKind::Deleted,
+            },
+            ChangeEvent {
+                path: PathBuf::from("b.rs"),
+                kind: ChangeKind::Modified,
+            },
+            ChangeEvent {
+                path: PathBuf::from("c.rs"),
+                kind: ChangeKind::Created,
+            },
+        ];
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 2); // original + new
+
+        // a.rs and b.rs should be tombstoned in segment 0
+        let ts = snap[0].load_tombstones().unwrap();
+        assert_eq!(ts.len(), 2);
+        assert!(ts.contains(FileId(0))); // a.rs
+        assert!(ts.contains(FileId(1))); // b.rs
+
+        // New segment should have b.rs (updated) and c.rs (created)
+        assert_eq!(snap[1].entry_count(), 2);
+    }
+
+    // ---- should_compact and compact tests ----
+
+    #[test]
+    fn test_should_compact_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+        assert!(!manager.should_compact());
+    }
+
+    #[test]
+    fn test_should_compact_too_many_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Add 11 segments (exceeds default threshold of 10)
+        for i in 0..11 {
+            manager
+                .index_files(vec![InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn f_{i}() {{}}").into_bytes(),
+                    mtime: 0,
+                }])
+                .unwrap();
+        }
+
+        assert!(manager.should_compact());
+    }
+
+    #[test]
+    fn test_should_compact_high_tombstone_ratio() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Index 3 files
+        let files: Vec<InputFile> = (0..3)
+            .map(|i| InputFile {
+                path: format!("f{i}.rs"),
+                content: format!("fn f{i}() {{}}").into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+        manager.index_files(files).unwrap();
+
+        // Delete all 3 -- tombstone ratio = 3/3 = 100% > 30%
+        let changes: Vec<ChangeEvent> = (0..3)
+            .map(|i| ChangeEvent {
+                path: PathBuf::from(format!("f{i}.rs")),
+                kind: ChangeKind::Deleted,
+            })
+            .collect();
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        assert!(manager.should_compact());
+    }
+
+    #[test]
+    fn test_compact_merges_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Create 3 segments with 1 file each
+        for i in 0..3 {
+            manager
+                .index_files(vec![InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn func_{i}() {{ let x = {i}; }}").into_bytes(),
+                    mtime: 1700000000 + i as u64,
+                }])
+                .unwrap();
+        }
+
+        let snap_before = manager.snapshot();
+        assert_eq!(snap_before.len(), 3);
+
+        // Compact all segments
+        manager.compact().unwrap();
+
+        let snap_after = manager.snapshot();
+        assert_eq!(snap_after.len(), 1);
+        assert_eq!(snap_after[0].entry_count(), 3);
+
+        // Verify all files are accessible
+        let reader = snap_after[0].metadata_reader().unwrap();
+        let all: Vec<_> = reader.iter_all().collect::<Result<Vec<_>, _>>().unwrap();
+        let paths: Vec<&str> = all.iter().map(|m| m.path.as_str()).collect();
+        assert!(paths.contains(&"file_0.rs"));
+        assert!(paths.contains(&"file_1.rs"));
+        assert!(paths.contains(&"file_2.rs"));
+    }
+
+    #[test]
+    fn test_compact_excludes_tombstoned() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Index 2 files
+        manager
+            .index_files(vec![
+                InputFile {
+                    path: "keep.rs".to_string(),
+                    content: b"fn keep() {}".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "delete_me.rs".to_string(),
+                    content: b"fn delete_me() {}".to_vec(),
+                    mtime: 0,
+                },
+            ])
+            .unwrap();
+
+        // Delete one file
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("delete_me.rs"),
+            kind: ChangeKind::Deleted,
+        }];
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        // Compact
+        manager.compact().unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 1); // only keep.rs
+
+        let meta = snap[0].get_metadata(FileId(0)).unwrap().unwrap();
+        assert_eq!(meta.path, "keep.rs");
+    }
+
+    #[test]
+    fn test_compact_cleans_old_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let segments_dir = base_dir.join("segments");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Create 2 segments
+        manager
+            .index_files(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+
+        // Before compact: seg_0000 and seg_0001 exist
+        assert!(segments_dir.join("seg_0000").exists());
+        assert!(segments_dir.join("seg_0001").exists());
+
+        manager.compact().unwrap();
+
+        // After compact: old dirs removed, new one exists
+        assert!(!segments_dir.join("seg_0000").exists());
+        assert!(!segments_dir.join("seg_0001").exists());
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert!(snap[0].dir_path().exists());
+    }
+
+    #[test]
+    fn test_compact_empty_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Compacting an empty index should be a no-op
+        manager.compact().unwrap();
+
+        let snap = manager.snapshot();
+        assert!(snap.is_empty());
+    }
+
+    #[test]
+    fn test_compact_single_segment_no_tombstones() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        manager
+            .index_files(vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            }])
+            .unwrap();
+
+        // Compacting a single segment with no tombstones is a no-op
+        manager.compact().unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 1);
+    }
+
+    // ---- compact_background test ----
+
+    #[tokio::test]
+    async fn test_compact_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        let manager = Arc::new(SegmentManager::new(&base_dir).unwrap());
+
+        // Create 3 segments
+        for i in 0..3 {
+            manager
+                .index_files(vec![InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn func_{i}() {{}}").into_bytes(),
+                    mtime: 0,
+                }])
+                .unwrap();
+        }
+
+        assert_eq!(manager.snapshot().len(), 3);
+
+        // Compact in background
+        let handle = manager.compact_background();
+        handle.await.unwrap().unwrap();
+
+        assert_eq!(manager.snapshot().len(), 1);
+        assert_eq!(manager.snapshot()[0].entry_count(), 3);
+    }
+
+    // ---- reopen tests ----
+
+    #[test]
+    fn test_reopen_existing_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        // Create a manager and index some files
+        {
+            let manager = SegmentManager::new(&base_dir).unwrap();
+            manager
+                .index_files(vec![
+                    InputFile {
+                        path: "a.rs".to_string(),
+                        content: b"fn a() {}".to_vec(),
+                        mtime: 100,
+                    },
+                    InputFile {
+                        path: "b.rs".to_string(),
+                        content: b"fn b() {}".to_vec(),
+                        mtime: 200,
+                    },
+                ])
+                .unwrap();
+
+            manager
+                .index_files(vec![InputFile {
+                    path: "c.rs".to_string(),
+                    content: b"fn c() {}".to_vec(),
+                    mtime: 300,
+                }])
+                .unwrap();
+
+            let snap = manager.snapshot();
+            assert_eq!(snap.len(), 2);
+        }
+        // Manager dropped here
+
+        // Reopen and verify segments are loaded
+        let manager2 = SegmentManager::new(&base_dir).unwrap();
+        let snap = manager2.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap[0].segment_id(), SegmentId(0));
+        assert_eq!(snap[1].segment_id(), SegmentId(1));
+        assert_eq!(snap[0].entry_count(), 2);
+        assert_eq!(snap[1].entry_count(), 1);
+
+        // next_segment_id should be past the highest existing
+        let next = manager2.next_segment_id();
+        assert_eq!(next, SegmentId(2));
+    }
+
+    #[test]
+    fn test_reopen_after_compact() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        {
+            let manager = SegmentManager::new(&base_dir).unwrap();
+            for i in 0..3 {
+                manager
+                    .index_files(vec![InputFile {
+                        path: format!("file_{i}.rs"),
+                        content: format!("fn f{i}() {{}}").into_bytes(),
+                        mtime: 0,
+                    }])
+                    .unwrap();
+            }
+            manager.compact().unwrap();
+        }
+
+        let manager2 = SegmentManager::new(&base_dir).unwrap();
+        let snap = manager2.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 3);
+    }
+}

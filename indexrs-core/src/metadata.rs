@@ -40,10 +40,10 @@ use crate::error::IndexError;
 use crate::types::{FileId, Language};
 
 /// Magic number for meta.bin header: "META" in ASCII as little-endian u32.
-const META_MAGIC: u32 = 0x4D45_5441;
+pub(crate) const META_MAGIC: u32 = 0x4D45_5441;
 
 /// Current format version.
-const META_VERSION: u16 = 1;
+pub(crate) const META_VERSION: u16 = 1;
 
 /// Size of the meta.bin header in bytes: magic(4) + version(2) + entry_count(4).
 const HEADER_SIZE: usize = 10;
@@ -284,6 +284,15 @@ impl<'a> MetadataReader<'a> {
             }
         }
         Ok(None)
+    }
+
+    /// Iterate over all file metadata entries in order of index position.
+    ///
+    /// Returns an iterator yielding `Result<FileMetadata, IndexError>` for
+    /// each entry. Errors are returned if an entry's path data is out of
+    /// bounds or contains invalid UTF-8.
+    pub fn iter_all(&self) -> impl Iterator<Item = Result<FileMetadata, IndexError>> + '_ {
+        (0..self.entry_count).map(move |i| self.read_entry(i))
     }
 
     /// Read the entry at the given index (0-based).
@@ -700,6 +709,38 @@ mod tests {
                 "language mismatch at index {i}"
             );
         }
+    }
+
+    #[test]
+    fn test_reader_iter_all() {
+        let mut builder = MetadataBuilder::new();
+        builder.add_file(make_entry(0, "a.rs", Language::Rust));
+        builder.add_file(make_entry(1, "b.py", Language::Python));
+        builder.add_file(make_entry(2, "c.go", Language::Go));
+
+        let mut meta_buf = Vec::new();
+        let mut paths_buf = Vec::new();
+        builder.write_to(&mut meta_buf, &mut paths_buf).unwrap();
+
+        let reader = MetadataReader::new(&meta_buf, &paths_buf).unwrap();
+        let all: Vec<FileMetadata> = reader.iter_all().collect::<Result<Vec<_>, _>>().unwrap();
+
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].path, "a.rs");
+        assert_eq!(all[1].path, "b.py");
+        assert_eq!(all[2].path, "c.go");
+    }
+
+    #[test]
+    fn test_reader_iter_all_empty() {
+        let builder = MetadataBuilder::new();
+        let mut meta_buf = Vec::new();
+        let mut paths_buf = Vec::new();
+        builder.write_to(&mut meta_buf, &mut paths_buf).unwrap();
+
+        let reader = MetadataReader::new(&meta_buf, &paths_buf).unwrap();
+        let all: Vec<FileMetadata> = reader.iter_all().collect::<Result<Vec<_>, _>>().unwrap();
+        assert!(all.is_empty());
     }
 
     #[test]

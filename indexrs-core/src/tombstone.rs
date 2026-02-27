@@ -26,6 +26,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::changes::ChangeKind;
 use crate::error::IndexError;
 use crate::types::FileId;
 
@@ -150,6 +151,16 @@ impl TombstoneSet {
     /// This is the number of bits in the bitmap (i.e., `words.len() * 64`).
     pub fn capacity(&self) -> u32 {
         (self.words.len() as u32) * 64
+    }
+
+    /// Compute the ratio of tombstoned files to total files in the segment.
+    ///
+    /// Returns `0.0` if `total_files` is zero.
+    pub fn tombstone_ratio(&self, total_files: u32) -> f32 {
+        if total_files == 0 {
+            return 0.0;
+        }
+        self.count as f32 / total_files as f32
     }
 
     /// Clear all tombstones.
@@ -335,6 +346,32 @@ fn word_count(max_file_id: u32) -> usize {
         return 0;
     }
     (max_file_id as usize).div_ceil(64)
+}
+
+/// Determine whether a change kind requires tombstoning the old file entry.
+///
+/// - `Created` -- no tombstone needed (new file, no old entry exists)
+/// - `Modified` -- tombstone old entry (caller adds updated entry to new segment)
+/// - `Deleted` -- tombstone old entry (no new entry needed)
+/// - `Renamed` -- tombstone old entry (caller adds new metadata entry with new path)
+pub fn needs_tombstone(kind: &ChangeKind) -> bool {
+    match kind {
+        ChangeKind::Created => false,
+        ChangeKind::Modified | ChangeKind::Deleted | ChangeKind::Renamed => true,
+    }
+}
+
+/// Determine whether a change kind requires adding a new entry to a new segment.
+///
+/// - `Created` -- yes, add new entry
+/// - `Modified` -- yes, add updated entry
+/// - `Deleted` -- no, file is gone
+/// - `Renamed` -- yes, add entry with new path
+pub fn needs_new_entry(kind: &ChangeKind) -> bool {
+    match kind {
+        ChangeKind::Created | ChangeKind::Modified | ChangeKind::Renamed => true,
+        ChangeKind::Deleted => false,
+    }
 }
 
 #[cfg(test)]
@@ -995,5 +1032,52 @@ mod tests {
         let ts = TombstoneSet::new();
         let debug = format!("{ts:?}");
         assert!(debug.contains("TombstoneSet"));
+    }
+
+    // ---- tombstone_ratio and helper function tests ----
+
+    #[test]
+    fn test_tombstone_ratio_empty() {
+        let ts = TombstoneSet::new();
+        assert_eq!(ts.tombstone_ratio(100), 0.0);
+        assert_eq!(ts.tombstone_ratio(0), 0.0);
+    }
+
+    #[test]
+    fn test_tombstone_ratio_partial() {
+        let mut ts = TombstoneSet::new();
+        ts.insert(FileId(0));
+        ts.insert(FileId(1));
+        let ratio = ts.tombstone_ratio(10);
+        assert!((ratio - 0.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_tombstone_ratio_full() {
+        let mut ts = TombstoneSet::new();
+        ts.insert(FileId(0));
+        ts.insert(FileId(1));
+        let ratio = ts.tombstone_ratio(2);
+        assert!((ratio - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_needs_tombstone() {
+        use crate::changes::ChangeKind;
+
+        assert!(!needs_tombstone(&ChangeKind::Created));
+        assert!(needs_tombstone(&ChangeKind::Modified));
+        assert!(needs_tombstone(&ChangeKind::Deleted));
+        assert!(needs_tombstone(&ChangeKind::Renamed));
+    }
+
+    #[test]
+    fn test_needs_new_entry() {
+        use crate::changes::ChangeKind;
+
+        assert!(needs_new_entry(&ChangeKind::Created));
+        assert!(needs_new_entry(&ChangeKind::Modified));
+        assert!(!needs_new_entry(&ChangeKind::Deleted));
+        assert!(needs_new_entry(&ChangeKind::Renamed));
     }
 }

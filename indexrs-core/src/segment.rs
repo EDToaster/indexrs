@@ -143,6 +143,13 @@ impl Segment {
         &self.content_reader
     }
 
+    /// Create a `MetadataReader` for this segment's metadata.
+    ///
+    /// Useful for iterating all entries (e.g. during compaction).
+    pub fn metadata_reader(&self) -> Result<MetadataReader<'_>, IndexError> {
+        MetadataReader::new(&self.meta_mmap, &self.paths_mmap)
+    }
+
     /// Look up file metadata by file ID.
     ///
     /// Creates an ephemeral `MetadataReader` from the stored memory maps.
@@ -728,6 +735,35 @@ mod tests {
 
         let m3 = segment.get_metadata(FileId(3)).unwrap().unwrap();
         assert_eq!(m3.language, Language::Unknown); // Makefile has no known extension
+    }
+
+    #[test]
+    fn test_segment_metadata_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![
+            InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            },
+            InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() {}".to_vec(),
+                mtime: 0,
+            },
+        ];
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        let reader = segment.metadata_reader().unwrap();
+        let all: Vec<_> = reader.iter_all().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].path, "a.rs");
+        assert_eq!(all[1].path, "b.rs");
     }
 
     // ---- Task: Tombstone loading tests ----
