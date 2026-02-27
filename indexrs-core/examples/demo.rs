@@ -19,14 +19,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = PathBuf::from(&args[1]);
     let query = &args[2];
 
-    // Create a temp directory for the index
-    let index_dir = std::env::temp_dir().join("indexrs-demo");
-    std::fs::create_dir_all(&index_dir)?;
+    // Create a temp directory for the index (auto-cleaned on drop)
+    let index_tmp = tempfile::tempdir()?;
+    let index_dir = index_tmp.path();
 
     // Phase 1: Walk directory and collect files
     eprintln!("Indexing {}...", dir.display());
     let mut files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
-    walk_dir(&dir, &dir, &mut files)?;
+    walk_dir(&dir, &mut files)?;
     eprintln!("Found {} files", files.len());
 
     // Phase 2: Build the index
@@ -113,12 +113,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Cleanup
-    std::fs::remove_dir_all(&index_dir)?;
     Ok(())
 }
 
-fn walk_dir(dir: &Path, root: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) -> std::io::Result<()> {
+fn walk_dir(dir: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) -> std::io::Result<()> {
     for entry in ignore::Walk::new(dir) {
         let entry = match entry {
             Ok(e) => e,

@@ -123,28 +123,35 @@ fn glob_matches(pattern: &str, path: &str, filename: &str) -> bool {
 }
 
 /// Minimal glob matching: `*` matches any sequence, `?` matches one char.
+///
+/// Uses a linear-time two-pointer algorithm instead of O(p*t) DP.
 fn simple_glob(pattern: &str, text: &str) -> bool {
-    let pattern: Vec<char> = pattern.chars().collect();
-    let text: Vec<char> = text.chars().collect();
-    let (plen, tlen) = (pattern.len(), text.len());
-    // dp[i][j] = pattern[..i] matches text[..j]
-    let mut dp = vec![vec![false; tlen + 1]; plen + 1];
-    dp[0][0] = true;
-    for i in 1..=plen {
-        if pattern[i - 1] == '*' {
-            dp[i][0] = dp[i - 1][0];
+    let pat: Vec<char> = pattern.chars().collect();
+    let txt: Vec<char> = text.chars().collect();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star_pi, mut star_ti) = (usize::MAX, 0usize);
+
+    while ti < txt.len() {
+        if pi < pat.len() && (pat[pi] == '?' || pat[pi] == txt[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < pat.len() && pat[pi] == '*' {
+            star_pi = pi;
+            star_ti = ti;
+            pi += 1;
+        } else if star_pi != usize::MAX {
+            pi = star_pi + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
         }
     }
-    for i in 1..=plen {
-        for j in 1..=tlen {
-            if pattern[i - 1] == '*' {
-                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
-            } else if pattern[i - 1] == '?' || pattern[i - 1] == text[j - 1] {
-                dp[i][j] = dp[i - 1][j - 1];
-            }
-        }
+
+    while pi < pat.len() && pat[pi] == '*' {
+        pi += 1;
     }
-    dp[plen][tlen]
+    pi == pat.len()
 }
 
 /// Configured directory walker, ready to execute.

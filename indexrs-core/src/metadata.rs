@@ -259,14 +259,24 @@ impl<'a> MetadataReader<'a> {
 
     /// Look up a file metadata entry by file ID.
     ///
-    /// Performs a linear scan of entries since file IDs may not be contiguous.
-    /// Returns `None` if no entry with the given ID exists.
+    /// Tries O(1) direct indexing first (works when file IDs are sequential
+    /// starting from 0, which is the common case). Falls back to a linear
+    /// scan for non-contiguous IDs.
     ///
     /// # Errors
     ///
     /// Returns [`IndexError::IndexCorruption`] if the entry's path data is
     /// out of bounds or contains invalid UTF-8.
     pub fn get(&self, file_id: FileId) -> Result<Option<FileMetadata>, IndexError> {
+        // Fast path: try direct indexing (O(1) when IDs are sequential).
+        if file_id.0 < self.entry_count {
+            let entry = self.read_entry(file_id.0)?;
+            if entry.file_id == file_id {
+                return Ok(Some(entry));
+            }
+        }
+
+        // Slow path: linear scan for non-contiguous IDs.
         for i in 0..self.entry_count {
             let entry = self.read_entry(i)?;
             if entry.file_id == file_id {
