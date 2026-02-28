@@ -152,6 +152,56 @@ pub fn recency_score(mtime_epoch_secs: u64, now_epoch_secs: u64, config: &Rankin
     2.0_f64.powf(-age_secs / half_life)
 }
 
+/// Input data for scoring a single file match.
+///
+/// This struct gathers all the signals needed to compute a relevance score.
+/// It is constructed from data already available during search (FileMatch +
+/// FileMetadata fields), avoiding extra I/O.
+#[derive(Debug, Clone)]
+pub struct ScoringInput<'a> {
+    /// File path relative to repository root.
+    pub path: &'a str,
+    /// The original query string.
+    pub query: &'a str,
+    /// How the query matched (exact, prefix, substring, regex).
+    pub match_type: MatchType,
+    /// Total number of match ranges across all matching lines.
+    pub match_count: usize,
+    /// Total number of lines in the file.
+    pub line_count: u32,
+    /// File modification time as seconds since Unix epoch.
+    pub mtime_epoch_secs: u64,
+    /// Current time as seconds since Unix epoch.
+    pub now_epoch_secs: u64,
+}
+
+/// Compute a composite relevance score in [0.0, 1.0] for a file match.
+///
+/// Combines five signals with configurable weights:
+/// - **Match type**: Exact > Prefix > Substring > Regex
+/// - **Path depth**: Shallower files rank higher
+/// - **Filename match**: Bonus if query appears in filename
+/// - **Match count**: More matches (log-scaled) = higher rank
+/// - **Recency**: Recently modified files get a boost (exponential decay)
+///
+/// Each signal produces a value in [0.0, 1.0], multiplied by its weight.
+/// The weighted sum is the final score.
+pub fn score_file_match(input: &ScoringInput<'_>, config: &RankingConfig) -> f64 {
+    let mt_score = input.match_type.base_score();
+    let pd_score = path_depth_score(input.path, config);
+    let fn_score = filename_match_score(input.path, input.query);
+    let mc_score = match_count_score(input.match_count, input.line_count);
+    let rc_score = recency_score(input.mtime_epoch_secs, input.now_epoch_secs, config);
+
+    let score = mt_score * config.match_type_weight
+        + pd_score * config.path_depth_weight
+        + fn_score * config.filename_match_weight
+        + mc_score * config.match_count_weight
+        + rc_score * config.recency_weight;
+
+    score.clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +332,148 @@ mod tests {
         assert!(
             score_recent > score_old,
             "recent should score higher: {score_recent} vs {score_old}"
+        );
+    }
+
+    #[test]
+    fn test_score_file_match_range() {
+        let config = RankingConfig::default();
+        let input = ScoringInput {
+            path: "src/main.rs",
+            query: "main",
+            match_type: MatchType::Substring,
+            match_count: 3,
+            line_count: 50,
+            mtime_epoch_secs: 1_700_000_000,
+            now_epoch_secs: 1_700_000_000 + 3600,
+        };
+        let score = score_file_match(&input, &config);
+        assert!(
+            (0.0..=1.0).contains(&score),
+            "score should be in [0.0, 1.0]: {score}"
+        );
+    }
+
+    #[test]
+    fn test_score_exact_beats_substring() {
+        let config = RankingConfig::default();
+        let base = ScoringInput {
+            path: "src/lib.rs",
+            query: "search",
+            match_type: MatchType::Substring,
+            match_count: 1,
+            line_count: 100,
+            mtime_epoch_secs: 1_700_000_000,
+            now_epoch_secs: 1_700_000_000,
+        };
+        let score_substring = score_file_match(&base, &config);
+        let score_exact = score_file_match(
+            &ScoringInput {
+                match_type: MatchType::Exact,
+                ..base
+            },
+            &config,
+        );
+        assert!(
+            score_exact > score_substring,
+            "exact should beat substring: {score_exact} vs {score_substring}"
+        );
+    }
+
+    #[test]
+    fn test_score_shallow_beats_deep() {
+        let config = RankingConfig::default();
+        let shallow = ScoringInput {
+            path: "lib.rs",
+            query: "search",
+            match_type: MatchType::Substring,
+            match_count: 1,
+            line_count: 100,
+            mtime_epoch_secs: 1_700_000_000,
+            now_epoch_secs: 1_700_000_000,
+        };
+        let deep = ScoringInput {
+            path: "a/b/c/d/e/f/g/lib.rs",
+            ..shallow
+        };
+        let score_shallow = score_file_match(&shallow, &config);
+        let score_deep = score_file_match(&deep, &config);
+        assert!(
+            score_shallow > score_deep,
+            "shallow should beat deep: {score_shallow} vs {score_deep}"
+        );
+    }
+
+    #[test]
+    fn test_score_filename_match_bonus() {
+        let config = RankingConfig::default();
+        let with_name = ScoringInput {
+            path: "src/search.rs",
+            query: "search",
+            match_type: MatchType::Substring,
+            match_count: 1,
+            line_count: 100,
+            mtime_epoch_secs: 1_700_000_000,
+            now_epoch_secs: 1_700_000_000,
+        };
+        let without_name = ScoringInput {
+            path: "src/utils.rs",
+            ..with_name
+        };
+        let score_with = score_file_match(&with_name, &config);
+        let score_without = score_file_match(&without_name, &config);
+        assert!(
+            score_with > score_without,
+            "filename match should boost: {score_with} vs {score_without}"
+        );
+    }
+
+    #[test]
+    fn test_score_more_matches_beats_fewer() {
+        let config = RankingConfig::default();
+        let many = ScoringInput {
+            path: "src/lib.rs",
+            query: "search",
+            match_type: MatchType::Substring,
+            match_count: 10,
+            line_count: 100,
+            mtime_epoch_secs: 1_700_000_000,
+            now_epoch_secs: 1_700_000_000,
+        };
+        let few = ScoringInput {
+            match_count: 1,
+            ..many
+        };
+        let score_many = score_file_match(&many, &config);
+        let score_few = score_file_match(&few, &config);
+        assert!(
+            score_many > score_few,
+            "more matches should score higher: {score_many} vs {score_few}"
+        );
+    }
+
+    #[test]
+    fn test_score_recent_beats_old() {
+        let config = RankingConfig::default();
+        let now = 1_700_000_000u64;
+        let recent = ScoringInput {
+            path: "src/lib.rs",
+            query: "search",
+            match_type: MatchType::Substring,
+            match_count: 1,
+            line_count: 100,
+            mtime_epoch_secs: now - 3600,
+            now_epoch_secs: now,
+        };
+        let old = ScoringInput {
+            mtime_epoch_secs: now - 365 * 24 * 3600,
+            ..recent
+        };
+        let score_recent = score_file_match(&recent, &config);
+        let score_old = score_file_match(&old, &config);
+        assert!(
+            score_recent > score_old,
+            "recent should beat old: {score_recent} vs {score_old}"
         );
     }
 }

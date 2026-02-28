@@ -57,7 +57,7 @@ pub use query_plan::{
 pub use query_trigrams::{
     TrigramQuery, extract_literal_trigrams, extract_query_trigrams, extract_regex_trigrams,
 };
-pub use ranking::{MatchType, RankingConfig};
+pub use ranking::{MatchType, RankingConfig, ScoringInput, score_file_match};
 pub use recovery::{cleanup_lock_file, recover_segments};
 pub use search::{
     ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult,
