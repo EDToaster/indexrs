@@ -11,10 +11,11 @@ use std::time::Instant;
 use crate::error::IndexError;
 use crate::index_state::SegmentList;
 use crate::intersection::find_candidates;
-use crate::search::{FileMatch, LineMatch, SearchResult};
+use crate::search::{FileMatch, LineMatch, MatchPattern, SearchResult};
 use crate::segment::Segment;
 use crate::tombstone::TombstoneSet;
 use crate::types::SegmentId;
+use crate::verify::ContentVerifier;
 
 /// Verify that a query string actually appears in file content, and return
 /// the matching lines with highlight ranges.
@@ -197,6 +198,165 @@ pub fn search_segments(snapshot: &SegmentList, query: &str) -> Result<SearchResu
     }
 
     // Extract FileMatch values and sort by score descending
+    let mut files: Vec<FileMatch> = merged.into_values().map(|(_, fm)| fm).collect();
+    files.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let total_count: usize = files.iter().map(|f| f.lines.len()).sum();
+
+    Ok(SearchResult {
+        total_count,
+        files,
+        duration: start.elapsed(),
+    })
+}
+
+/// Extract the literal prefix from a regex pattern for trigram candidate filtering.
+///
+/// Returns the longest prefix of the pattern that contains only literal characters
+/// (no regex metacharacters). This is used for trigram-based candidate filtering
+/// before full regex verification.
+fn regex_literal_prefix(pattern: &str) -> String {
+    let mut prefix = String::new();
+    let mut chars = pattern.chars().peekable();
+    while let Some(&ch) = chars.peek() {
+        match ch {
+            // Regex metacharacters that signal end of literal prefix
+            '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$' => {
+                break;
+            }
+            '\\' => {
+                // Escaped character: consume backslash and the next char
+                chars.next();
+                if let Some(&next) = chars.peek() {
+                    match next {
+                        // These are regex character classes, not literals
+                        'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B' => break,
+                        // Literal escaped chars
+                        _ => {
+                            prefix.push(next);
+                            chars.next();
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+            _ => {
+                prefix.push(ch);
+                chars.next();
+            }
+        }
+    }
+    prefix
+}
+
+/// Search a single segment using a `MatchPattern` for verification.
+fn search_single_segment_with_pattern(
+    segment: &Segment,
+    pattern: &MatchPattern,
+    tombstones: &TombstoneSet,
+) -> Result<Vec<FileMatch>, IndexError> {
+    // Extract the literal text for trigram candidate filtering.
+    // For Regex patterns, we extract the literal prefix before metacharacters.
+    let trigram_query: String = match pattern {
+        MatchPattern::Literal(s) | MatchPattern::LiteralCaseInsensitive(s) => s.clone(),
+        MatchPattern::Regex(s) => regex_literal_prefix(s),
+    };
+
+    // Get candidate file IDs via trigram lookup.
+    // If the trigram query is < 3 chars (too short for trigrams), we need to
+    // scan all files in the segment for regex patterns (they may still match),
+    // but for literal patterns, no trigram lookup is possible.
+    let candidates = if trigram_query.len() >= 3 {
+        find_candidates(segment.trigram_reader(), &trigram_query)?
+    } else if matches!(pattern, MatchPattern::Regex(_)) {
+        // Regex with short/no literal prefix: scan all files
+        segment.all_file_ids()?
+    } else {
+        return Ok(Vec::new());
+    };
+
+    let verifier = ContentVerifier::new(pattern.clone(), 0);
+    let mut file_matches = Vec::new();
+
+    for file_id in candidates {
+        if tombstones.contains(file_id) {
+            continue;
+        }
+
+        let meta = match segment.get_metadata(file_id)? {
+            Some(m) => m,
+            None => continue,
+        };
+
+        let content = segment
+            .content_reader()
+            .read_content(meta.content_offset, meta.content_len)?;
+
+        let line_matches = verifier.verify(&content);
+        if line_matches.is_empty() {
+            continue;
+        }
+
+        let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
+        let line_count = meta.line_count.max(1) as f64;
+        let score = (total_match_ranges as f64 / line_count).min(1.0);
+
+        file_matches.push(FileMatch {
+            file_id,
+            path: PathBuf::from(&meta.path),
+            language: meta.language,
+            lines: line_matches,
+            score,
+        });
+    }
+
+    Ok(file_matches)
+}
+
+/// Search across multiple segments using a `MatchPattern`.
+///
+/// This is the pattern-aware version of `search_segments()`. It supports
+/// literal, regex, and case-insensitive matching via `ContentVerifier`.
+///
+/// Behavior is identical to `search_segments()`: searches all segments,
+/// filters tombstones, deduplicates by path (newest segment wins), and
+/// sorts by relevance score.
+pub fn search_segments_with_pattern(
+    snapshot: &SegmentList,
+    pattern: &MatchPattern,
+) -> Result<SearchResult, IndexError> {
+    let start = Instant::now();
+
+    if snapshot.is_empty() {
+        return Ok(SearchResult {
+            total_count: 0,
+            files: Vec::new(),
+            duration: start.elapsed(),
+        });
+    }
+
+    let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
+
+    for segment in snapshot.iter() {
+        let tombstones = segment.load_tombstones()?;
+        let file_matches = search_single_segment_with_pattern(segment, pattern, &tombstones)?;
+
+        for fm in file_matches {
+            let seg_id = segment.segment_id();
+            match merged.get(&fm.path) {
+                Some((existing_seg_id, _)) if *existing_seg_id >= seg_id => {}
+                _ => {
+                    merged.insert(fm.path.clone(), (seg_id, fm));
+                }
+            }
+        }
+    }
+
     let mut files: Vec<FileMatch> = merged.into_values().map(|(_, fm)| fm).collect();
     files.sort_by(|a, b| {
         b.score
@@ -621,5 +781,76 @@ mod tests {
         // many.rs should come first (higher score)
         assert_eq!(result.files[0].path, PathBuf::from("many.rs"));
         assert!(result.files[0].score >= result.files[1].score);
+    }
+
+    // ---- Pattern-aware search tests ----
+
+    #[test]
+    fn test_search_segments_with_pattern_literal() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"fn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                mtime: 0,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let pattern = MatchPattern::Literal("println".to_string());
+        let result = search_segments_with_pattern(&snapshot, &pattern).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].lines[0].line_number, 2);
+    }
+
+    #[test]
+    fn test_search_segments_with_pattern_regex() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"fn main() {}\nfn helper() {}\nlet x = 1;\n".to_vec(),
+                mtime: 0,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let pattern = MatchPattern::Regex(r"fn\s+\w+".to_string());
+        let result = search_segments_with_pattern(&snapshot, &pattern).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].lines.len(), 2); // main and helper
+    }
+
+    #[test]
+    fn test_search_segments_with_pattern_case_insensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"Hello World\nhello world\nHELLO WORLD\n".to_vec(),
+                mtime: 0,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let pattern = MatchPattern::LiteralCaseInsensitive("hello".to_string());
+        let result = search_segments_with_pattern(&snapshot, &pattern).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].lines.len(), 3);
     }
 }

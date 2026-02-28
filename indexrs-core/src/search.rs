@@ -11,6 +11,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{FileId, Language};
 
+/// The pattern type used for content verification.
+///
+/// Produced by the query parser and consumed by the content verifier.
+/// Determines which matching strategy is used during candidate verification.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MatchPattern {
+    /// Exact byte-level substring match.
+    Literal(String),
+    /// Regex pattern (compiled with the `regex` crate).
+    Regex(String),
+    /// Case-insensitive literal match (lowercased comparison).
+    LiteralCaseInsensitive(String),
+}
+
 /// A single matching line within a file.
 ///
 /// Contains the line content and byte-offset ranges indicating which portions
@@ -39,6 +53,30 @@ pub struct FileMatch {
     pub lines: Vec<LineMatch>,
     /// Relevance score in the range [0.0, 1.0], higher is more relevant.
     pub score: f64,
+}
+
+/// A non-matching line shown as context around a match.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContextLine {
+    /// 1-based line number within the file.
+    pub line_number: u32,
+    /// The full text content of the line.
+    pub content: String,
+}
+
+/// A group of adjacent matches with their surrounding context lines.
+///
+/// When multiple matches are close together (within `2 * context_lines`),
+/// they are merged into a single `ContextBlock` to avoid duplicate context
+/// lines and provide a contiguous reading experience.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContextBlock {
+    /// Context lines before the first match in this block.
+    pub before: Vec<ContextLine>,
+    /// The matching lines within this block.
+    pub matches: Vec<LineMatch>,
+    /// Context lines after the last match in this block.
+    pub after: Vec<ContextLine>,
 }
 
 /// Aggregate result of a search query.
@@ -154,5 +192,55 @@ mod tests {
         assert_eq!(file_match.language, Language::Rust);
         assert_eq!(file_match.lines.len(), 1);
         assert!((file_match.score - 0.92).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_match_pattern_literal() {
+        let pat = MatchPattern::Literal("println".to_string());
+        assert!(matches!(pat, MatchPattern::Literal(_)));
+    }
+
+    #[test]
+    fn test_match_pattern_regex() {
+        let pat = MatchPattern::Regex("fn\\s+\\w+".to_string());
+        assert!(matches!(pat, MatchPattern::Regex(_)));
+    }
+
+    #[test]
+    fn test_match_pattern_case_insensitive() {
+        let pat = MatchPattern::LiteralCaseInsensitive("Println".to_string());
+        assert!(matches!(pat, MatchPattern::LiteralCaseInsensitive(_)));
+    }
+
+    #[test]
+    fn test_context_line_construction() {
+        let cl = ContextLine {
+            line_number: 5,
+            content: "use std::io;".to_string(),
+        };
+        assert_eq!(cl.line_number, 5);
+        assert_eq!(cl.content, "use std::io;");
+    }
+
+    #[test]
+    fn test_context_block_construction() {
+        let block = ContextBlock {
+            before: vec![ContextLine {
+                line_number: 1,
+                content: "// before".to_string(),
+            }],
+            matches: vec![LineMatch {
+                line_number: 2,
+                content: "fn main() {}".to_string(),
+                ranges: vec![(0, 2)],
+            }],
+            after: vec![ContextLine {
+                line_number: 3,
+                content: "// after".to_string(),
+            }],
+        };
+        assert_eq!(block.before.len(), 1);
+        assert_eq!(block.matches.len(), 1);
+        assert_eq!(block.after.len(), 1);
     }
 }

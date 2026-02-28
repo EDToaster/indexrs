@@ -22,6 +22,7 @@ pub mod segment_manager;
 pub mod tombstone;
 pub mod trigram;
 pub mod types;
+pub mod verify;
 pub mod walker;
 pub mod watcher;
 
@@ -43,7 +44,7 @@ pub use index_state::{IndexState, SegmentList};
 pub use index_writer::TrigramIndexWriter;
 pub use intersection::{find_candidates, intersect_file_ids};
 pub use metadata::{FileMetadata, MetadataBuilder, MetadataReader};
-pub use multi_search::search_segments;
+pub use multi_search::{search_segments, search_segments_with_pattern};
 pub use posting::PostingListBuilder;
 pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
 pub use query_plan::{
@@ -54,7 +55,7 @@ pub use query_trigrams::{
     TrigramQuery, extract_literal_trigrams, extract_query_trigrams, extract_regex_trigrams,
 };
 pub use recovery::{cleanup_lock_file, recover_segments};
-pub use search::{FileMatch, LineMatch, SearchResult};
+pub use search::{ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, SearchResult};
 pub use segment::{InputFile, Segment, SegmentWriter};
 pub use segment_manager::SegmentManager;
 pub use tombstone::{TombstoneSet, needs_new_entry, needs_tombstone};
@@ -63,5 +64,6 @@ pub use trigram::{
     extract_unique_trigrams_folded,
 };
 pub use types::{FileId, Language, SegmentId, SymbolKind, Trigram};
+pub use verify::ContentVerifier;
 pub use walker::{DirectoryWalkerBuilder, WalkedFile, Walker};
 pub use watcher::FileWatcher;

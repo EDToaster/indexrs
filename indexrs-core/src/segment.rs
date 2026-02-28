@@ -159,6 +159,14 @@ impl Segment {
         reader.get(file_id)
     }
 
+    /// Return all file IDs in this segment.
+    ///
+    /// Used when trigram-based candidate filtering is not possible (e.g.,
+    /// regex patterns with no literal prefix), requiring a full scan.
+    pub fn all_file_ids(&self) -> Result<Vec<FileId>, IndexError> {
+        Ok((0..self.entry_count).map(FileId).collect())
+    }
+
     /// Load the tombstone set for this segment from disk.
     ///
     /// Reads `tombstones.bin` from the segment directory. If the file is empty
