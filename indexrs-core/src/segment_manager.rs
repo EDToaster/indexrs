@@ -403,6 +403,94 @@ impl SegmentManager {
         Ok(())
     }
 
+    /// Compact segments with a per-segment memory budget.
+    ///
+    /// Like [`compact()`](Self::compact), but instead of merging everything
+    /// into a single segment, flushes a new output segment whenever the
+    /// accumulated content size exceeds `max_segment_bytes`. This bounds
+    /// peak memory usage during compaction to approximately `max_segment_bytes`
+    /// plus overhead for posting lists and metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_segment_bytes` - Maximum total uncompressed content bytes per
+    ///   output segment. When the accumulated size exceeds this threshold,
+    ///   the current batch is flushed as a segment and a new batch begins.
+    ///   A value of 0 means no limit (equivalent to `compact()`).
+    pub fn compact_with_budget(&self, max_segment_bytes: usize) -> Result<(), IndexError> {
+        let _guard = self.write_lock.lock().unwrap();
+        let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+
+        if current_segments.is_empty() {
+            return Ok(());
+        }
+
+        if current_segments.len() == 1 {
+            let ts = current_segments[0].load_tombstones()?;
+            if ts.is_empty() {
+                return Ok(());
+            }
+        }
+
+        // Collect live entries, flushing to a new segment when budget is exceeded
+        let mut batch: Vec<InputFile> = Vec::new();
+        let mut batch_bytes: usize = 0;
+        let mut new_segments: Vec<Arc<Segment>> = Vec::new();
+
+        for segment in &current_segments {
+            let tombstones = segment.load_tombstones()?;
+            let reader = segment.metadata_reader()?;
+
+            for entry_result in reader.iter_all() {
+                let entry: FileMetadata = entry_result?;
+
+                if tombstones.contains(entry.file_id) {
+                    continue;
+                }
+
+                let content = segment
+                    .content_reader()
+                    .read_content(entry.content_offset, entry.content_len)?;
+
+                let content_len = content.len();
+                batch.push(InputFile {
+                    path: entry.path,
+                    content,
+                    mtime: entry.mtime_epoch_secs,
+                });
+                batch_bytes += content_len;
+
+                // Flush if over budget (0 means unlimited)
+                if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
+                    let seg_id = self.next_segment_id();
+                    let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+                    new_segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
+                    batch_bytes = 0;
+                }
+            }
+        }
+
+        // Flush remaining batch
+        if !batch.is_empty() {
+            let seg_id = self.next_segment_id();
+            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+            new_segments.push(Arc::new(writer.build(batch)?));
+        }
+
+        let old_dirs: Vec<PathBuf> = current_segments
+            .iter()
+            .map(|s| s.dir_path().to_path_buf())
+            .collect();
+
+        self.state.publish(new_segments);
+
+        for old_dir in old_dirs {
+            let _ = fs::remove_dir_all(&old_dir);
+        }
+
+        Ok(())
+    }
+
     /// Run compaction in the background via `tokio::spawn`.
     ///
     /// Returns a `JoinHandle` that resolves to the compaction result.
@@ -1008,6 +1096,45 @@ mod tests {
         // next_segment_id should be past the highest existing
         let next = manager2.next_segment_id();
         assert_eq!(next, SegmentId(2));
+    }
+
+    #[test]
+    fn test_compact_with_budget_produces_multiple_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Create 3 segments with ~30 bytes of content each
+        for i in 0..3 {
+            manager
+                .index_files(vec![InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn func_{i}() {{ let x = {i}; }}").into_bytes(),
+                    mtime: 0,
+                }])
+                .unwrap();
+        }
+
+        assert_eq!(manager.snapshot().len(), 3);
+
+        // Use a tiny budget (1 byte) to force each file into its own segment
+        manager.compact_with_budget(1).unwrap();
+
+        let snap = manager.snapshot();
+        // With a 1-byte budget, each ~30-byte file exceeds the budget,
+        // so we should get 3 output segments (one per live file)
+        assert_eq!(snap.len(), 3);
+
+        // All files should still be findable
+        let mut all_paths: Vec<String> = Vec::new();
+        for seg in snap.iter() {
+            let reader = seg.metadata_reader().unwrap();
+            for entry in reader.iter_all() {
+                all_paths.push(entry.unwrap().path);
+            }
+        }
+        all_paths.sort();
+        assert_eq!(all_paths, vec!["file_0.rs", "file_1.rs", "file_2.rs"]);
     }
 
     #[test]
