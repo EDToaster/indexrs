@@ -20,7 +20,6 @@ use indexrs_core::{
     SegmentManager, is_binary_content, is_binary_path, search_segments,
 };
 
-const BATCH_SIZE: usize = 5000;
 
 fn human_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -84,16 +83,11 @@ fn full_build(
     let file_count = files.len();
     eprintln!("  Found {file_count} indexable files");
 
-    let total_batches = (file_count + BATCH_SIZE - 1) / BATCH_SIZE;
-    for (i, batch) in files.into_iter().collect::<Vec<_>>().chunks(BATCH_SIZE).enumerate() {
-        eprintln!(
-            "  Building segment {}/{}... ({} files)",
-            i + 1,
-            total_batches,
-            batch.len()
-        );
-        manager.index_files(batch.to_vec())?;
-    }
+    eprintln!("  Building segments...");
+    manager.index_files(files)?;
+
+    let snap = manager.snapshot();
+    eprintln!("  Built {} segment(s)", snap.len());
 
     Ok(())
 }
