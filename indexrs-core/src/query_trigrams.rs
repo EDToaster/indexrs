@@ -6,16 +6,15 @@
 //!
 //! # Extraction Strategy
 //!
-//! - **Literal/Phrase queries**: Extract all trigrams directly from the search string.
-//!   All trigrams must match (AND semantics).
-//! - **Regex queries**: Parse the regex with `regex-syntax`, extract required literal
-//!   fragments from the HIR, then extract trigrams from those fragments.
-//! - **AND queries**: Merge (union) trigram sets from all children -- a file must
-//!   contain trigrams from every child.
-//! - **OR queries**: Keep trigram sets separate -- a file matching any branch suffices.
-//! - **NOT queries**: Cannot use trigrams for pruning (negation inverts the set).
-//! - **Filter queries** (Path, Language): These don't produce content trigrams;
-//!   they're handled by other index types.
+//! | Query Type | Trigram Strategy |
+//! |---|---|
+//! | `Literal(LiteralQuery)` | Extract folded trigrams from text (AND) |
+//! | `Phrase(PhraseQuery)` | Extract folded trigrams from text (AND) |
+//! | `Regex(RegexQuery)` | Parse regex HIR, extract literal fragments, extract folded trigrams |
+//! | `And(children)` | Merge (union) trigram sets from all children |
+//! | `Or(left, right)` | Keep branches separate (any branch match suffices) |
+//! | `Not(inner)` | Returns `None` (negation can't prune via trigrams) |
+//! | `PathFilter` / `LanguageFilter` | Returns `None` (handled by other indexes) |
 //!
 //! When no trigrams can be extracted (short queries, wildcard-only regex, NOT-only
 //! queries), the result is [`TrigramQuery::None`], signaling the planner to fall
@@ -26,6 +25,18 @@
 //! All trigram extraction produces **lowercase (ASCII-folded) trigrams** to match
 //! the case-folded index. The `case_sensitive` flag on query types does NOT affect
 //! trigram extraction -- it only affects verification (HHC-49).
+//!
+//! # Usage
+//!
+//! ```
+//! use indexrs_core::query::parse_query;
+//! use indexrs_core::query_trigrams::{extract_query_trigrams, TrigramQuery};
+//!
+//! let query = parse_query("HttpRequest").unwrap();
+//! let tq = extract_query_trigrams(&query);
+//! assert!(!tq.is_none());
+//! assert!(tq.trigram_count() > 0);
+//! ```
 
 use std::collections::HashSet;
 
