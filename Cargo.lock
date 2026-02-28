@@ -487,7 +487,11 @@ name = "indexrs-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "globset",
  "indexrs-core",
+ "libc",
+ "nu-ansi-term",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -754,6 +758,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42b8cfee0e339a0337359f3c88165702ac6e600dc01c0cc9579a92d62b08477a"
 dependencies = [
  "bitflags 2.11.0",
+]
+
+[[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
