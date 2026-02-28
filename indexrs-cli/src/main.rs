@@ -1,5 +1,7 @@
 mod args;
 mod color;
+#[allow(unused)]
+mod daemon;
 mod files;
 mod output;
 mod preview;

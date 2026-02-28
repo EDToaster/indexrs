@@ -387,21 +387,19 @@ fn search_single_segment_with_pattern(
                     let before = block.before;
                     let after = block.after;
                     let match_count = block.matches.len();
-                    block.matches.into_iter().enumerate().map(move |(i, m)| {
-                        LineMatch {
-                            context_before: if i == 0 {
-                                before.clone()
-                            } else {
-                                vec![]
-                            },
+                    block
+                        .matches
+                        .into_iter()
+                        .enumerate()
+                        .map(move |(i, m)| LineMatch {
+                            context_before: if i == 0 { before.clone() } else { vec![] },
                             context_after: if i == match_count - 1 {
                                 after.clone()
                             } else {
                                 vec![]
                             },
                             ..m
-                        }
-                    })
+                        })
                 })
                 .collect()
         } else {

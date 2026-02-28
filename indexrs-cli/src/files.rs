@@ -116,8 +116,8 @@ pub fn run_files<W: std::io::Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indexrs_core::segment::InputFile;
     use indexrs_core::SegmentManager;
+    use indexrs_core::segment::InputFile;
     use std::path::Path;
 
     /// Build an index with test files and return the SegmentManager.
