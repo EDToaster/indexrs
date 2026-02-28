@@ -21,7 +21,7 @@
 
 use crate::error::IndexError;
 use crate::index_reader::TrigramIndexReader;
-use crate::trigram::extract_unique_trigrams;
+use crate::trigram::extract_unique_trigrams_folded;
 use crate::types::FileId;
 
 /// Intersect multiple sorted file_id lists. Returns file_ids present in ALL lists.
@@ -126,7 +126,7 @@ pub fn find_candidates(
         return Ok(Vec::new());
     }
 
-    let trigrams = extract_unique_trigrams(query.as_bytes());
+    let trigrams = extract_unique_trigrams_folded(query.as_bytes());
 
     if trigrams.is_empty() {
         return Ok(Vec::new());
@@ -301,5 +301,37 @@ mod tests {
         // "() {}" has trigrams: "() ", ") {", " {}" — all shared by both files
         let candidates = find_candidates(&reader, "() {}").unwrap();
         assert_eq!(candidates, vec![FileId(0), FileId(1)]);
+    }
+
+    #[test]
+    fn test_find_candidates_case_insensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trigrams.bin");
+
+        let mut builder = PostingListBuilder::new();
+        builder.add_file(FileId(0), b"fn main() {}");
+        builder.add_file(FileId(1), b"fn parse() {}");
+        builder.finalize();
+        TrigramIndexWriter::write(&builder, &path).unwrap();
+        let reader = TrigramIndexReader::open(&path).unwrap();
+
+        let candidates = find_candidates(&reader, "MAIN").unwrap();
+        assert_eq!(candidates, vec![FileId(0)]);
+    }
+
+    #[test]
+    fn test_find_candidates_mixed_case_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trigrams.bin");
+
+        let mut builder = PostingListBuilder::new();
+        builder.add_file(FileId(0), b"fn main() {}");
+        builder.add_file(FileId(1), b"fn parse() {}");
+        builder.finalize();
+        TrigramIndexWriter::write(&builder, &path).unwrap();
+        let reader = TrigramIndexReader::open(&path).unwrap();
+
+        let candidates = find_candidates(&reader, "Parse").unwrap();
+        assert_eq!(candidates, vec![FileId(1)]);
     }
 }
