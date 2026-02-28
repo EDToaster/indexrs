@@ -42,10 +42,9 @@ pub fn run_bat_preview(opts: &PreviewOptions) -> Result<(), IndexError> {
 
     let status = cmd.status().map_err(IndexError::Io)?;
     if !status.success() {
-        return Err(IndexError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("bat exited with status {status}"),
-        )));
+        return Err(IndexError::Io(std::io::Error::other(format!(
+            "bat exited with status {status}"
+        ))));
     }
     Ok(())
 }
@@ -84,19 +83,18 @@ pub fn render_builtin_preview<W: Write>(
 
     let line_num_width = format!("{}", end).len();
 
-    for i in start..end {
+    for (i, line_content) in lines.iter().enumerate().take(end).skip(start) {
         let line_num = i + 1;
         let is_highlighted = opts.highlight_line.is_some_and(|hl| hl == line_num);
 
         if is_highlighted && opts.color_enabled {
-            write!(
+            writeln!(
                 out,
-                "\x1b[7m{line_num:>line_num_width$} {}\x1b[0m\n",
-                lines[i]
+                "\x1b[7m{line_num:>line_num_width$} {line_content}\x1b[0m",
             )
             .map_err(IndexError::Io)?;
         } else {
-            writeln!(out, "{line_num:>line_num_width$} {}", lines[i]).map_err(IndexError::Io)?;
+            writeln!(out, "{line_num:>line_num_width$} {line_content}").map_err(IndexError::Io)?;
         }
     }
 

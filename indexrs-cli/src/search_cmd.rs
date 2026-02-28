@@ -8,7 +8,6 @@ use crate::color::ColorConfig;
 use crate::output::{ExitCode, StreamingWriter};
 
 pub struct SearchCmdOptions {
-    pub query: String,
     pub pattern: MatchPattern,
     pub context_lines: usize,
     pub limit: usize,
@@ -189,7 +188,6 @@ mod tests {
         let color = ColorConfig::new(false);
 
         let opts = SearchCmdOptions {
-            query: "println".to_string(),
             pattern: MatchPattern::LiteralCaseInsensitive("println".to_string()),
             context_lines: 0,
             limit: 1000,
@@ -219,7 +217,6 @@ mod tests {
         let color = ColorConfig::new(false);
 
         let opts = SearchCmdOptions {
-            query: "nonexistent_string_xyz".to_string(),
             pattern: MatchPattern::LiteralCaseInsensitive("nonexistent_string_xyz".to_string()),
             context_lines: 0,
             limit: 1000,

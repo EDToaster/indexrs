@@ -44,6 +44,7 @@ impl<W: Write> StreamingWriter<W> {
     }
 
     /// Return the number of lines written so far.
+    #[allow(dead_code)]
     pub fn lines_written(&self) -> usize {
         self.count
     }
