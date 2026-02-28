@@ -7,6 +7,8 @@
 //!
 //! The plan is segment-specific because posting list sizes vary per segment.
 
+use std::fmt;
+
 use crate::index_state::SegmentList;
 use crate::segment::Segment;
 use crate::trigram::extract_unique_trigrams;
@@ -84,6 +86,46 @@ impl QueryPlan {
     ///   that trigram, so the intersection must be empty)
     pub fn can_short_circuit(&self) -> bool {
         self.is_empty || self.trigram_plan.iter().any(|t| t.estimated_count == 0)
+    }
+}
+
+impl fmt::Display for PreFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PreFilter::Language(lang) => write!(f, "lang={lang}"),
+            PreFilter::PathGlob(glob) => write!(f, "path={glob}"),
+        }
+    }
+}
+
+impl fmt::Display for VerifyStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VerifyStep::Literal(s) => write!(f, "verify=literal({s:?})"),
+            VerifyStep::Regex(s) => write!(f, "verify=regex({s:?})"),
+        }
+    }
+}
+
+impl fmt::Display for QueryPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty {
+            return write!(f, "QueryPlan(empty)");
+        }
+
+        write!(f, "QueryPlan(")?;
+
+        if !self.pre_filters.is_empty() {
+            let filters: Vec<String> = self.pre_filters.iter().map(|pf| pf.to_string()).collect();
+            write!(f, "filters=[{}], ", filters.join(", "))?;
+        }
+
+        write!(
+            f,
+            "{} trigrams, {})",
+            self.trigram_plan.len(),
+            self.verify
+        )
     }
 }
 
@@ -709,5 +751,44 @@ mod tests {
 
         // All trigrams exist in the index, so no short-circuit
         assert!(!plan.can_short_circuit());
+    }
+
+    // ---- Task 7: Display implementations tests ----
+
+    #[test]
+    fn test_query_plan_display() {
+        let plan = QueryPlan {
+            pre_filters: vec![PreFilter::Language(Language::Rust)],
+            trigram_plan: vec![
+                ScoredTrigram {
+                    trigram: Trigram::from_bytes(b'f', b'o', b'o'),
+                    estimated_count: 10,
+                },
+                ScoredTrigram {
+                    trigram: Trigram::from_bytes(b'o', b'o', b'b'),
+                    estimated_count: 50,
+                },
+            ],
+            verify: VerifyStep::Literal("foobar".to_string()),
+            is_empty: false,
+        };
+
+        let display = format!("{plan}");
+        assert!(display.contains("lang=Rust"));
+        assert!(display.contains("2 trigrams"));
+        assert!(display.contains("verify=literal"));
+    }
+
+    #[test]
+    fn test_empty_plan_display() {
+        let plan = QueryPlan {
+            pre_filters: vec![],
+            trigram_plan: vec![],
+            verify: VerifyStep::Literal("fn".to_string()),
+            is_empty: true,
+        };
+
+        let display = format!("{plan}");
+        assert!(display.contains("empty"));
     }
 }
