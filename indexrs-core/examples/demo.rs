@@ -152,7 +152,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         print!("{result}");
         eprintln!(
             "\n{} matches in {} files (searched in {:.1?})",
-            result.total_match_count, result.total_file_count, t3.elapsed()
+            result.total_match_count,
+            result.total_file_count,
+            t3.elapsed()
         );
     }
 
