@@ -89,6 +89,69 @@ impl Default for RankingConfig {
     }
 }
 
+/// Compute a path depth score in [0.0, 1.0].
+///
+/// Shallower files score higher. Depth is the number of path components.
+/// A file at the root ("main.rs") has depth 1. Score decreases linearly
+/// with depth, reaching 0.0 at `config.max_path_depth`.
+pub fn path_depth_score(path: &str, config: &RankingConfig) -> f64 {
+    let depth = path.chars().filter(|&c| c == '/').count() as u32 + 1;
+    if depth >= config.max_path_depth {
+        return 0.0;
+    }
+    1.0 - (depth as f64 / config.max_path_depth as f64)
+}
+
+/// Compute a filename match score: 1.0 if query appears in the filename, 0.0 otherwise.
+///
+/// The comparison is case-insensitive. The "filename" is the last component of
+/// the path without the extension. For example, for "src/Parser.rs", the
+/// filename is "Parser".
+pub fn filename_match_score(path: &str, query: &str) -> f64 {
+    let filename = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if filename.to_lowercase().contains(&query.to_lowercase()) {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// Compute a match count score in [0.0, 1.0].
+///
+/// Uses a logarithmic scale: `log2(1 + match_count) / log2(1 + line_count)`,
+/// clamped to [0.0, 1.0]. This rewards files with many matches relative to
+/// their size, with diminishing returns for very high match counts.
+pub fn match_count_score(match_count: usize, line_count: u32) -> f64 {
+    if match_count == 0 {
+        return 0.0;
+    }
+    let line_count = line_count.max(1) as f64;
+    let raw = (1.0 + match_count as f64).ln() / (1.0 + line_count).ln();
+    raw.clamp(0.0, 1.0)
+}
+
+/// Compute a recency score in [0.0, 1.0] using exponential decay.
+///
+/// Files modified recently score close to 1.0. The score halves every
+/// `config.recency_half_life_secs` seconds. Uses the formula:
+/// `2^(-age_secs / half_life_secs)`.
+///
+/// If `mtime` is in the future relative to `now`, returns 1.0.
+pub fn recency_score(mtime_epoch_secs: u64, now_epoch_secs: u64, config: &RankingConfig) -> f64 {
+    if mtime_epoch_secs >= now_epoch_secs {
+        return 1.0;
+    }
+    let age_secs = (now_epoch_secs - mtime_epoch_secs) as f64;
+    let half_life = config.recency_half_life_secs as f64;
+    if half_life <= 0.0 {
+        return 0.0;
+    }
+    2.0_f64.powf(-age_secs / half_life)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +176,112 @@ mod tests {
         assert!(MatchType::Exact.base_score() > MatchType::Prefix.base_score());
         assert!(MatchType::Prefix.base_score() > MatchType::Substring.base_score());
         assert!(MatchType::Substring.base_score() > MatchType::Regex.base_score());
+    }
+
+    #[test]
+    fn test_path_depth_score_shallow() {
+        let config = RankingConfig::default();
+        // "main.rs" has depth 1 (1 component)
+        let score = path_depth_score("main.rs", &config);
+        assert!(score > 0.8, "shallow path should score high: {score}");
+    }
+
+    #[test]
+    fn test_path_depth_score_deep() {
+        let config = RankingConfig::default();
+        // "a/b/c/d/e/f/g/h/i/j/k.rs" has depth 11
+        let score = path_depth_score("a/b/c/d/e/f/g/h/i/j/k.rs", &config);
+        assert!(score < 0.1, "deep path should score low: {score}");
+    }
+
+    #[test]
+    fn test_path_depth_score_moderate() {
+        let config = RankingConfig::default();
+        // "src/lib.rs" has depth 2
+        let score_shallow = path_depth_score("src/lib.rs", &config);
+        let score_deep = path_depth_score("src/a/b/c/lib.rs", &config);
+        assert!(
+            score_shallow > score_deep,
+            "shallower should score higher: {score_shallow} vs {score_deep}"
+        );
+    }
+
+    #[test]
+    fn test_filename_match_score_match() {
+        let score = filename_match_score("src/parser.rs", "parser");
+        assert!(
+            (score - 1.0).abs() < f64::EPSILON,
+            "query in filename should score 1.0: {score}"
+        );
+    }
+
+    #[test]
+    fn test_filename_match_score_no_match() {
+        let score = filename_match_score("src/parser.rs", "lexer");
+        assert!(
+            score.abs() < f64::EPSILON,
+            "query not in filename should score 0.0: {score}"
+        );
+    }
+
+    #[test]
+    fn test_filename_match_score_case_insensitive() {
+        let score = filename_match_score("src/Parser.rs", "parser");
+        assert!(
+            (score - 1.0).abs() < f64::EPSILON,
+            "filename match should be case-insensitive: {score}"
+        );
+    }
+
+    #[test]
+    fn test_match_count_score_many_matches() {
+        let score = match_count_score(10, 100);
+        assert!(score > 0.0 && score <= 1.0, "score in range: {score}");
+    }
+
+    #[test]
+    fn test_match_count_score_single_match() {
+        let score_one = match_count_score(1, 100);
+        let score_ten = match_count_score(10, 100);
+        assert!(
+            score_ten > score_one,
+            "more matches should score higher: {score_ten} vs {score_one}"
+        );
+    }
+
+    #[test]
+    fn test_match_count_score_zero() {
+        let score = match_count_score(0, 100);
+        assert!(score.abs() < f64::EPSILON, "zero matches should be 0: {score}");
+    }
+
+    #[test]
+    fn test_recency_score_recent() {
+        let config = RankingConfig::default();
+        let now = 1_700_000_000u64;
+        // Modified 1 hour ago
+        let score = recency_score(now - 3600, now, &config);
+        assert!(score > 0.9, "recent file should score high: {score}");
+    }
+
+    #[test]
+    fn test_recency_score_old() {
+        let config = RankingConfig::default();
+        let now = 1_700_000_000u64;
+        // Modified 1 year ago
+        let score = recency_score(now - 365 * 24 * 3600, now, &config);
+        assert!(score < 0.1, "old file should score low: {score}");
+    }
+
+    #[test]
+    fn test_recency_score_ordering() {
+        let config = RankingConfig::default();
+        let now = 1_700_000_000u64;
+        let score_recent = recency_score(now - 3600, now, &config);
+        let score_old = recency_score(now - 365 * 24 * 3600, now, &config);
+        assert!(
+            score_recent > score_old,
+            "recent should score higher: {score_recent} vs {score_old}"
+        );
     }
 }
