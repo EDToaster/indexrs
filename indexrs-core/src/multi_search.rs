@@ -1114,4 +1114,40 @@ mod tests {
         assert_eq!(result.files[0].lines[0].context_before.len(), 0);
         assert_eq!(result.files[0].lines[0].context_after.len(), 0);
     }
+
+    #[test]
+    fn test_search_segments_tiebreaker_alphabetical() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Two files at same depth, same mtime, same match count
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "src/beta.rs".to_string(),
+                    content: b"fn search() {}\n".to_vec(),
+                    mtime: 1_700_000_000,
+                },
+                InputFile {
+                    path: "src/alpha.rs".to_string(),
+                    content: b"fn search() {}\n".to_vec(),
+                    mtime: 1_700_000_000,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let result = search_segments(&snapshot, "search").unwrap();
+        assert_eq!(result.files.len(), 2);
+        // When scores are equal, should be sorted alphabetically
+        assert_eq!(
+            result.files[0].path,
+            PathBuf::from("src/alpha.rs"),
+            "alphabetical tiebreaker: alpha before beta"
+        );
+        assert_eq!(result.files[1].path, PathBuf::from("src/beta.rs"));
+    }
 }

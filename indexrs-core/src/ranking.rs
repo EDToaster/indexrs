@@ -302,7 +302,10 @@ mod tests {
     #[test]
     fn test_match_count_score_zero() {
         let score = match_count_score(0, 100);
-        assert!(score.abs() < f64::EPSILON, "zero matches should be 0: {score}");
+        assert!(
+            score.abs() < f64::EPSILON,
+            "zero matches should be 0: {score}"
+        );
     }
 
     #[test]
@@ -474,6 +477,83 @@ mod tests {
         assert!(
             score_recent > score_old,
             "recent should beat old: {score_recent} vs {score_old}"
+        );
+    }
+
+    #[test]
+    fn test_path_depth_score_root_file() {
+        let config = RankingConfig::default();
+        let score = path_depth_score("Cargo.toml", &config);
+        // depth=1 -> score = 1.0 - 1/10 = 0.9
+        assert!(
+            (score - 0.9).abs() < f64::EPSILON,
+            "root file score: {score}"
+        );
+    }
+
+    #[test]
+    fn test_filename_match_partial() {
+        // "parse" should match in "parser.rs"
+        let score = filename_match_score("src/parser.rs", "parse");
+        assert!((score - 1.0).abs() < f64::EPSILON, "partial match: {score}");
+    }
+
+    #[test]
+    fn test_filename_match_empty_query() {
+        // Empty query matches any filename
+        let score = filename_match_score("src/lib.rs", "");
+        assert!(
+            (score - 1.0).abs() < f64::EPSILON,
+            "empty query matches: {score}"
+        );
+    }
+
+    #[test]
+    fn test_recency_score_same_time() {
+        let config = RankingConfig::default();
+        let score = recency_score(1_700_000_000, 1_700_000_000, &config);
+        assert!(
+            (score - 1.0).abs() < f64::EPSILON,
+            "same time = 1.0: {score}"
+        );
+    }
+
+    #[test]
+    fn test_recency_score_at_half_life() {
+        let config = RankingConfig::default();
+        let now = 1_700_000_000u64;
+        let mtime = now - config.recency_half_life_secs;
+        let score = recency_score(mtime, now, &config);
+        assert!(
+            (score - 0.5).abs() < 0.01,
+            "at half-life should be ~0.5: {score}"
+        );
+    }
+
+    #[test]
+    fn test_match_count_score_large_file() {
+        // 1 match in 10000 lines should still produce a positive score
+        let score = match_count_score(1, 10000);
+        assert!(score > 0.0, "should be positive: {score}");
+        assert!(score < 0.2, "should be small: {score}");
+    }
+
+    #[test]
+    fn test_score_file_match_zero_line_count() {
+        let config = RankingConfig::default();
+        let input = ScoringInput {
+            path: "empty.rs",
+            query: "test",
+            match_type: MatchType::Substring,
+            match_count: 0,
+            line_count: 0,
+            mtime_epoch_secs: 1_700_000_000,
+            now_epoch_secs: 1_700_000_000,
+        };
+        let score = score_file_match(&input, &config);
+        assert!(
+            (0.0..=1.0).contains(&score),
+            "should handle zero line count: {score}"
         );
     }
 }
