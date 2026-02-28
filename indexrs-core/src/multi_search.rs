@@ -11,22 +11,25 @@ use std::time::Instant;
 use crate::error::IndexError;
 use crate::index_state::SegmentList;
 use crate::intersection::find_candidates;
-use crate::search::{FileMatch, LineMatch, MatchPattern, SearchResult};
+use crate::search::{ContextLine, FileMatch, LineMatch, MatchPattern, SearchResult};
 use crate::segment::Segment;
 use crate::tombstone::TombstoneSet;
 use crate::types::SegmentId;
 use crate::verify::ContentVerifier;
 
 /// Verify that a query string actually appears in file content, and return
-/// the matching lines with highlight ranges.
+/// the matching lines with highlight ranges and optional context lines.
 ///
 /// This is the content verification step after trigram candidate filtering.
 /// For each line in `content`, finds all occurrences of `query` using
 /// case-insensitive (ASCII-folded) matching and builds a `LineMatch` with
 /// 1-based line numbers and byte-offset highlight ranges.
 ///
+/// When `context_lines > 0`, each match also includes surrounding context
+/// lines (up to `context_lines` before and after).
+///
 /// Returns an empty vector if the query is empty or not found.
-fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
+fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> Vec<LineMatch> {
     if query.is_empty() || content.is_empty() {
         return Vec::new();
     }
@@ -34,21 +37,24 @@ fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
     // Fold query to lowercase for case-insensitive matching.
     let folded_query: Vec<u8> = query.bytes().map(crate::trigram::ascii_fold_byte).collect();
     let text = String::from_utf8_lossy(content);
-    let mut matches = Vec::new();
+    let all_lines: Vec<&str> = text.split('\n').collect();
 
-    for (line_idx, line) in text.split('\n').enumerate() {
+    // First pass: find matching line indices and their ranges
+    let mut match_indices: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
+
+    for (line_idx, line) in all_lines.iter().enumerate() {
         // Skip empty trailing line from trailing newline
-        if line.is_empty() && line_idx > 0 {
+        if line.is_empty() && line_idx > 0 && line_idx == all_lines.len() - 1 {
             continue;
         }
 
-        let mut ranges = Vec::new();
         let line_bytes = line.as_bytes();
         // Fold the line bytes for searching.
         let folded_line: Vec<u8> = line_bytes
             .iter()
             .map(|&b| crate::trigram::ascii_fold_byte(b))
             .collect();
+        let mut ranges = Vec::new();
         let mut search_start = 0;
 
         while search_start + folded_query.len() <= folded_line.len() {
@@ -63,17 +69,58 @@ fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
         }
 
         if !ranges.is_empty() {
-            matches.push(LineMatch {
-                line_number: (line_idx + 1) as u32, // 1-based
-                content: line.to_string(),
-                ranges,
-                context_before: vec![],
-                context_after: vec![],
-            });
+            match_indices.push((line_idx, ranges));
         }
     }
 
-    matches
+    // Second pass: build LineMatch with context
+    match_indices
+        .iter()
+        .map(|(line_idx, ranges)| {
+            let line_idx = *line_idx;
+
+            let context_before = if context_lines > 0 {
+                let start = line_idx.saturating_sub(context_lines);
+                (start..line_idx)
+                    .map(|i| ContextLine {
+                        line_number: (i + 1) as u32,
+                        content: all_lines[i].to_string(),
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            let context_after = if context_lines > 0 {
+                let end = (line_idx + 1 + context_lines).min(all_lines.len());
+                // Skip trailing empty line
+                let effective_end = if end > 0
+                    && all_lines.last().is_some_and(|l| l.is_empty())
+                    && end == all_lines.len()
+                {
+                    end - 1
+                } else {
+                    end
+                };
+                ((line_idx + 1)..effective_end)
+                    .map(|i| ContextLine {
+                        line_number: (i + 1) as u32,
+                        content: all_lines[i].to_string(),
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            LineMatch {
+                line_number: (line_idx + 1) as u32,
+                content: all_lines[line_idx].to_string(),
+                ranges: ranges.clone(),
+                context_before,
+                context_after,
+            }
+        })
+        .collect()
 }
 
 /// Find the first occurrence of `needle` in `haystack`, returning the byte offset.
@@ -122,7 +169,7 @@ fn search_single_segment(
             .read_content(meta.content_offset, meta.content_len)?;
 
         // Verify the query actually appears in the content
-        let line_matches = verify_content_matches(&content, query);
+        let line_matches = verify_content_matches(&content, query, 0);
         if line_matches.is_empty() {
             continue;
         }
@@ -394,7 +441,7 @@ mod tests {
     #[test]
     fn test_verify_single_match() {
         let content = b"fn main() {\n    println!(\"hello\");\n}\n";
-        let matches = verify_content_matches(content, "println");
+        let matches = verify_content_matches(content, "println", 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 2);
         assert!(matches[0].content.contains("println"));
@@ -404,14 +451,14 @@ mod tests {
     #[test]
     fn test_verify_no_match() {
         let content = b"fn main() {}\n";
-        let matches = verify_content_matches(content, "foobar");
+        let matches = verify_content_matches(content, "foobar", 0);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn test_verify_multiple_matches_same_line() {
         let content = b"let aa = aa + aa;\n";
-        let matches = verify_content_matches(content, "aa");
+        let matches = verify_content_matches(content, "aa", 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 1);
         // Should have 3 ranges: positions 4, 9, 14
@@ -421,7 +468,7 @@ mod tests {
     #[test]
     fn test_verify_multiple_lines() {
         let content = b"fn foo() {}\nfn bar() {}\nfn baz() {}\n";
-        let matches = verify_content_matches(content, "fn ");
+        let matches = verify_content_matches(content, "fn ", 0);
         assert_eq!(matches.len(), 3);
         assert_eq!(matches[0].line_number, 1);
         assert_eq!(matches[1].line_number, 2);
@@ -431,23 +478,88 @@ mod tests {
     #[test]
     fn test_verify_empty_query() {
         let content = b"fn main() {}\n";
-        let matches = verify_content_matches(content, "");
+        let matches = verify_content_matches(content, "", 0);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn test_verify_empty_content() {
         let content = b"";
-        let matches = verify_content_matches(content, "foo");
+        let matches = verify_content_matches(content, "foo", 0);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn test_verify_no_trailing_newline() {
         let content = b"line one\nline two";
-        let matches = verify_content_matches(content, "two");
+        let matches = verify_content_matches(content, "two", 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 2);
+    }
+
+    // ---- Context line tests ----
+
+    #[test]
+    fn test_verify_with_context_lines() {
+        let content = b"line one\nline two\nline three\nline four\nline five\n";
+        let matches = verify_content_matches(content, "three", 1);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 3);
+        assert_eq!(matches[0].context_before.len(), 1);
+        assert_eq!(matches[0].context_before[0].line_number, 2);
+        assert_eq!(matches[0].context_before[0].content, "line two");
+        assert_eq!(matches[0].context_after.len(), 1);
+        assert_eq!(matches[0].context_after[0].line_number, 4);
+        assert_eq!(matches[0].context_after[0].content, "line four");
+    }
+
+    #[test]
+    fn test_verify_with_context_at_start() {
+        let content = b"line one\nline two\nline three\n";
+        let matches = verify_content_matches(content, "one", 2);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 1);
+        // No context before first line
+        assert_eq!(matches[0].context_before.len(), 0);
+        assert_eq!(matches[0].context_after.len(), 2);
+        assert_eq!(matches[0].context_after[0].line_number, 2);
+        assert_eq!(matches[0].context_after[1].line_number, 3);
+    }
+
+    #[test]
+    fn test_verify_with_context_at_end() {
+        let content = b"line one\nline two\nline three\n";
+        let matches = verify_content_matches(content, "three", 2);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 3);
+        assert_eq!(matches[0].context_before.len(), 2);
+        assert_eq!(matches[0].context_before[0].line_number, 1);
+        assert_eq!(matches[0].context_before[1].line_number, 2);
+        // No context after last line
+        assert_eq!(matches[0].context_after.len(), 0);
+    }
+
+    #[test]
+    fn test_verify_with_zero_context() {
+        let content = b"line one\nline two\nline three\n";
+        let matches = verify_content_matches(content, "two", 0);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].context_before.is_empty());
+        assert!(matches[0].context_after.is_empty());
+    }
+
+    #[test]
+    fn test_verify_context_adjacent_matches_no_overlap() {
+        // When two matches are adjacent, context should not overlap
+        let content = b"line 1\nmatch A\nmatch B\nline 4\n";
+        let matches = verify_content_matches(content, "match", 1);
+        assert_eq!(matches.len(), 2);
+        // First match context_after should include "match B" (it's context even though it's also a match)
+        assert_eq!(matches[0].context_after.len(), 1);
+        assert_eq!(matches[0].context_after[0].line_number, 3);
+        // Second match context_before should include "match A"
+        assert_eq!(matches[1].context_before.len(), 1);
+        assert_eq!(matches[1].context_before[0].line_number, 2);
     }
 
     // ---- Single-segment search tests ----
