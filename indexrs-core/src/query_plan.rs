@@ -7,6 +7,8 @@
 //!
 //! The plan is segment-specific because posting list sizes vary per segment.
 
+use crate::segment::Segment;
+use crate::trigram::extract_unique_trigrams;
 use crate::types::{Language, Trigram};
 
 /// A pre-filter step that cheaply narrows the candidate set before trigram intersection.
@@ -70,6 +72,53 @@ pub struct QueryPlan {
     /// Whether this plan can produce results. False when the query is too short
     /// to extract trigrams and no full-scan fallback is available.
     pub is_empty: bool,
+}
+
+/// Build a query plan for a literal substring query against a single segment.
+///
+/// This is the core planning function. It:
+/// 1. Accepts pre-filters from the parsed query (language, path)
+/// 2. Extracts trigrams from the literal query string
+/// 3. Looks up each trigram's estimated posting list size via
+///    `TrigramIndexReader::estimate_posting_list_size()` (O(log n), no decoding)
+/// 4. Sorts trigrams by estimated count (smallest first) for efficient intersection
+/// 5. Returns a `QueryPlan` with the verification step set to literal matching
+///
+/// If the query is shorter than 3 characters (no trigrams extractable), the plan's
+/// `is_empty` flag is set to true and `trigram_plan` is empty.
+pub fn plan_literal_query(query: &str, pre_filters: &[PreFilter], segment: &Segment) -> QueryPlan {
+    if query.len() < 3 {
+        return QueryPlan {
+            pre_filters: pre_filters.to_vec(),
+            trigram_plan: vec![],
+            verify: VerifyStep::Literal(query.to_string()),
+            is_empty: true,
+        };
+    }
+
+    let trigrams = extract_unique_trigrams(query.as_bytes());
+    let reader = segment.trigram_reader();
+
+    let mut scored: Vec<ScoredTrigram> = trigrams
+        .into_iter()
+        .map(|trigram| {
+            let estimated_count = reader.estimate_posting_list_size(trigram);
+            ScoredTrigram {
+                trigram,
+                estimated_count,
+            }
+        })
+        .collect();
+
+    // Sort by estimated count ascending (smallest posting list first)
+    scored.sort_by_key(|s| s.estimated_count);
+
+    QueryPlan {
+        pre_filters: pre_filters.to_vec(),
+        trigram_plan: scored,
+        verify: VerifyStep::Literal(query.to_string()),
+        is_empty: false,
+    }
 }
 
 #[cfg(test)]
@@ -147,5 +196,123 @@ mod tests {
         };
 
         assert!(matches!(plan.verify, VerifyStep::Regex(_)));
+    }
+
+    // ---- Task 3: plan_literal_query tests ----
+
+    use crate::segment::{InputFile, SegmentWriter};
+    use crate::types::SegmentId;
+    use std::sync::Arc;
+
+    /// Helper: build a test segment with multiple files of different languages.
+    fn build_test_segment(base_dir: &std::path::Path) -> Arc<crate::segment::Segment> {
+        std::fs::create_dir_all(base_dir).unwrap();
+        let writer = SegmentWriter::new(base_dir, SegmentId(0));
+        Arc::new(
+            writer
+                .build(vec![
+                    InputFile {
+                        path: "src/main.rs".to_string(),
+                        content: b"fn main() { println!(\"hello\"); }".to_vec(),
+                        mtime: 0,
+                    },
+                    InputFile {
+                        path: "src/lib.rs".to_string(),
+                        content: b"pub fn add(a: i32, b: i32) -> i32 { a + b }".to_vec(),
+                        mtime: 0,
+                    },
+                    InputFile {
+                        path: "app.py".to_string(),
+                        content: b"def main():\n    print(\"hello\")\n".to_vec(),
+                        mtime: 0,
+                    },
+                ])
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_plan_literal_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let plan = plan_literal_query("println", &[], &segment);
+
+        assert!(!plan.is_empty);
+        assert!(plan.pre_filters.is_empty());
+        assert!(!plan.trigram_plan.is_empty());
+        assert!(matches!(plan.verify, VerifyStep::Literal(ref s) if s == "println"));
+
+        // Verify trigrams are sorted by estimated count (ascending)
+        for window in plan.trigram_plan.windows(2) {
+            assert!(
+                window[0].estimated_count <= window[1].estimated_count,
+                "trigram plan not sorted: {} > {}",
+                window[0].estimated_count,
+                window[1].estimated_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_plan_literal_query_with_language_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let plan = plan_literal_query("main", &[PreFilter::Language(Language::Rust)], &segment);
+
+        assert!(!plan.is_empty);
+        assert_eq!(plan.pre_filters.len(), 1);
+        assert!(matches!(
+            plan.pre_filters[0],
+            PreFilter::Language(Language::Rust)
+        ));
+        assert!(!plan.trigram_plan.is_empty());
+    }
+
+    #[test]
+    fn test_plan_literal_query_short_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        // "fn" is only 2 chars -- no trigrams possible
+        let plan = plan_literal_query("fn", &[], &segment);
+
+        assert!(plan.is_empty);
+        assert!(plan.trigram_plan.is_empty());
+    }
+
+    #[test]
+    fn test_plan_literal_query_absent_trigram() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        // "xyzxyz" contains trigrams not in the index
+        let plan = plan_literal_query("xyzxyz", &[], &segment);
+
+        // Plan should still be valid but at least one trigram has count 0,
+        // which means the plan could short-circuit during execution
+        assert!(!plan.is_empty);
+        assert!(plan.trigram_plan.iter().any(|t| t.estimated_count == 0));
+    }
+
+    #[test]
+    fn test_plan_literal_query_with_path_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let plan = plan_literal_query(
+            "main",
+            &[PreFilter::PathGlob("src/**/*.rs".to_string())],
+            &segment,
+        );
+
+        assert!(!plan.is_empty);
+        assert_eq!(plan.pre_filters.len(), 1);
     }
 }
