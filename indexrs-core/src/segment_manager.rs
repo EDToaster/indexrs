@@ -1301,4 +1301,85 @@ mod tests {
         let result = search_segments(&snap, "result").unwrap();
         assert_eq!(result.files.len(), 4);
     }
+
+    #[test]
+    fn test_index_files_with_budget_splits_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Each file is ~30 bytes of content
+        let files: Vec<InputFile> = (0..10)
+            .map(|i| InputFile {
+                path: format!("file_{i}.rs"),
+                content: format!("fn func_{i}() {{ let x = {i}; }}").into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+
+        // Budget of 50 bytes should split 10 files into ~6 segments
+        // (each file ~30 bytes, so ~1-2 files per segment)
+        manager.index_files_with_budget(files, 50).unwrap();
+
+        let snap = manager.snapshot();
+        assert!(
+            snap.len() > 1,
+            "should produce multiple segments, got {}",
+            snap.len()
+        );
+
+        // Total entry count across all segments should be 10
+        let total_entries: u32 = snap.iter().map(|s| s.entry_count()).sum();
+        assert_eq!(total_entries, 10);
+    }
+
+    #[test]
+    fn test_index_files_with_budget_zero_means_unlimited() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..5)
+            .map(|i| InputFile {
+                path: format!("file_{i}.rs"),
+                content: format!("fn func_{i}() {{ let x = {i}; }}").into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+
+        // Budget of 0 means no limit — should produce exactly 1 segment
+        manager.index_files_with_budget(files, 0).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 5);
+    }
+
+    #[test]
+    fn test_index_files_with_budget_searchable_across_segments() {
+        use crate::multi_search::search_segments;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..6)
+            .map(|i| InputFile {
+                path: format!("file_{i}.rs"),
+                content: format!("fn shared_keyword_{i}() {{ let result = compute(); }}")
+                    .into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+
+        // Small budget to force multiple segments
+        manager.index_files_with_budget(files, 1).unwrap();
+
+        let snap = manager.snapshot();
+        assert!(snap.len() > 1);
+
+        // Search should find "result" across all segments
+        let result = search_segments(&snap, "result").unwrap();
+        assert_eq!(result.files.len(), 6);
+    }
 }
