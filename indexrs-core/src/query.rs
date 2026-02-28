@@ -243,13 +243,15 @@ impl<'a> Parser<'a> {
             if self.starts_with_keyword("OR") {
                 break;
             }
-            // Stop before a closing context (e.g., nothing more to parse)
-            // Try to parse the next unary; if we can't peek a valid start, break
-            if self.peek().is_none() {
-                break;
+            // Try to parse another unary; if it fails, restore position and stop
+            let saved_pos = self.pos;
+            match self.parse_unary() {
+                Ok(child) => children.push(child),
+                Err(_) => {
+                    self.pos = saved_pos;
+                    break;
+                }
             }
-            let child = self.parse_unary()?;
-            children.push(child);
         }
         if children.len() == 1 {
             Ok(children.into_iter().next().unwrap())
@@ -363,26 +365,26 @@ impl<'a> Parser<'a> {
         debug_assert_eq!(self.peek(), Some('/'));
         self.pos += 1; // consume opening /
         let start = self.pos;
-        let mut pattern = String::new();
-        while self.pos < self.input.len() {
-            let b = self.input.as_bytes()[self.pos];
-            if b == b'\\' && self.pos + 1 < self.input.len() {
-                // Escape: pass through both chars
-                pattern.push(self.input.as_bytes()[self.pos] as char);
-                pattern.push(self.input.as_bytes()[self.pos + 1] as char);
-                self.pos += 2;
-            } else if b == b'/' {
+        while let Some(c) = self.peek() {
+            if c == '/' {
                 break;
-            } else {
-                pattern.push(b as char);
-                self.pos += 1;
             }
+            if c == '\\' {
+                self.pos += c.len_utf8();
+                // Skip the escaped character too
+                if let Some(next) = self.peek() {
+                    self.pos += next.len_utf8();
+                }
+                continue;
+            }
+            self.pos += c.len_utf8();
         }
-        if self.pos >= self.input.len() {
+        if self.is_eof() {
             return Err(IndexError::QueryParse(
                 "unterminated regex (missing closing /)".to_string(),
             ));
         }
+        let pattern = self.input[start..self.pos].to_string();
         self.pos += 1; // consume closing /
 
         // Validate the regex pattern at parse time
