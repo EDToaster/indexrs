@@ -11,7 +11,7 @@
 //! returned as [`ChangeEvent`] values with paths relative to the repository root.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::changes::{ChangeEvent, ChangeKind};
@@ -64,7 +64,8 @@ impl GitChangeDetector {
     ///
     /// The events are de-duplicated by path: if the same path appears in
     /// multiple sources (committed, unstaged, untracked), the latest source
-    /// wins.
+    /// wins. Paths under `.indexrs/` are always excluded since those are
+    /// index files, not source files.
     pub fn detect_changes(&self) -> Result<Vec<ChangeEvent>> {
         let mut changes: HashMap<PathBuf, ChangeKind> = HashMap::new();
 
@@ -90,6 +91,7 @@ impl GitChangeDetector {
 
         let mut events: Vec<ChangeEvent> = changes
             .into_iter()
+            .filter(|(path, _)| !is_indexrs_path(path))
             .map(|(path, kind)| ChangeEvent { path, kind })
             .collect();
 
@@ -124,6 +126,14 @@ impl GitChangeDetector {
         String::from_utf8(output.stdout)
             .map_err(|e| IndexError::Git(format!("git output was not valid UTF-8: {e}")))
     }
+}
+
+/// Check whether a path is under the `.indexrs/` directory.
+///
+/// These are index files (segments, tombstones, etc.) and should never be
+/// reported as source-file changes.
+fn is_indexrs_path(path: &Path) -> bool {
+    path.starts_with(".indexrs")
 }
 
 // ------------------------------------------------------------------
@@ -419,6 +429,35 @@ mod tests {
         } else {
             panic!("expected IndexError::Git variant");
         }
+    }
+
+    // ---- .indexrs path filtering ------------------------------------
+
+    #[test]
+    fn test_is_indexrs_path() {
+        assert!(is_indexrs_path(&PathBuf::from(".indexrs/segments/seg_0000/trigrams.bin")));
+        assert!(is_indexrs_path(&PathBuf::from(".indexrs/lock")));
+        assert!(is_indexrs_path(&PathBuf::from(".indexrs")));
+        assert!(!is_indexrs_path(&PathBuf::from("src/main.rs")));
+        assert!(!is_indexrs_path(&PathBuf::from(".gitignore")));
+        assert!(!is_indexrs_path(&PathBuf::from("foo/.indexrs/bar")));
+    }
+
+    #[test]
+    fn test_parse_untracked_filters_indexrs() {
+        // Simulate git reporting .indexrs files as untracked
+        let output = "src/main.rs\n.indexrs/segments/seg_0000/trigrams.bin\n.indexrs/lock\nlib.rs\n";
+        let events = parse_untracked(output);
+
+        // parse_untracked itself doesn't filter — the filter is in detect_changes.
+        // But we can test is_indexrs_path on the results.
+        let filtered: Vec<_> = events
+            .into_iter()
+            .filter(|e| !is_indexrs_path(&e.path))
+            .collect();
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].path, PathBuf::from("src/main.rs"));
+        assert_eq!(filtered[1].path, PathBuf::from("lib.rs"));
     }
 
     // ---- helpers ----------------------------------------------------
