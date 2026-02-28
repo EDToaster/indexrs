@@ -75,6 +75,18 @@ pub struct QueryPlan {
     pub is_empty: bool,
 }
 
+impl QueryPlan {
+    /// Returns true if the plan is guaranteed to produce zero results.
+    ///
+    /// This is the case when:
+    /// - The plan is marked as empty (query too short)
+    /// - Any trigram in the plan has an estimated count of 0 (no files contain
+    ///   that trigram, so the intersection must be empty)
+    pub fn can_short_circuit(&self) -> bool {
+        self.is_empty || self.trigram_plan.iter().any(|t| t.estimated_count == 0)
+    }
+}
+
 /// Build a query plan for a literal substring query against a single segment.
 ///
 /// This is the core planning function. It:
@@ -644,5 +656,58 @@ mod tests {
             assert!(!plan.is_empty);
             assert!(!plan.trigram_plan.is_empty());
         }
+    }
+
+    // ---- Task 6: early termination and deduplication tests ----
+
+    #[test]
+    fn test_plan_early_termination_zero_count_trigram() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let plan = plan_literal_query("xyzxyz", &[], &segment);
+
+        // When a trigram has estimated_count == 0, it should be first in the plan
+        // (since 0 is the smallest), enabling early termination during execution
+        assert!(!plan.is_empty);
+        assert_eq!(plan.trigram_plan[0].estimated_count, 0);
+    }
+
+    #[test]
+    fn test_plan_handles_duplicate_trigrams() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        // "aaaa" produces trigram "aaa" twice -- plan should deduplicate
+        let plan = plan_literal_query("aaaa", &[], &segment);
+
+        // extract_unique_trigrams already deduplicates, but verify plan has 1 trigram
+        assert_eq!(plan.trigram_plan.len(), 1);
+    }
+
+    #[test]
+    fn test_plan_can_short_circuit() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let plan = plan_literal_query("xyzxyz", &[], &segment);
+
+        // A plan where any trigram has count 0 can be detected as guaranteed-empty
+        assert!(plan.can_short_circuit());
+    }
+
+    #[test]
+    fn test_plan_cannot_short_circuit() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let plan = plan_literal_query("println", &[], &segment);
+
+        // All trigrams exist in the index, so no short-circuit
+        assert!(!plan.can_short_circuit());
     }
 }
