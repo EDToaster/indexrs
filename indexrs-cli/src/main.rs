@@ -2,6 +2,7 @@ mod args;
 mod color;
 mod files;
 mod output;
+mod preview;
 mod repo;
 mod search_cmd;
 
