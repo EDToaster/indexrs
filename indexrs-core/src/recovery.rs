@@ -10,6 +10,7 @@
 //! segments sorted by [`SegmentId`].
 
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use crate::error::IndexError;
@@ -53,6 +54,27 @@ pub fn recover_segments(segments_dir: &Path) -> Result<Vec<Segment>, IndexError>
         // Step 1: Delete temp directories from crashed builds.
         // SegmentWriter names them: .seg_NNNN_tmp_<pid>
         if name.starts_with(".seg_") && name.contains("_tmp_") {
+            // Finding 10: Only remove actual directories, not symlinks to directories.
+            // DirEntry::file_type() does NOT follow symlinks, so is_dir() returns false
+            // for symlinks-to-directories, giving us safe symlink rejection.
+            match entry.file_type() {
+                Ok(ft) if !ft.is_dir() => {
+                    tracing::warn!(
+                        path = %entry.path().display(),
+                        "skipping removal: temp path is not a plain directory (possible symlink)"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %entry.path().display(),
+                        error = %e,
+                        "skipping removal: could not determine file type"
+                    );
+                    continue;
+                }
+                Ok(_) => {}
+            }
             tracing::warn!(path = %entry.path().display(), "removing leftover temp directory");
             if let Err(e) = fs::remove_dir_all(entry.path()) {
                 tracing::warn!(
@@ -165,12 +187,13 @@ fn validate_segment_headers(seg_dir: &Path) -> Result<(), String> {
 
 /// Read and validate the first 6 bytes of trigrams.bin (magic + version).
 fn validate_trigram_header(path: &Path) -> Result<(), String> {
-    let data = fs::read(path).map_err(|e| format!("cannot read trigrams.bin: {e}"))?;
-    if data.len() < 6 {
-        return Err(format!("trigrams.bin too small: {} bytes", data.len()));
-    }
+    let filename = "trigrams.bin";
+    let mut f = std::fs::File::open(path).map_err(|e| format!("cannot read {filename}: {e}"))?;
+    let mut header = [0u8; 10];
+    f.read_exact(&mut header)
+        .map_err(|e| format!("{filename} too small: {e}"))?;
 
-    let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
     if magic != crate::index_writer::TRIG_MAGIC {
         return Err(format!(
             "trigrams.bin bad magic: expected 0x{:08X}, got 0x{magic:08X}",
@@ -178,7 +201,7 @@ fn validate_trigram_header(path: &Path) -> Result<(), String> {
         ));
     }
 
-    let version = u16::from_le_bytes(data[4..6].try_into().unwrap());
+    let version = u16::from_le_bytes(header[4..6].try_into().unwrap());
     if version != crate::index_writer::TRIG_VERSION {
         return Err(format!(
             "trigrams.bin unsupported version: expected {}, got {version}",
@@ -191,12 +214,13 @@ fn validate_trigram_header(path: &Path) -> Result<(), String> {
 
 /// Read and validate the first 6 bytes of meta.bin (magic + version).
 fn validate_meta_header(path: &Path) -> Result<(), String> {
-    let data = fs::read(path).map_err(|e| format!("cannot read meta.bin: {e}"))?;
-    if data.len() < 6 {
-        return Err(format!("meta.bin too small: {} bytes", data.len()));
-    }
+    let filename = "meta.bin";
+    let mut f = std::fs::File::open(path).map_err(|e| format!("cannot read {filename}: {e}"))?;
+    let mut header = [0u8; 10];
+    f.read_exact(&mut header)
+        .map_err(|e| format!("{filename} too small: {e}"))?;
 
-    let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
     if magic != crate::metadata::META_MAGIC {
         return Err(format!(
             "meta.bin bad magic: expected 0x{:08X}, got 0x{magic:08X}",
@@ -204,7 +228,7 @@ fn validate_meta_header(path: &Path) -> Result<(), String> {
         ));
     }
 
-    let version = u16::from_le_bytes(data[4..6].try_into().unwrap());
+    let version = u16::from_le_bytes(header[4..6].try_into().unwrap());
     if version != crate::metadata::META_VERSION {
         return Err(format!(
             "meta.bin unsupported version: expected {}, got {version}",

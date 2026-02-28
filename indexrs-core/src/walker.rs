@@ -83,6 +83,7 @@ impl DirectoryWalkerBuilder {
         builder.git_global(true);
         builder.git_exclude(true);
         builder.hidden(true);
+        builder.follow_links(false);
 
         // Honour .indexrsignore files.
         builder.add_custom_ignore_filename(".indexrsignore");

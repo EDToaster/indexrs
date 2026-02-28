@@ -14,10 +14,10 @@ pub const DEFAULT_MAX_FILE_SIZE: u64 = 1_048_576;
 /// Known binary file extensions (lowercase, without leading dot).
 const BINARY_EXTENSIONS: &[&str] = &[
     // Images
-    "png", "jpg", "jpeg", "gif", "bmp", "ico", "svg", // Compiled / object files
+    "png", "jpg", "jpeg", "gif", "bmp", "ico", // Compiled / object files
     "wasm", "o", "obj", "a", "lib", "so", "dylib", "dll", "exe", "bin", "class",
     // Archives
-    "jar", "zip", "gz", "tar", "7z", "rar", // Documents
+    "jar", "zip", "gz", "tar", "7z", "rar", "zst", // Documents
     "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", // Media
     "mp3", "mp4", "wav", "avi", "mov", // Fonts
     "ttf", "otf", "woff", "woff2", "eot", // Python bytecode

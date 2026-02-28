@@ -101,7 +101,8 @@ pub fn decode_delta_varint(data: &[u8]) -> Vec<u32> {
             Ok(d) => d,
             Err(_) => break,
         };
-        accumulator += delta;
+        // Finding 13: Use saturating_add to avoid u32 wrapping on malformed data.
+        accumulator = accumulator.saturating_add(delta);
         result.push(accumulator);
     }
 
@@ -236,9 +237,10 @@ pub fn decode_positional_postings(data: &[u8]) -> Vec<(u32, u32)> {
         for _ in 0..count {
             let delta: u32 = match cursor.read_varint() {
                 Ok(d) => d,
-                Err(_) => break,
+                Err(_) => return result,
             };
-            prev_offset += delta;
+            // Finding 13: Use saturating_add to avoid u32 wrapping on malformed data.
+            prev_offset = prev_offset.saturating_add(delta);
             result.push((file_id, prev_offset));
         }
     }
