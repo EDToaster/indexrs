@@ -468,6 +468,35 @@ impl<'a> Parser<'a> {
     }
 }
 
+impl std::fmt::Display for Query {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Query::Literal(lit) => {
+                if lit.case_sensitive {
+                    write!(f, "case:{}", lit.text)
+                } else {
+                    write!(f, "{}", lit.text)
+                }
+            }
+            Query::Regex(re) => write!(f, "/{}/", re.pattern),
+            Query::Phrase(ph) => write!(f, "\"{}\"", ph.text),
+            Query::PathFilter(p) => write!(f, "path:{p}"),
+            Query::LanguageFilter(l) => write!(f, "language:{l}"),
+            Query::Not(inner) => write!(f, "NOT {inner}"),
+            Query::Or(a, b) => write!(f, "{a} OR {b}"),
+            Query::And(children) => {
+                for (i, child) in children.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{child}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,5 +588,599 @@ mod tests {
     fn test_parse_whitespace_only() {
         let err = parse_query("   ").unwrap_err();
         assert!(matches!(err, IndexError::QueryParse(_)));
+    }
+
+    // ---- Phrase tests ----
+
+    #[test]
+    fn test_parse_phrase() {
+        let q = parse_query("\"hello world\"").unwrap();
+        assert_eq!(
+            q,
+            Query::Phrase(PhraseQuery {
+                text: "hello world".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_phrase_empty() {
+        let q = parse_query("\"\"").unwrap();
+        assert_eq!(
+            q,
+            Query::Phrase(PhraseQuery {
+                text: "".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_phrase_unterminated() {
+        let err = parse_query("\"hello").unwrap_err();
+        assert!(matches!(err, IndexError::QueryParse(_)));
+        assert!(err.to_string().contains("unterminated phrase"));
+    }
+
+    // ---- Regex tests ----
+
+    #[test]
+    fn test_parse_regex() {
+        let q = parse_query("/foo.*bar/").unwrap();
+        assert_eq!(
+            q,
+            Query::Regex(RegexQuery {
+                pattern: "foo.*bar".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_regex_simple() {
+        let q = parse_query("/\\d+/").unwrap();
+        assert_eq!(
+            q,
+            Query::Regex(RegexQuery {
+                pattern: "\\d+".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_regex_with_escaped_slash() {
+        let q = parse_query("/foo\\/bar/").unwrap();
+        assert_eq!(
+            q,
+            Query::Regex(RegexQuery {
+                pattern: "foo\\/bar".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_regex_unterminated() {
+        let err = parse_query("/hello").unwrap_err();
+        assert!(matches!(err, IndexError::QueryParse(_)));
+        assert!(err.to_string().contains("unterminated regex"));
+    }
+
+    #[test]
+    fn test_parse_regex_invalid_pattern() {
+        let err = parse_query("/[invalid/").unwrap_err();
+        assert!(matches!(err, IndexError::QueryParse(_)));
+        assert!(err.to_string().contains("invalid regex"));
+    }
+
+    // ---- Path filter tests ----
+
+    #[test]
+    fn test_parse_path_filter() {
+        let q = parse_query("path:src/").unwrap();
+        assert_eq!(q, Query::PathFilter("src/".to_string()));
+    }
+
+    #[test]
+    fn test_parse_path_filter_deep() {
+        let q = parse_query("path:src/core/lib.rs").unwrap();
+        assert_eq!(q, Query::PathFilter("src/core/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn test_parse_path_filter_empty_value() {
+        let err = parse_query("path: foo").unwrap_err();
+        assert!(matches!(err, IndexError::QueryParse(_)));
+    }
+
+    // ---- Language filter tests ----
+
+    #[test]
+    fn test_parse_language_filter_full_name() {
+        let q = parse_query("language:rust").unwrap();
+        assert_eq!(q, Query::LanguageFilter(Language::Rust));
+    }
+
+    #[test]
+    fn test_parse_language_filter_short() {
+        let q = parse_query("lang:rs").unwrap();
+        assert_eq!(q, Query::LanguageFilter(Language::Rust));
+    }
+
+    #[test]
+    fn test_parse_language_filter_python() {
+        let q = parse_query("language:python").unwrap();
+        assert_eq!(q, Query::LanguageFilter(Language::Python));
+    }
+
+    #[test]
+    fn test_parse_language_filter_py() {
+        let q = parse_query("lang:py").unwrap();
+        assert_eq!(q, Query::LanguageFilter(Language::Python));
+    }
+
+    #[test]
+    fn test_parse_language_filter_case_insensitive() {
+        let q = parse_query("language:Rust").unwrap();
+        assert_eq!(q, Query::LanguageFilter(Language::Rust));
+    }
+
+    #[test]
+    fn test_parse_language_filter_unknown() {
+        let err = parse_query("language:brainfuck").unwrap_err();
+        assert!(matches!(err, IndexError::QueryParse(_)));
+        assert!(err.to_string().contains("unknown language"));
+    }
+
+    #[test]
+    fn test_parse_language_filter_typescript() {
+        let q = parse_query("lang:ts").unwrap();
+        assert_eq!(q, Query::LanguageFilter(Language::TypeScript));
+    }
+
+    // ---- AND tests (implicit) ----
+
+    #[test]
+    fn test_parse_implicit_and() {
+        let q = parse_query("foo bar").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::Literal(LiteralQuery {
+                    text: "foo".to_string(),
+                    case_sensitive: false,
+                }),
+                Query::Literal(LiteralQuery {
+                    text: "bar".to_string(),
+                    case_sensitive: false,
+                }),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_three_term_and() {
+        let q = parse_query("foo bar baz").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::Literal(LiteralQuery {
+                    text: "foo".to_string(),
+                    case_sensitive: false,
+                }),
+                Query::Literal(LiteralQuery {
+                    text: "bar".to_string(),
+                    case_sensitive: false,
+                }),
+                Query::Literal(LiteralQuery {
+                    text: "baz".to_string(),
+                    case_sensitive: false,
+                }),
+            ])
+        );
+    }
+
+    // ---- OR tests ----
+
+    #[test]
+    fn test_parse_or() {
+        let q = parse_query("foo OR bar").unwrap();
+        assert_eq!(
+            q,
+            Query::Or(
+                Box::new(Query::Literal(LiteralQuery {
+                    text: "foo".to_string(),
+                    case_sensitive: false,
+                })),
+                Box::new(Query::Literal(LiteralQuery {
+                    text: "bar".to_string(),
+                    case_sensitive: false,
+                })),
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_chained_or() {
+        // "a OR b OR c" should be left-associative: (a OR b) OR c
+        let q = parse_query("a OR b OR c").unwrap();
+        assert_eq!(
+            q,
+            Query::Or(
+                Box::new(Query::Or(
+                    Box::new(Query::Literal(LiteralQuery {
+                        text: "a".to_string(),
+                        case_sensitive: false,
+                    })),
+                    Box::new(Query::Literal(LiteralQuery {
+                        text: "b".to_string(),
+                        case_sensitive: false,
+                    })),
+                )),
+                Box::new(Query::Literal(LiteralQuery {
+                    text: "c".to_string(),
+                    case_sensitive: false,
+                })),
+            )
+        );
+    }
+
+    // ---- NOT tests ----
+
+    #[test]
+    fn test_parse_not() {
+        let q = parse_query("NOT foo").unwrap();
+        assert_eq!(
+            q,
+            Query::Not(Box::new(Query::Literal(LiteralQuery {
+                text: "foo".to_string(),
+                case_sensitive: false,
+            })))
+        );
+    }
+
+    #[test]
+    fn test_parse_double_not() {
+        let q = parse_query("NOT NOT foo").unwrap();
+        assert_eq!(
+            q,
+            Query::Not(Box::new(Query::Not(Box::new(Query::Literal(
+                LiteralQuery {
+                    text: "foo".to_string(),
+                    case_sensitive: false,
+                }
+            )))))
+        );
+    }
+
+    // ---- Case sensitivity tests ----
+
+    #[test]
+    fn test_parse_case_sensitive_literal() {
+        let q = parse_query("case:yes FooBar").unwrap();
+        assert_eq!(
+            q,
+            Query::Literal(LiteralQuery {
+                text: "FooBar".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_case_sensitive_phrase() {
+        let q = parse_query("case:yes \"Hello World\"").unwrap();
+        assert_eq!(
+            q,
+            Query::Phrase(PhraseQuery {
+                text: "Hello World".to_string(),
+                case_sensitive: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_case_sensitive_only_affects_next_term() {
+        // case:yes only applies to the immediately following term
+        let q = parse_query("case:yes foo bar").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::Literal(LiteralQuery {
+                    text: "foo".to_string(),
+                    case_sensitive: true,
+                }),
+                Query::Literal(LiteralQuery {
+                    text: "bar".to_string(),
+                    case_sensitive: false,
+                }),
+            ])
+        );
+    }
+
+    // ---- Combined expression tests ----
+
+    #[test]
+    fn test_parse_and_with_or_precedence() {
+        // "a b OR c d" should parse as "(a AND b) OR (c AND d)"
+        let q = parse_query("a b OR c d").unwrap();
+        assert_eq!(
+            q,
+            Query::Or(
+                Box::new(Query::And(vec![
+                    Query::Literal(LiteralQuery {
+                        text: "a".to_string(),
+                        case_sensitive: false,
+                    }),
+                    Query::Literal(LiteralQuery {
+                        text: "b".to_string(),
+                        case_sensitive: false,
+                    }),
+                ])),
+                Box::new(Query::And(vec![
+                    Query::Literal(LiteralQuery {
+                        text: "c".to_string(),
+                        case_sensitive: false,
+                    }),
+                    Query::Literal(LiteralQuery {
+                        text: "d".to_string(),
+                        case_sensitive: false,
+                    }),
+                ])),
+            )
+        );
+    }
+
+    #[test]
+    fn test_parse_not_with_and() {
+        // "foo NOT bar" = AND(foo, NOT(bar))
+        let q = parse_query("foo NOT bar").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::Literal(LiteralQuery {
+                    text: "foo".to_string(),
+                    case_sensitive: false,
+                }),
+                Query::Not(Box::new(Query::Literal(LiteralQuery {
+                    text: "bar".to_string(),
+                    case_sensitive: false,
+                }))),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_with_literal() {
+        let q = parse_query("language:rust parse_query").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::LanguageFilter(Language::Rust),
+                Query::Literal(LiteralQuery {
+                    text: "parse_query".to_string(),
+                    case_sensitive: false,
+                }),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_path_and_language_filters() {
+        let q = parse_query("path:src/ lang:rs struct").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::PathFilter("src/".to_string()),
+                Query::LanguageFilter(Language::Rust),
+                Query::Literal(LiteralQuery {
+                    text: "struct".to_string(),
+                    case_sensitive: false,
+                }),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_regex_with_literal() {
+        let q = parse_query("/fn\\s+/ parse").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::Regex(RegexQuery {
+                    pattern: "fn\\s+".to_string(),
+                    case_sensitive: true,
+                }),
+                Query::Literal(LiteralQuery {
+                    text: "parse".to_string(),
+                    case_sensitive: false,
+                }),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_phrase_and_literal() {
+        let q = parse_query("\"fn main\" args").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::Phrase(PhraseQuery {
+                    text: "fn main".to_string(),
+                    case_sensitive: false,
+                }),
+                Query::Literal(LiteralQuery {
+                    text: "args".to_string(),
+                    case_sensitive: false,
+                }),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_parse_or_not_word_boundary() {
+        // "ORacle" should be a literal, not parsed as OR + "acle"
+        let q = parse_query("ORacle").unwrap();
+        assert_eq!(
+            q,
+            Query::Literal(LiteralQuery {
+                text: "ORacle".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_not_not_word_boundary() {
+        // "NOThing" should be a literal, not parsed as NOT + "hing"
+        let q = parse_query("NOThing").unwrap();
+        assert_eq!(
+            q,
+            Query::Literal(LiteralQuery {
+                text: "NOThing".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_leading_trailing_whitespace() {
+        let q = parse_query("  hello  ").unwrap();
+        assert_eq!(
+            q,
+            Query::Literal(LiteralQuery {
+                text: "hello".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_complex_query() {
+        // language:rust "fn main" OR /async fn/ NOT test
+        let q = parse_query("language:rust \"fn main\" OR /async fn/ NOT test").unwrap();
+        // This should parse as: (lang:rust AND "fn main") OR (/async fn/ AND NOT test)
+        assert!(matches!(q, Query::Or(_, _)));
+    }
+
+    // ---- Display tests ----
+
+    #[test]
+    fn test_display_literal() {
+        let q = Query::Literal(LiteralQuery {
+            text: "hello".to_string(),
+            case_sensitive: false,
+        });
+        assert_eq!(q.to_string(), "hello");
+    }
+
+    #[test]
+    fn test_display_phrase() {
+        let q = Query::Phrase(PhraseQuery {
+            text: "fn main".to_string(),
+            case_sensitive: false,
+        });
+        assert_eq!(q.to_string(), "\"fn main\"");
+    }
+
+    #[test]
+    fn test_display_regex() {
+        let q = Query::Regex(RegexQuery {
+            pattern: "foo.*bar".to_string(),
+            case_sensitive: true,
+        });
+        assert_eq!(q.to_string(), "/foo.*bar/");
+    }
+
+    #[test]
+    fn test_display_and() {
+        let q = Query::And(vec![
+            Query::Literal(LiteralQuery {
+                text: "foo".to_string(),
+                case_sensitive: false,
+            }),
+            Query::Literal(LiteralQuery {
+                text: "bar".to_string(),
+                case_sensitive: false,
+            }),
+        ]);
+        assert_eq!(q.to_string(), "foo bar");
+    }
+
+    #[test]
+    fn test_display_or() {
+        let q = parse_query("foo OR bar").unwrap();
+        assert_eq!(q.to_string(), "foo OR bar");
+    }
+
+    #[test]
+    fn test_display_not() {
+        let q = parse_query("NOT foo").unwrap();
+        assert_eq!(q.to_string(), "NOT foo");
+    }
+
+    // ---- Edge case tests ----
+
+    #[test]
+    fn test_parse_literal_with_special_chars() {
+        let q = parse_query("foo_bar").unwrap();
+        assert_eq!(
+            q,
+            Query::Literal(LiteralQuery {
+                text: "foo_bar".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_literal_with_dots() {
+        let q = parse_query("main.rs").unwrap();
+        assert_eq!(
+            q,
+            Query::Literal(LiteralQuery {
+                text: "main.rs".to_string(),
+                case_sensitive: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_all_languages() {
+        let languages = vec![
+            ("rust", Language::Rust),
+            ("python", Language::Python),
+            ("go", Language::Go),
+            ("java", Language::Java),
+            ("ruby", Language::Ruby),
+            ("shell", Language::Shell),
+            ("kotlin", Language::Kotlin),
+            ("swift", Language::Swift),
+            ("zig", Language::Zig),
+        ];
+        for (name, expected) in languages {
+            let q = parse_query(&format!("lang:{name}")).unwrap();
+            assert_eq!(q, Query::LanguageFilter(expected), "failed for lang:{name}");
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_spaces_between_terms() {
+        let q = parse_query("foo   bar").unwrap();
+        assert_eq!(
+            q,
+            Query::And(vec![
+                Query::Literal(LiteralQuery {
+                    text: "foo".to_string(),
+                    case_sensitive: false,
+                }),
+                Query::Literal(LiteralQuery {
+                    text: "bar".to_string(),
+                    case_sensitive: false,
+                }),
+            ])
+        );
     }
 }
