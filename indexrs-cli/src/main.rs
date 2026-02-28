@@ -3,6 +3,7 @@ mod color;
 mod files;
 mod output;
 mod repo;
+mod search_cmd;
 
 use args::{Cli, Command};
 use clap::Parser;
