@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use crate::trigram::extract_trigrams;
+use crate::trigram::extract_trigrams_folded;
 use crate::types::{FileId, Trigram};
 
 /// Accumulates trigram posting lists during index building.
@@ -78,7 +78,7 @@ impl PostingListBuilder {
     /// call [`finalize`](Self::finalize) to deduplicate and sort.
     pub fn add_file(&mut self, file_id: FileId, content: &[u8]) {
         if self.store_positions {
-            for (offset, trigram) in extract_trigrams(content).enumerate() {
+            for (offset, trigram) in extract_trigrams_folded(content).enumerate() {
                 debug_assert!(
                     offset <= u32::MAX as usize,
                     "file content too large for u32 offset: {offset}"
@@ -90,7 +90,7 @@ impl PostingListBuilder {
                     .push((file_id, offset as u32));
             }
         } else {
-            for trigram in extract_trigrams(content) {
+            for trigram in extract_trigrams_folded(content) {
                 self.file_postings.entry(trigram).or_default().push(file_id);
             }
         }
@@ -409,5 +409,40 @@ mod tests {
     fn test_file_only_stores_positions_flag() {
         assert!(!PostingListBuilder::file_only().stores_positions());
         assert!(PostingListBuilder::new().stores_positions());
+    }
+
+    #[test]
+    fn test_posting_builder_case_fold_uppercase_content() {
+        let mut builder_upper = PostingListBuilder::file_only();
+        builder_upper.add_file(FileId(0), b"FN MAIN() {}");
+        builder_upper.finalize();
+
+        let mut builder_lower = PostingListBuilder::file_only();
+        builder_lower.add_file(FileId(0), b"fn main() {}");
+        builder_lower.finalize();
+
+        assert_eq!(builder_upper.trigram_count(), builder_lower.trigram_count());
+
+        let fp_upper = builder_upper.file_postings();
+        let fp_lower = builder_lower.file_postings();
+        assert!(fp_upper.contains_key(&Trigram::from_bytes(b'f', b'n', b' ')));
+        assert!(fp_lower.contains_key(&Trigram::from_bytes(b'f', b'n', b' ')));
+
+        assert!(!fp_upper.contains_key(&Trigram::from_bytes(b'F', b'N', b' ')));
+    }
+
+    #[test]
+    fn test_posting_builder_case_fold_mixed_case() {
+        let mut builder = PostingListBuilder::file_only();
+        builder.add_file(FileId(0), b"HttpRequest");
+        builder.add_file(FileId(1), b"httprequest");
+        builder.finalize();
+
+        let fp = builder.file_postings();
+
+        let htt = &fp[&Trigram::from_bytes(b'h', b't', b't')];
+        assert_eq!(htt, &vec![FileId(0), FileId(1)]);
+
+        assert!(!fp.contains_key(&Trigram::from_bytes(b'H', b't', b't')));
     }
 }
