@@ -6,11 +6,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::error::IndexError;
 use crate::index_state::SegmentList;
 use crate::intersection::find_candidates;
+use crate::ranking::{MatchType, RankingConfig, ScoringInput, score_file_match};
 use crate::search::{ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult};
 use crate::segment::Segment;
 use crate::tombstone::TombstoneSet;
@@ -207,6 +208,7 @@ pub fn search_segments_with_options(
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
     });
 
     let total_file_count = files.len();
@@ -254,11 +256,23 @@ fn search_single_segment_with_context(
             continue;
         }
 
-        // Compute a simple relevance score: match count / line count
-        // (more matches relative to file size = more relevant)
+        // Compute relevance score using the weighted ranking system
         let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
-        let line_count = meta.line_count.max(1) as f64;
-        let score = (total_match_ranges as f64 / line_count).min(1.0);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let input = ScoringInput {
+            path: &meta.path,
+            query,
+            match_type: MatchType::Substring,
+            match_count: total_match_ranges,
+            line_count: meta.line_count,
+            mtime_epoch_secs: meta.mtime_epoch_secs,
+            now_epoch_secs: now,
+        };
+        let config = RankingConfig::default();
+        let score = score_file_match(&input, &config);
 
         file_matches.push(FileMatch {
             file_id,
@@ -360,9 +374,32 @@ fn search_single_segment_with_pattern(
             continue;
         }
 
+        // Compute relevance score using the weighted ranking system
         let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
-        let line_count = meta.line_count.max(1) as f64;
-        let score = (total_match_ranges as f64 / line_count).min(1.0);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let match_type = match pattern {
+            MatchPattern::Regex(_) => MatchType::Regex,
+            _ => MatchType::Substring,
+        };
+        let pattern_query = match pattern {
+            MatchPattern::Literal(s)
+            | MatchPattern::LiteralCaseInsensitive(s)
+            | MatchPattern::Regex(s) => s.as_str(),
+        };
+        let input = ScoringInput {
+            path: &meta.path,
+            query: pattern_query,
+            match_type,
+            match_count: total_match_ranges,
+            line_count: meta.line_count,
+            mtime_epoch_secs: meta.mtime_epoch_secs,
+            now_epoch_secs: now,
+        };
+        let config = RankingConfig::default();
+        let score = score_file_match(&input, &config);
 
         file_matches.push(FileMatch {
             file_id,
@@ -421,6 +458,7 @@ pub fn search_segments_with_pattern(
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
     });
 
     let total_file_count = files.len();
@@ -1016,6 +1054,45 @@ mod tests {
     }
 
     #[test]
+    fn test_search_segments_uses_ranking() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // File where query matches the filename (should rank higher)
+        let seg0 = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "src/search.rs".to_string(),
+                content: b"fn search() {}\n".to_vec(),
+                mtime: 1_700_000_000,
+            }],
+        );
+
+        // File where query does NOT match filename (should rank lower)
+        let seg1 = build_segment(
+            &base_dir,
+            SegmentId(1),
+            vec![InputFile {
+                path: "src/a/b/c/d/utils.rs".to_string(),
+                content: b"fn search() {}\n".to_vec(),
+                mtime: 1_600_000_000,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg0, seg1]);
+        let result = search_segments(&snapshot, "search").unwrap();
+        assert_eq!(result.files.len(), 2);
+        // search.rs should rank first: filename match + shallower + more recent
+        assert_eq!(
+            result.files[0].path,
+            PathBuf::from("src/search.rs"),
+            "search.rs should rank first due to filename match + depth + recency"
+        );
+    }
+
+    #[test]
     fn test_search_segments_default_no_context() {
         let dir = tempfile::tempdir().unwrap();
         let base_dir = dir.path().join(".indexrs/segments");
@@ -1036,5 +1113,41 @@ mod tests {
         let result = search_segments(&snapshot, "println").unwrap();
         assert_eq!(result.files[0].lines[0].context_before.len(), 0);
         assert_eq!(result.files[0].lines[0].context_after.len(), 0);
+    }
+
+    #[test]
+    fn test_search_segments_tiebreaker_alphabetical() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Two files at same depth, same mtime, same match count
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "src/beta.rs".to_string(),
+                    content: b"fn search() {}\n".to_vec(),
+                    mtime: 1_700_000_000,
+                },
+                InputFile {
+                    path: "src/alpha.rs".to_string(),
+                    content: b"fn search() {}\n".to_vec(),
+                    mtime: 1_700_000_000,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let result = search_segments(&snapshot, "search").unwrap();
+        assert_eq!(result.files.len(), 2);
+        // When scores are equal, should be sorted alphabetically
+        assert_eq!(
+            result.files[0].path,
+            PathBuf::from("src/alpha.rs"),
+            "alphabetical tiebreaker: alpha before beta"
+        );
+        assert_eq!(result.files[1].path, PathBuf::from("src/beta.rs"));
     }
 }
