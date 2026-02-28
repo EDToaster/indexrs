@@ -22,6 +22,7 @@ pub mod segment_manager;
 pub mod tombstone;
 pub mod trigram;
 pub mod types;
+pub mod verify;
 pub mod walker;
 pub mod watcher;
 
