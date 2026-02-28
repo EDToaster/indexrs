@@ -134,7 +134,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (idx, (_, content, _)) in files.iter().enumerate() {
         if idx % 100 == 0 || idx + 1 == fc {
             let pct = (idx + 1) * 100 / fc.max(1);
-            eprint!("\x1b[2K\rCompressing content... {pct}% ({}/{})", idx + 1, fc);
+            eprint!(
+                "\x1b[2K\rCompressing content... {pct}% ({}/{})",
+                idx + 1,
+                fc
+            );
             let _ = std::io::stderr().flush();
         }
         let compressed = zstd::encode_all(content.as_slice(), 3)?;
@@ -150,7 +154,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, (_, content, _)) in files.iter().enumerate() {
         if i % 100 == 0 || i + 1 == fc {
             let pct = (i + 1) * 100 / fc.max(1);
-            eprint!("\x1b[2K\rBuilding trigram posting lists... {pct}% ({}/{})", i + 1, fc);
+            eprint!(
+                "\x1b[2K\rBuilding trigram posting lists... {pct}% ({}/{})",
+                i + 1,
+                fc
+            );
             let _ = std::io::stderr().flush();
         }
         let file_id = i as u32;
@@ -175,7 +183,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (idx, (_, ids)) in file_postings.iter().enumerate() {
         if idx % 1000 == 0 || idx + 1 == tc {
             let pct = (idx + 1) * 100 / tc.max(1);
-            eprint!("\x1b[2K\rEncoding posting lists... {pct}% ({}/{})", idx + 1, tc);
+            eprint!(
+                "\x1b[2K\rEncoding posting lists... {pct}% ({}/{})",
+                idx + 1,
+                tc
+            );
             let _ = std::io::stderr().flush();
         }
         let encoded = encode_delta_varint(ids);

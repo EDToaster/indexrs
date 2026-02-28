@@ -272,6 +272,29 @@ impl TrigramIndexReader {
         self.trigram_count
     }
 
+    /// Estimate the number of files containing the given trigram WITHOUT decoding
+    /// the posting list.
+    ///
+    /// Reads the `file_list_len` field directly from the trigram table entry.
+    /// This is O(log n) (binary search) but avoids the varint decoding overhead
+    /// of `lookup_file_ids()`, making it suitable for query planning where we
+    /// need to compare many trigrams' selectivity.
+    ///
+    /// Returns 0 if the trigram is not found in the index.
+    pub fn estimate_posting_list_size(&self, trigram: Trigram) -> u32 {
+        let idx = match self.binary_search_trigram(trigram) {
+            Some(i) => i,
+            None => return 0,
+        };
+
+        let entry_start = self.table_offset + idx * TABLE_ENTRY_SIZE;
+        u32::from_le_bytes(
+            self.mmap[entry_start + 7..entry_start + 11]
+                .try_into()
+                .unwrap(),
+        )
+    }
+
     /// Binary search the sorted trigram table for the given trigram.
     ///
     /// Returns the index into the trigram table if found, or `None` if not present.
@@ -521,5 +544,44 @@ mod tests {
             }
             other => panic!("expected IndexCorruption, got: {other}"),
         }
+    }
+
+    #[test]
+    fn test_estimate_posting_list_size_shared_trigram() {
+        let (_dir, reader) = write_and_open();
+
+        // "fn " appears in both files -> estimated count should be 2
+        let size = reader.estimate_posting_list_size(Trigram::from_bytes(b'f', b'n', b' '));
+        assert_eq!(size, 2);
+    }
+
+    #[test]
+    fn test_estimate_posting_list_size_file0_only() {
+        let (_dir, reader) = write_and_open();
+
+        // "mai" appears only in file 0 -> estimated count should be 1
+        let size = reader.estimate_posting_list_size(Trigram::from_bytes(b'm', b'a', b'i'));
+        assert_eq!(size, 1);
+    }
+
+    #[test]
+    fn test_estimate_posting_list_size_absent_trigram() {
+        let (_dir, reader) = write_and_open();
+
+        // "xyz" not in index -> 0
+        let size = reader.estimate_posting_list_size(Trigram::from_bytes(b'x', b'y', b'z'));
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn test_estimate_posting_list_size_empty_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trigrams.bin");
+        let builder = PostingListBuilder::new();
+        TrigramIndexWriter::write(&builder, &path).unwrap();
+        let reader = TrigramIndexReader::open(&path).unwrap();
+
+        let size = reader.estimate_posting_list_size(Trigram::from_bytes(b'a', b'b', b'c'));
+        assert_eq!(size, 0);
     }
 }
