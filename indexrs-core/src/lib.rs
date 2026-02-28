@@ -13,6 +13,7 @@ pub mod metadata;
 pub mod multi_search;
 pub mod posting;
 pub mod query;
+pub mod query_plan;
 pub mod query_trigrams;
 pub mod recovery;
 pub mod search;
@@ -45,6 +46,7 @@ pub use metadata::{FileMetadata, MetadataBuilder, MetadataReader};
 pub use multi_search::search_segments;
 pub use posting::PostingListBuilder;
 pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
+pub use query_plan::{PreFilter, QueryPlan, ScoredTrigram, VerifyStep};
 pub use query_trigrams::{
     TrigramQuery, extract_literal_trigrams, extract_query_trigrams, extract_regex_trigrams,
 };
