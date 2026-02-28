@@ -12,6 +12,8 @@ pub mod intersection;
 pub mod metadata;
 pub mod multi_search;
 pub mod posting;
+pub mod query;
+pub mod query_trigrams;
 pub mod recovery;
 pub mod search;
 pub mod segment;
@@ -42,6 +44,10 @@ pub use intersection::{find_candidates, intersect_file_ids};
 pub use metadata::{FileMetadata, MetadataBuilder, MetadataReader};
 pub use multi_search::search_segments;
 pub use posting::PostingListBuilder;
+pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
+pub use query_trigrams::{
+    TrigramQuery, extract_literal_trigrams, extract_query_trigrams, extract_regex_trigrams,
+};
 pub use recovery::{cleanup_lock_file, recover_segments};
 pub use search::{FileMatch, LineMatch, SearchResult};
 pub use segment::{InputFile, Segment, SegmentWriter};

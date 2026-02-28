@@ -503,6 +503,7 @@ dependencies = [
  "notify 8.2.0",
  "notify-debouncer-full",
  "regex",
+ "regex-syntax",
  "serde",
  "serde_json",
  "tempfile",
