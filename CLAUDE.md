@@ -45,8 +45,8 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 
 #### M0–M1 Modules (Indexing & Search)
 
-- `trigram.rs` — `extract_trigrams()` slides a 3-byte window over content. `extract_unique_trigrams()` deduplicates.
-- `posting.rs` — `PostingListBuilder` accumulates file-level posting lists during index build. Call `add_file()` per file, then `finalize()` to sort/dedup. Two constructors: `new()` stores positions (for tests), `file_only()` skips positional postings (used by `SegmentWriter`, ~78% smaller index).
+- `trigram.rs` — `extract_trigrams()` slides a 3-byte window over content. `extract_unique_trigrams()` deduplicates. `extract_trigrams_folded()` / `extract_unique_trigrams_folded()` fold ASCII A-Z to a-z inline for case-insensitive indexing. `ascii_fold_byte()` folds a single byte.
+- `posting.rs` — `PostingListBuilder` accumulates file-level posting lists during index build. Uses ASCII-folded trigram extraction (A-Z → a-z) so the index supports case-insensitive lookup by default. Two constructors: `new()` stores positions (for tests), `file_only()` skips positional postings (used by `SegmentWriter`, ~78% smaller index).
 - `codec.rs` — Delta-varint encoding/decoding for compact posting list serialization. Uses `integer-encoding` crate.
 - `index_writer.rs` — `TrigramIndexWriter::write()` serializes `PostingListBuilder` to `trigrams.bin`. Atomic rename for crash safety.
 - `index_reader.rs` — `TrigramIndexReader::open()` memory-maps `trigrams.bin`. O(log n) binary search on sorted trigram table, on-demand posting list decoding.
