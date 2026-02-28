@@ -54,7 +54,7 @@ pub use query_trigrams::{
     TrigramQuery, extract_literal_trigrams, extract_query_trigrams, extract_regex_trigrams,
 };
 pub use recovery::{cleanup_lock_file, recover_segments};
-pub use search::{FileMatch, LineMatch, SearchResult};
+pub use search::{ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, SearchResult};
 pub use segment::{InputFile, Segment, SegmentWriter};
 pub use segment_manager::SegmentManager;
 pub use tombstone::{TombstoneSet, needs_new_entry, needs_tombstone};
