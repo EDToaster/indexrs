@@ -129,9 +129,17 @@ impl SegmentManager {
 
     /// Return the next monotonically increasing segment ID.
     ///
-    /// Thread-safe via `AtomicU32::fetch_add`.
-    pub fn next_segment_id(&self) -> SegmentId {
-        SegmentId(self.next_id.fetch_add(1, Ordering::Relaxed))
+    /// Thread-safe via `AtomicU32::fetch_update`. Returns an error if the
+    /// counter would overflow `u32::MAX`.
+    pub fn next_segment_id(&self) -> Result<SegmentId, IndexError> {
+        self.next_id
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(1)
+            })
+            .map(SegmentId)
+            .map_err(|_| {
+                IndexError::IndexCorruption("segment ID counter overflow (u32::MAX)".to_string())
+            })
     }
 
     /// Take a lock-free snapshot of the current segment list.
@@ -209,7 +217,7 @@ impl SegmentManager {
             batch_bytes += content_len;
 
             if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
-                let seg_id = self.next_segment_id();
+                let seg_id = self.next_segment_id()?;
                 let writer = SegmentWriter::new(&self.segments_dir, seg_id);
                 segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
                 batch_bytes = 0;
@@ -218,7 +226,7 @@ impl SegmentManager {
 
         // Flush remaining files
         if !batch.is_empty() {
-            let seg_id = self.next_segment_id();
+            let seg_id = self.next_segment_id()?;
             let writer = SegmentWriter::new(&self.segments_dir, seg_id);
             segments.push(Arc::new(writer.build(batch)?));
         }
@@ -311,21 +319,23 @@ impl SegmentManager {
             }
         }
 
-        // Write tombstones to affected segments
+        // Build new segment BEFORE writing tombstones to avoid data loss
+        // on crash: if we tombstone first and crash before building the
+        // replacement segment, those files would be permanently lost.
+        let mut updated_segments = current_segments.clone();
+        if !new_files.is_empty() {
+            let seg_id = self.next_segment_id()?;
+            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+            let segment = writer.build(new_files)?;
+            updated_segments.push(Arc::new(segment));
+        }
+
+        // Write tombstones to affected segments (safe now — replacement exists on disk)
         for (seg_idx, new_tombstones) in &tombstone_updates {
             let segment = &current_segments[*seg_idx];
             let mut existing = segment.load_tombstones()?;
             existing.merge(new_tombstones);
             existing.write_to(&segment.dir_path().join("tombstones.bin"))?;
-        }
-
-        // Build new segment if there are files to add
-        let mut updated_segments = current_segments;
-        if !new_files.is_empty() {
-            let seg_id = self.next_segment_id();
-            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-            let segment = writer.build(new_files)?;
-            updated_segments.push(Arc::new(segment));
         }
 
         self.state.publish(updated_segments);
@@ -439,7 +449,7 @@ impl SegmentManager {
 
                 // Flush if over budget (0 means unlimited)
                 if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
-                    let seg_id = self.next_segment_id();
+                    let seg_id = self.next_segment_id()?;
                     let writer = SegmentWriter::new(&self.segments_dir, seg_id);
                     new_segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
                     batch_bytes = 0;
@@ -449,7 +459,7 @@ impl SegmentManager {
 
         // Flush remaining batch
         if !batch.is_empty() {
-            let seg_id = self.next_segment_id();
+            let seg_id = self.next_segment_id()?;
             let writer = SegmentWriter::new(&self.segments_dir, seg_id);
             new_segments.push(Arc::new(writer.build(batch)?));
         }
@@ -505,9 +515,9 @@ mod tests {
         let base_dir = dir.path().join(".indexrs");
 
         let manager = SegmentManager::new(&base_dir).unwrap();
-        let id0 = manager.next_segment_id();
-        let id1 = manager.next_segment_id();
-        let id2 = manager.next_segment_id();
+        let id0 = manager.next_segment_id().unwrap();
+        let id1 = manager.next_segment_id().unwrap();
+        let id2 = manager.next_segment_id().unwrap();
 
         assert_eq!(id0, SegmentId(0));
         assert_eq!(id1, SegmentId(1));
@@ -524,7 +534,7 @@ mod tests {
         let manager = SegmentManager::new(&base_dir).unwrap();
 
         // Build a segment externally and add it
-        let seg_id = manager.next_segment_id();
+        let seg_id = manager.next_segment_id().unwrap();
         let writer = SegmentWriter::new(&segments_dir, seg_id);
         let segment = writer
             .build(vec![InputFile {
@@ -1070,7 +1080,7 @@ mod tests {
         assert_eq!(snap[1].entry_count(), 1);
 
         // next_segment_id should be past the highest existing
-        let next = manager2.next_segment_id();
+        let next = manager2.next_segment_id().unwrap();
         assert_eq!(next, SegmentId(2));
     }
 

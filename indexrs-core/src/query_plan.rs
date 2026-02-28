@@ -11,7 +11,7 @@ use std::fmt;
 
 use crate::index_state::SegmentList;
 use crate::segment::Segment;
-use crate::trigram::extract_unique_trigrams;
+use crate::trigram::extract_unique_trigrams_folded;
 use crate::types::{Language, Trigram};
 
 /// A pre-filter step that cheaply narrows the candidate set before trigram intersection.
@@ -146,7 +146,7 @@ pub fn plan_literal_query(query: &str, pre_filters: &[PreFilter], segment: &Segm
         };
     }
 
-    let trigrams = extract_unique_trigrams(query.as_bytes());
+    let trigrams = extract_unique_trigrams_folded(query.as_bytes());
     let reader = segment.trigram_reader();
 
     let mut scored: Vec<ScoredTrigram> = trigrams
@@ -195,7 +195,7 @@ pub fn plan_regex_query(pattern: &str, pre_filters: &[PreFilter], segment: &Segm
     let mut scored: Vec<ScoredTrigram> = Vec::new();
     for run in &literal_runs {
         if run.len() >= 3 {
-            let trigrams = extract_unique_trigrams(run.as_bytes());
+            let trigrams = extract_unique_trigrams_folded(run.as_bytes());
             for trigram in trigrams {
                 let estimated_count = reader.estimate_posting_list_size(trigram);
                 scored.push(ScoredTrigram {

@@ -150,6 +150,10 @@ fn match_language(s: &str) -> Result<Language, IndexError> {
     }
 }
 
+/// Maximum recursion depth for the parser. Prevents stack overflow from
+/// deeply nested queries like `NOT NOT NOT ... NOT foo`.
+const MAX_PARSE_DEPTH: usize = 128;
+
 /// Cursor-based recursive descent parser.
 struct Parser<'a> {
     input: &'a str,
@@ -157,6 +161,8 @@ struct Parser<'a> {
     /// Whether the next primary term should be case-sensitive.
     /// Set by `case:yes`, reset after consuming one primary.
     case_sensitive: bool,
+    /// Current recursion depth, used to prevent stack overflow.
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -165,6 +171,7 @@ impl<'a> Parser<'a> {
             input,
             pos: 0,
             case_sensitive: false,
+            depth: 0,
         }
     }
 
@@ -262,6 +269,18 @@ impl<'a> Parser<'a> {
 
     /// `unary_expr := "NOT" unary_expr | primary`
     fn parse_unary(&mut self) -> Result<Query, IndexError> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            return Err(IndexError::QueryParse(format!(
+                "query too deeply nested (max depth {MAX_PARSE_DEPTH})"
+            )));
+        }
+        let result = self.parse_unary_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_unary_inner(&mut self) -> Result<Query, IndexError> {
         self.skip_whitespace();
         if self.starts_with_keyword("NOT") {
             self.pos += 3; // consume "NOT"

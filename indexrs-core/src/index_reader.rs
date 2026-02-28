@@ -128,6 +128,13 @@ impl TrigramIndexReader {
 
             // Decode the file posting at max_file_offset to find its byte size.
             let data_start = file_postings_offset + max_file_offset as usize;
+            if data_start >= mmap.len() {
+                return Err(IndexError::IndexCorruption(format!(
+                    "file posting offset out of bounds: offset {} >= file size {}",
+                    data_start,
+                    mmap.len()
+                )));
+            }
             // Read varints until we've decoded max_file_len values
             let remaining = &mmap[data_start..];
             let mut cursor = std::io::Cursor::new(remaining);

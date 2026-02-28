@@ -7,58 +7,58 @@
 //!
 //! The `SegmentList` type alias provides a convenient name for the snapshot type.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use crate::segment::Segment;
 
-/// A snapshot of the active segment list. Lock-free for readers via `Arc::clone()`.
+/// A snapshot of the active segment list. Cheap `Arc::clone()` for readers.
 pub type SegmentList = Arc<Vec<Arc<Segment>>>;
 
 /// Manages the current set of active segments with snapshot isolation.
 ///
 /// Readers call [`snapshot()`](Self::snapshot) to get a consistent `SegmentList`
-/// (just an `Arc::clone()`, no locks). Writers call [`publish()`](Self::publish)
-/// to atomically swap in a new segment list; a `Mutex` serializes writers.
+/// via a shared `RwLock` read — multiple readers proceed in parallel without
+/// blocking each other. Writers call [`publish()`](Self::publish) to atomically
+/// swap in a new segment list under an exclusive write lock.
 ///
 /// # Concurrency Model
 ///
-/// - **Readers**: Lock-free. `snapshot()` clones the outer `Arc`, giving a
-///   consistent view even if the writer publishes a new list concurrently.
-///   Old snapshots remain valid until all references are dropped.
+/// - **Readers**: `snapshot()` takes a shared read lock and clones the `Arc`,
+///   so multiple readers never block each other. The returned `SegmentList`
+///   is a frozen view that remains valid regardless of subsequent `publish()`.
 ///
-/// - **Writers**: Serialized by an internal `Mutex`. Only one thread can call
-///   `publish()` at a time. The actual swap is an `Arc` store, so readers
-///   never block.
+/// - **Writers**: `publish()` takes an exclusive write lock. Only one thread
+///   can publish at a time. Readers are briefly blocked during the `Arc` swap.
 pub struct IndexState {
-    /// The current segment list, wrapped in Arc for lock-free snapshot reads.
-    /// The Mutex serializes writers; readers never take the lock.
-    current: Mutex<SegmentList>,
+    /// The current segment list, wrapped in Arc for snapshot reads.
+    /// RwLock allows concurrent readers; writers take exclusive access.
+    current: RwLock<SegmentList>,
 }
 
 impl IndexState {
     /// Create a new IndexState with an empty segment list.
     pub fn new() -> Self {
         IndexState {
-            current: Mutex::new(Arc::new(Vec::new())),
+            current: RwLock::new(Arc::new(Vec::new())),
         }
     }
 
     /// Take a snapshot of the current segment list.
     ///
-    /// This is a cheap `Arc::clone()` -- no locks, no copies. The returned
-    /// `SegmentList` is a frozen view that remains valid regardless of
-    /// subsequent `publish()` calls.
+    /// Takes a shared read lock and clones the `Arc` — multiple readers
+    /// proceed in parallel. The returned `SegmentList` is a frozen view
+    /// that remains valid regardless of subsequent `publish()` calls.
     pub fn snapshot(&self) -> SegmentList {
-        let guard = self.current.lock().unwrap();
+        let guard = self.current.read().unwrap_or_else(|e| e.into_inner());
         Arc::clone(&guard)
     }
 
     /// Atomically replace the segment list with a new one.
     ///
-    /// Only one writer can publish at a time (serialized by internal Mutex).
+    /// Only one writer can publish at a time (serialized by RwLock write).
     /// Existing snapshots are unaffected -- they hold their own `Arc` references.
     pub fn publish(&self, new_segments: Vec<Arc<Segment>>) {
-        let mut guard = self.current.lock().unwrap();
+        let mut guard = self.current.write().unwrap_or_else(|e| e.into_inner());
         *guard = Arc::new(new_segments);
     }
 }

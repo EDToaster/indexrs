@@ -70,22 +70,24 @@ impl GitChangeDetector {
         let mut changes: HashMap<PathBuf, ChangeKind> = HashMap::new();
 
         // 1. Committed changes since last indexed commit.
+        //    Use -z for NUL-delimited output to handle filenames with
+        //    tabs, newlines, or other special characters.
         if let Some(ref base) = self.last_indexed_commit {
-            let output = self.run_git(&["diff", "--name-status", base, "HEAD"])?;
-            for event in parse_name_status(&output) {
+            let output = self.run_git(&["diff", "--name-status", "-z", base, "HEAD"])?;
+            for event in parse_name_status_nul(&output) {
                 changes.insert(event.path, event.kind);
             }
         }
 
         // 2. Unstaged working-tree changes.
-        let unstaged = self.run_git(&["diff", "--name-status"])?;
-        for event in parse_name_status(&unstaged) {
+        let unstaged = self.run_git(&["diff", "--name-status", "-z"])?;
+        for event in parse_name_status_nul(&unstaged) {
             changes.insert(event.path, event.kind);
         }
 
         // 3. Untracked files.
-        let untracked = self.run_git(&["ls-files", "--others", "--exclude-standard"])?;
-        for event in parse_untracked(&untracked) {
+        let untracked = self.run_git(&["ls-files", "-z", "--others", "--exclude-standard"])?;
+        for event in parse_untracked_nul(&untracked) {
             changes.insert(event.path, event.kind);
         }
 
@@ -140,63 +142,69 @@ fn is_indexrs_path(path: &Path) -> bool {
 // Parsing helpers (free functions so they are easily unit-testable)
 // ------------------------------------------------------------------
 
-/// Parse the output of `git diff --name-status`.
+/// Parse NUL-delimited output of `git diff --name-status -z`.
 ///
-/// Each line has the format `<status>\t<path>` or, for renames,
-/// `R<score>\t<old>\t<new>`.
-fn parse_name_status(output: &str) -> Vec<ChangeEvent> {
+/// With `-z`, git separates fields and records with NUL bytes instead of
+/// tabs and newlines. This correctly handles filenames containing tabs,
+/// newlines, or other special characters.
+///
+/// Format: `<status>\0<path>\0` or for renames `R<score>\0<old>\0<new>\0`.
+fn parse_name_status_nul(output: &str) -> Vec<ChangeEvent> {
     let mut events = Vec::new();
+    let mut parts = output.split('\0').peekable();
 
-    for line in output.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+    while let Some(status) = parts.next() {
+        if status.is_empty() {
             continue;
         }
 
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 2 {
-            continue;
-        }
-
-        let status = parts[0];
-
-        // Renames and copies have two paths: old and new.
-        // Emit a Deleted event for the old path and a Created event for the new path,
-        // so the indexer removes the stale entry and indexes the new one.
-        if status.starts_with('R') && parts.len() >= 3 {
+        // Renames/copies have two path fields
+        if status.starts_with('R') {
+            let old_path = match parts.next() {
+                Some(p) if !p.is_empty() => p,
+                _ => break,
+            };
+            let new_path = match parts.next() {
+                Some(p) if !p.is_empty() => p,
+                _ => break,
+            };
             events.push(ChangeEvent {
-                path: PathBuf::from(parts[1]),
+                path: PathBuf::from(old_path),
                 kind: ChangeKind::Deleted,
             });
             events.push(ChangeEvent {
-                path: PathBuf::from(parts[2]),
+                path: PathBuf::from(new_path),
                 kind: ChangeKind::Created,
             });
             continue;
         }
 
-        if status.starts_with('C') && parts.len() >= 3 {
-            // Copy: original still exists, new copy needs indexing.
+        if status.starts_with('C') {
+            let _old_path = parts.next(); // skip original
+            let new_path = match parts.next() {
+                Some(p) if !p.is_empty() => p,
+                _ => break,
+            };
             events.push(ChangeEvent {
-                path: PathBuf::from(parts[2]),
+                path: PathBuf::from(new_path),
                 kind: ChangeKind::Created,
             });
             continue;
         }
 
-        let kind = if status == "A" {
-            ChangeKind::Created
-        } else if status == "M" {
-            ChangeKind::Modified
-        } else if status == "D" {
-            ChangeKind::Deleted
-        } else {
-            // Unknown status code — treat as Modified.
-            ChangeKind::Modified
+        let kind = match status {
+            "A" => ChangeKind::Created,
+            "M" => ChangeKind::Modified,
+            "D" => ChangeKind::Deleted,
+            _ => ChangeKind::Modified,
         };
 
+        let path = match parts.next() {
+            Some(p) if !p.is_empty() => p,
+            _ => break,
+        };
         events.push(ChangeEvent {
-            path: PathBuf::from(parts[1]),
+            path: PathBuf::from(path),
             kind,
         });
     }
@@ -204,15 +212,16 @@ fn parse_name_status(output: &str) -> Vec<ChangeEvent> {
     events
 }
 
-/// Parse the output of `git ls-files --others --exclude-standard`.
+/// Parse NUL-delimited output of `git ls-files -z --others --exclude-standard`.
 ///
-/// Each line is a single file path; all are treated as [`ChangeKind::Created`].
-fn parse_untracked(output: &str) -> Vec<ChangeEvent> {
+/// With `-z`, each path is terminated by a NUL byte. This correctly handles
+/// filenames containing newlines or other special characters.
+fn parse_untracked_nul(output: &str) -> Vec<ChangeEvent> {
     output
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| ChangeEvent {
-            path: PathBuf::from(l.trim()),
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(|s| ChangeEvent {
+            path: PathBuf::from(s),
             kind: ChangeKind::Created,
         })
         .collect()
@@ -226,39 +235,39 @@ fn parse_untracked(output: &str) -> Vec<ChangeEvent> {
 mod tests {
     use super::*;
 
-    // ---- parse_name_status ------------------------------------------
+    // ---- parse_name_status_nul (NUL-delimited) ----------------------
 
     #[test]
-    fn test_parse_name_status_added() {
-        let output = "A\tsrc/main.rs\n";
-        let events = parse_name_status(output);
+    fn test_parse_name_status_nul_added() {
+        let output = "A\0src/main.rs\0";
+        let events = parse_name_status_nul(output);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].path, PathBuf::from("src/main.rs"));
         assert_eq!(events[0].kind, ChangeKind::Created);
     }
 
     #[test]
-    fn test_parse_name_status_modified() {
-        let output = "M\tlib.rs\n";
-        let events = parse_name_status(output);
+    fn test_parse_name_status_nul_modified() {
+        let output = "M\0lib.rs\0";
+        let events = parse_name_status_nul(output);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].path, PathBuf::from("lib.rs"));
         assert_eq!(events[0].kind, ChangeKind::Modified);
     }
 
     #[test]
-    fn test_parse_name_status_deleted() {
-        let output = "D\told_file.rs\n";
-        let events = parse_name_status(output);
+    fn test_parse_name_status_nul_deleted() {
+        let output = "D\0old_file.rs\0";
+        let events = parse_name_status_nul(output);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].path, PathBuf::from("old_file.rs"));
         assert_eq!(events[0].kind, ChangeKind::Deleted);
     }
 
     #[test]
-    fn test_parse_name_status_renamed() {
-        let output = "R100\told.rs\tnew.rs\n";
-        let events = parse_name_status(output);
+    fn test_parse_name_status_nul_renamed() {
+        let output = "R100\0old.rs\0new.rs\0";
+        let events = parse_name_status_nul(output);
         // Renames emit two events: Delete old + Create new.
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].path, PathBuf::from("old.rs"));
@@ -268,9 +277,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_name_status_renamed_partial_score() {
-        let output = "R075\tsrc/foo.rs\tsrc/bar.rs\n";
-        let events = parse_name_status(output);
+    fn test_parse_name_status_nul_renamed_partial_score() {
+        let output = "R075\0src/foo.rs\0src/bar.rs\0";
+        let events = parse_name_status_nul(output);
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].path, PathBuf::from("src/foo.rs"));
         assert_eq!(events[0].kind, ChangeKind::Deleted);
@@ -279,9 +288,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_name_status_mixed() {
-        let output = "A\tnew.rs\nM\texisting.rs\nD\tremoved.rs\nR100\told.rs\trenamed.rs\n";
-        let events = parse_name_status(output);
+    fn test_parse_name_status_nul_mixed() {
+        let output = "A\0new.rs\0M\0existing.rs\0D\0removed.rs\0R100\0old.rs\0renamed.rs\0";
+        let events = parse_name_status_nul(output);
         // 3 normal events + 2 for rename (Delete old + Create new) = 5
         assert_eq!(events.len(), 5);
 
@@ -302,34 +311,37 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_name_status_empty() {
-        let events = parse_name_status("");
+    fn test_parse_name_status_nul_empty() {
+        let events = parse_name_status_nul("");
         assert!(events.is_empty());
     }
 
     #[test]
-    fn test_parse_name_status_blank_lines() {
-        let output = "\n\n  \n";
-        let events = parse_name_status(output);
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn test_parse_name_status_copy_indexes_new_path() {
+    fn test_parse_name_status_nul_copy_indexes_new_path() {
         // 'C' (copy) should emit a Created event for the new copy path.
-        let output = "C100\toriginal.rs\tcopy.rs\n";
-        let events = parse_name_status(output);
+        let output = "C100\0original.rs\0copy.rs\0";
+        let events = parse_name_status_nul(output);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].path, PathBuf::from("copy.rs"));
         assert_eq!(events[0].kind, ChangeKind::Created);
     }
 
-    // ---- parse_untracked --------------------------------------------
+    #[test]
+    fn test_parse_name_status_nul_filename_with_special_chars() {
+        // Filenames with tabs and spaces are handled correctly with NUL delimiters
+        let output = "A\0path with\ttab.rs\0";
+        let events = parse_name_status_nul(output);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].path, PathBuf::from("path with\ttab.rs"));
+        assert_eq!(events[0].kind, ChangeKind::Created);
+    }
+
+    // ---- parse_untracked_nul ----------------------------------------
 
     #[test]
-    fn test_parse_untracked() {
-        let output = "foo.rs\nbar/baz.rs\n";
-        let events = parse_untracked(output);
+    fn test_parse_untracked_nul() {
+        let output = "foo.rs\0bar/baz.rs\0";
+        let events = parse_untracked_nul(output);
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].path, PathBuf::from("foo.rs"));
         assert_eq!(events[0].kind, ChangeKind::Created);
@@ -338,17 +350,19 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_untracked_empty() {
-        let events = parse_untracked("");
+    fn test_parse_untracked_nul_empty() {
+        let events = parse_untracked_nul("");
         assert!(events.is_empty());
     }
 
     #[test]
-    fn test_parse_untracked_trailing_blanks() {
-        let output = "a.rs\n\n  \n";
-        let events = parse_untracked(output);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].path, PathBuf::from("a.rs"));
+    fn test_parse_untracked_nul_filename_with_newline() {
+        // NUL-delimited output handles filenames with newlines
+        let output = "file\nwith\nnewlines.rs\0normal.rs\0";
+        let events = parse_untracked_nul(output);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].path, PathBuf::from("file\nwith\nnewlines.rs"));
+        assert_eq!(events[1].path, PathBuf::from("normal.rs"));
     }
 
     // ---- dedup behaviour --------------------------------------------
@@ -360,14 +374,14 @@ mod tests {
         // should overwrite the earlier one.
         let mut changes: HashMap<PathBuf, ChangeKind> = HashMap::new();
 
-        // Committed source.
-        let committed = parse_name_status("M\tfile.rs\n");
+        // Committed source (NUL-delimited).
+        let committed = parse_name_status_nul("M\0file.rs\0");
         for e in committed {
             changes.insert(e.path, e.kind);
         }
 
         // Unstaged source (overwrites).
-        let unstaged = parse_name_status("D\tfile.rs\n");
+        let unstaged = parse_name_status_nul("D\0file.rs\0");
         for e in unstaged {
             changes.insert(e.path, e.kind);
         }
@@ -446,13 +460,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_untracked_filters_indexrs() {
-        // Simulate git reporting .indexrs files as untracked
+    fn test_parse_untracked_nul_filters_indexrs() {
+        // Simulate git reporting .indexrs files as untracked (NUL-delimited)
         let output =
-            "src/main.rs\n.indexrs/segments/seg_0000/trigrams.bin\n.indexrs/lock\nlib.rs\n";
-        let events = parse_untracked(output);
+            "src/main.rs\0.indexrs/segments/seg_0000/trigrams.bin\0.indexrs/lock\0lib.rs\0";
+        let events = parse_untracked_nul(output);
 
-        // parse_untracked itself doesn't filter — the filter is in detect_changes.
+        // parse_untracked_nul itself doesn't filter — the filter is in detect_changes.
         // But we can test is_indexrs_path on the results.
         let filtered: Vec<_> = events
             .into_iter()
