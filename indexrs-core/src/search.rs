@@ -84,6 +84,23 @@ pub struct ContextBlock {
     pub after: Vec<ContextLine>,
 }
 
+/// Options that control search behavior.
+///
+/// Passed to [`search_segments_with_options()`](crate::multi_search::search_segments_with_options)
+/// to configure context lines and other search parameters.
+#[derive(Debug, Clone)]
+pub struct SearchOptions {
+    /// Number of context lines to include before and after each match.
+    /// Default: 0 (no context).
+    pub context_lines: usize,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        SearchOptions { context_lines: 0 }
+    }
+}
+
 /// Aggregate result of a search query.
 ///
 /// Contains the matched files, total match/file counts, and query duration.
