@@ -121,6 +121,154 @@ pub fn plan_literal_query(query: &str, pre_filters: &[PreFilter], segment: &Segm
     }
 }
 
+/// Build a query plan for a regex pattern query against a single segment.
+///
+/// For regex queries, the planner extracts required literal substrings from
+/// the regex pattern (substrings that MUST appear for the regex to match),
+/// generates trigrams from those substrings, and uses them for candidate
+/// filtering. The verification step uses the full regex.
+///
+/// If no required literal substrings >= 3 characters can be extracted from
+/// the regex, the plan is marked as empty (no trigram-based filtering possible).
+///
+/// # Required literal extraction
+///
+/// This function uses a simple heuristic: it scans the regex for runs of
+/// literal characters (non-metacharacters) and extracts trigrams from runs
+/// of length >= 3. This covers common patterns like `println!\(` where
+/// "println" and "(" are literal. For full regex trigram extraction, this
+/// will be enhanced by HHC-47's `extract_query_trigrams()` function.
+pub fn plan_regex_query(
+    pattern: &str,
+    pre_filters: &[PreFilter],
+    segment: &Segment,
+) -> QueryPlan {
+    let literal_runs = extract_literal_runs(pattern);
+    let reader = segment.trigram_reader();
+
+    let mut scored: Vec<ScoredTrigram> = Vec::new();
+    for run in &literal_runs {
+        if run.len() >= 3 {
+            let trigrams = extract_unique_trigrams(run.as_bytes());
+            for trigram in trigrams {
+                let estimated_count = reader.estimate_posting_list_size(trigram);
+                scored.push(ScoredTrigram {
+                    trigram,
+                    estimated_count,
+                });
+            }
+        }
+    }
+
+    // Deduplicate trigrams (same trigram may appear in multiple literal runs)
+    scored.sort_by_key(|s| s.trigram.to_u32());
+    scored.dedup_by_key(|s| s.trigram);
+
+    // Re-sort by estimated count ascending
+    scored.sort_by_key(|s| s.estimated_count);
+
+    let is_empty = scored.is_empty();
+
+    QueryPlan {
+        pre_filters: pre_filters.to_vec(),
+        trigram_plan: scored,
+        verify: VerifyStep::Regex(pattern.to_string()),
+        is_empty,
+    }
+}
+
+/// Extract runs of literal (non-metacharacter) characters from a regex pattern.
+///
+/// Metacharacters: `.`, `*`, `+`, `?`, `[`, `]`, `(`, `)`, `{`, `}`, `|`, `^`, `$`, `\`
+/// Escaped characters (e.g., `\(`) are treated as literal.
+/// Character classes (`[...]`) are skipped entirely -- their contents are not literal.
+///
+/// Returns a vector of literal substrings found in the pattern.
+fn extract_literal_runs(pattern: &str) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut current_run = String::new();
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        // Skip character classes entirely
+        if b == b'[' {
+            if !current_run.is_empty() {
+                runs.push(std::mem::take(&mut current_run));
+            }
+            i += 1;
+            // Skip until closing ']', handling escaped brackets
+            while i < bytes.len() {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2; // skip escaped char inside class
+                } else if bytes[i] == b']' {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+
+        if b == b'\\' && i + 1 < bytes.len() {
+            // Escaped character -- treat next char as literal
+            // But only if it's a metacharacter being escaped
+            let next = bytes[i + 1];
+            if is_regex_meta(next) {
+                current_run.push(next as char);
+                i += 2;
+                continue;
+            } else {
+                // Escape sequence like \s, \w, \d -- not a literal
+                if !current_run.is_empty() {
+                    runs.push(std::mem::take(&mut current_run));
+                }
+                i += 2;
+                continue;
+            }
+        }
+
+        if is_regex_meta(b) {
+            if !current_run.is_empty() {
+                runs.push(std::mem::take(&mut current_run));
+            }
+            i += 1;
+        } else {
+            current_run.push(b as char);
+            i += 1;
+        }
+    }
+
+    if !current_run.is_empty() {
+        runs.push(current_run);
+    }
+
+    runs
+}
+
+/// Check if a byte is a regex metacharacter.
+fn is_regex_meta(b: u8) -> bool {
+    matches!(
+        b,
+        b'.' | b'*'
+            | b'+'
+            | b'?'
+            | b'['
+            | b']'
+            | b'('
+            | b')'
+            | b'{'
+            | b'}'
+            | b'|'
+            | b'^'
+            | b'$'
+            | b'\\'
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +462,53 @@ mod tests {
 
         assert!(!plan.is_empty);
         assert_eq!(plan.pre_filters.len(), 1);
+    }
+
+    // ---- Task 4: plan_regex_query tests ----
+
+    #[test]
+    fn test_plan_regex_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        // Regex r"println!\(" has "println" as a literal run (>= 3 chars)
+        // and "(" as an escaped literal (< 3 chars, ignored for trigrams)
+        let plan = plan_regex_query(r"println!\(", &[], &segment);
+
+        assert!(!plan.is_empty);
+        assert!(matches!(plan.verify, VerifyStep::Regex(ref s) if s == r"println!\("));
+        // Should have trigrams from the literal parts of the regex
+        assert!(!plan.trigram_plan.is_empty());
+    }
+
+    #[test]
+    fn test_plan_regex_query_no_extractable_trigrams() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        // Regex r"[a-z]+" has no required literal substrings >= 3 chars
+        let plan = plan_regex_query(r"[a-z]+", &[], &segment);
+
+        // Plan is empty because no trigrams can be extracted
+        assert!(plan.is_empty);
+        assert!(plan.trigram_plan.is_empty());
+    }
+
+    #[test]
+    fn test_plan_regex_query_with_filters() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        let segment = build_test_segment(&base_dir);
+
+        let plan = plan_regex_query(
+            r"fn\s+main",
+            &[PreFilter::Language(Language::Rust)],
+            &segment,
+        );
+
+        assert_eq!(plan.pre_filters.len(), 1);
+        assert!(matches!(plan.verify, VerifyStep::Regex(_)));
     }
 }
