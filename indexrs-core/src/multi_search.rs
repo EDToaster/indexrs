@@ -11,22 +11,25 @@ use std::time::Instant;
 use crate::error::IndexError;
 use crate::index_state::SegmentList;
 use crate::intersection::find_candidates;
-use crate::search::{FileMatch, LineMatch, MatchPattern, SearchResult};
+use crate::search::{ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult};
 use crate::segment::Segment;
 use crate::tombstone::TombstoneSet;
 use crate::types::SegmentId;
 use crate::verify::ContentVerifier;
 
 /// Verify that a query string actually appears in file content, and return
-/// the matching lines with highlight ranges.
+/// the matching lines with highlight ranges and optional context lines.
 ///
 /// This is the content verification step after trigram candidate filtering.
 /// For each line in `content`, finds all occurrences of `query` using
 /// case-insensitive (ASCII-folded) matching and builds a `LineMatch` with
 /// 1-based line numbers and byte-offset highlight ranges.
 ///
+/// When `context_lines > 0`, each match also includes surrounding context
+/// lines (up to `context_lines` before and after).
+///
 /// Returns an empty vector if the query is empty or not found.
-fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
+fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> Vec<LineMatch> {
     if query.is_empty() || content.is_empty() {
         return Vec::new();
     }
@@ -34,21 +37,24 @@ fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
     // Fold query to lowercase for case-insensitive matching.
     let folded_query: Vec<u8> = query.bytes().map(crate::trigram::ascii_fold_byte).collect();
     let text = String::from_utf8_lossy(content);
-    let mut matches = Vec::new();
+    let all_lines: Vec<&str> = text.split('\n').collect();
 
-    for (line_idx, line) in text.split('\n').enumerate() {
+    // First pass: find matching line indices and their ranges
+    let mut match_indices: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
+
+    for (line_idx, line) in all_lines.iter().enumerate() {
         // Skip empty trailing line from trailing newline
-        if line.is_empty() && line_idx > 0 {
+        if line.is_empty() && line_idx > 0 && line_idx == all_lines.len() - 1 {
             continue;
         }
 
-        let mut ranges = Vec::new();
         let line_bytes = line.as_bytes();
         // Fold the line bytes for searching.
         let folded_line: Vec<u8> = line_bytes
             .iter()
             .map(|&b| crate::trigram::ascii_fold_byte(b))
             .collect();
+        let mut ranges = Vec::new();
         let mut search_start = 0;
 
         while search_start + folded_query.len() <= folded_line.len() {
@@ -63,15 +69,58 @@ fn verify_content_matches(content: &[u8], query: &str) -> Vec<LineMatch> {
         }
 
         if !ranges.is_empty() {
-            matches.push(LineMatch {
-                line_number: (line_idx + 1) as u32, // 1-based
-                content: line.to_string(),
-                ranges,
-            });
+            match_indices.push((line_idx, ranges));
         }
     }
 
-    matches
+    // Second pass: build LineMatch with context
+    match_indices
+        .iter()
+        .map(|(line_idx, ranges)| {
+            let line_idx = *line_idx;
+
+            let context_before = if context_lines > 0 {
+                let start = line_idx.saturating_sub(context_lines);
+                (start..line_idx)
+                    .map(|i| ContextLine {
+                        line_number: (i + 1) as u32,
+                        content: all_lines[i].to_string(),
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            let context_after = if context_lines > 0 {
+                let end = (line_idx + 1 + context_lines).min(all_lines.len());
+                // Skip trailing empty line
+                let effective_end = if end > 0
+                    && all_lines.last().is_some_and(|l| l.is_empty())
+                    && end == all_lines.len()
+                {
+                    end - 1
+                } else {
+                    end
+                };
+                ((line_idx + 1)..effective_end)
+                    .map(|i| ContextLine {
+                        line_number: (i + 1) as u32,
+                        content: all_lines[i].to_string(),
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            LineMatch {
+                line_number: (line_idx + 1) as u32,
+                content: all_lines[line_idx].to_string(),
+                ranges: ranges.clone(),
+                context_before,
+                context_after,
+            }
+        })
+        .collect()
 }
 
 /// Find the first occurrence of `needle` in `haystack`, returning the byte offset.
@@ -84,70 +133,11 @@ fn find_substring(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-/// Search a single segment for the given query, filtering tombstoned entries.
-///
-/// Pipeline:
-/// 1. `find_candidates(segment.trigram_reader(), query)` -> candidate FileIds
-/// 2. Filter out tombstoned FileIds
-/// 3. For each candidate: read metadata, read content, verify match
-/// 4. Build FileMatch results with relevance score
-///
-/// Returns a vector of `FileMatch` for files in this segment that match.
-fn search_single_segment(
-    segment: &Segment,
-    query: &str,
-    tombstones: &TombstoneSet,
-) -> Result<Vec<FileMatch>, IndexError> {
-    let candidates = find_candidates(segment.trigram_reader(), query)?;
-
-    let mut file_matches = Vec::new();
-
-    for file_id in candidates {
-        // Skip tombstoned entries
-        if tombstones.contains(file_id) {
-            continue;
-        }
-
-        // Read metadata
-        let meta = match segment.get_metadata(file_id)? {
-            Some(m) => m,
-            None => continue,
-        };
-
-        // Read and decompress content
-        let content = segment
-            .content_reader()
-            .read_content(meta.content_offset, meta.content_len)?;
-
-        // Verify the query actually appears in the content
-        let line_matches = verify_content_matches(&content, query);
-        if line_matches.is_empty() {
-            continue;
-        }
-
-        // Compute a simple relevance score: match count / line count
-        // (more matches relative to file size = more relevant)
-        let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
-        let line_count = meta.line_count.max(1) as f64;
-        let score = (total_match_ranges as f64 / line_count).min(1.0);
-
-        file_matches.push(FileMatch {
-            file_id,
-            path: PathBuf::from(&meta.path),
-            language: meta.language,
-            lines: line_matches,
-            score,
-        });
-    }
-
-    Ok(file_matches)
-}
-
 /// Search across multiple segments with snapshot isolation.
 ///
 /// This is the main entry point for multi-segment queries. It:
 /// 1. Takes a snapshot (`SegmentList`) and a query string
-/// 2. For each segment: loads tombstones, runs `search_single_segment`
+/// 2. For each segment: loads tombstones, runs `search_single_segment_with_context`
 /// 3. Merges results: deduplicates by file path, preferring the newest segment
 ///    (highest `SegmentId`)
 /// 4. Sorts by relevance score (descending)
@@ -165,11 +155,24 @@ fn search_single_segment(
 /// - Query shorter than 3 chars: no trigrams can be extracted, returns empty
 /// - All matches tombstoned: returns empty
 pub fn search_segments(snapshot: &SegmentList, query: &str) -> Result<SearchResult, IndexError> {
+    search_segments_with_options(snapshot, query, &SearchOptions::default())
+}
+
+/// Search across multiple segments with options.
+///
+/// Like [`search_segments()`] but accepts [`SearchOptions`] to configure
+/// context lines and other search parameters.
+pub fn search_segments_with_options(
+    snapshot: &SegmentList,
+    query: &str,
+    options: &SearchOptions,
+) -> Result<SearchResult, IndexError> {
     let start = Instant::now();
 
     if snapshot.is_empty() || query.len() < 3 {
         return Ok(SearchResult {
-            total_count: 0,
+            total_match_count: 0,
+            total_file_count: 0,
             files: Vec::new(),
             duration: start.elapsed(),
         });
@@ -181,7 +184,8 @@ pub fn search_segments(snapshot: &SegmentList, query: &str) -> Result<SearchResu
 
     for segment in snapshot.iter() {
         let tombstones = segment.load_tombstones()?;
-        let file_matches = search_single_segment(segment, query, &tombstones)?;
+        let file_matches =
+            search_single_segment_with_context(segment, query, &tombstones, options.context_lines)?;
 
         for fm in file_matches {
             let seg_id = segment.segment_id();
@@ -205,13 +209,67 @@ pub fn search_segments(snapshot: &SegmentList, query: &str) -> Result<SearchResu
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let total_count: usize = files.iter().map(|f| f.lines.len()).sum();
+    let total_file_count = files.len();
+    let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
 
     Ok(SearchResult {
-        total_count,
+        total_match_count,
+        total_file_count,
         files,
         duration: start.elapsed(),
     })
+}
+
+/// Search a single segment with context line support.
+fn search_single_segment_with_context(
+    segment: &Segment,
+    query: &str,
+    tombstones: &TombstoneSet,
+    context_lines: usize,
+) -> Result<Vec<FileMatch>, IndexError> {
+    let candidates = find_candidates(segment.trigram_reader(), query)?;
+
+    let mut file_matches = Vec::new();
+
+    for file_id in candidates {
+        // Skip tombstoned entries
+        if tombstones.contains(file_id) {
+            continue;
+        }
+
+        // Read metadata
+        let meta = match segment.get_metadata(file_id)? {
+            Some(m) => m,
+            None => continue,
+        };
+
+        // Read and decompress content
+        let content = segment
+            .content_reader()
+            .read_content(meta.content_offset, meta.content_len)?;
+
+        // Verify the query actually appears in the content
+        let line_matches = verify_content_matches(&content, query, context_lines);
+        if line_matches.is_empty() {
+            continue;
+        }
+
+        // Compute a simple relevance score: match count / line count
+        // (more matches relative to file size = more relevant)
+        let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
+        let line_count = meta.line_count.max(1) as f64;
+        let score = (total_match_ranges as f64 / line_count).min(1.0);
+
+        file_matches.push(FileMatch {
+            file_id,
+            path: PathBuf::from(&meta.path),
+            language: meta.language,
+            lines: line_matches,
+            score,
+        });
+    }
+
+    Ok(file_matches)
 }
 
 /// Extract the literal prefix from a regex pattern for trigram candidate filtering.
@@ -334,7 +392,8 @@ pub fn search_segments_with_pattern(
 
     if snapshot.is_empty() {
         return Ok(SearchResult {
-            total_count: 0,
+            total_match_count: 0,
+            total_file_count: 0,
             files: Vec::new(),
             duration: start.elapsed(),
         });
@@ -364,10 +423,12 @@ pub fn search_segments_with_pattern(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let total_count: usize = files.iter().map(|f| f.lines.len()).sum();
+    let total_file_count = files.len();
+    let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
 
     Ok(SearchResult {
-        total_count,
+        total_match_count,
+        total_file_count,
         files,
         duration: start.elapsed(),
     })
@@ -386,7 +447,7 @@ mod tests {
     #[test]
     fn test_verify_single_match() {
         let content = b"fn main() {\n    println!(\"hello\");\n}\n";
-        let matches = verify_content_matches(content, "println");
+        let matches = verify_content_matches(content, "println", 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 2);
         assert!(matches[0].content.contains("println"));
@@ -396,14 +457,14 @@ mod tests {
     #[test]
     fn test_verify_no_match() {
         let content = b"fn main() {}\n";
-        let matches = verify_content_matches(content, "foobar");
+        let matches = verify_content_matches(content, "foobar", 0);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn test_verify_multiple_matches_same_line() {
         let content = b"let aa = aa + aa;\n";
-        let matches = verify_content_matches(content, "aa");
+        let matches = verify_content_matches(content, "aa", 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 1);
         // Should have 3 ranges: positions 4, 9, 14
@@ -413,7 +474,7 @@ mod tests {
     #[test]
     fn test_verify_multiple_lines() {
         let content = b"fn foo() {}\nfn bar() {}\nfn baz() {}\n";
-        let matches = verify_content_matches(content, "fn ");
+        let matches = verify_content_matches(content, "fn ", 0);
         assert_eq!(matches.len(), 3);
         assert_eq!(matches[0].line_number, 1);
         assert_eq!(matches[1].line_number, 2);
@@ -423,23 +484,88 @@ mod tests {
     #[test]
     fn test_verify_empty_query() {
         let content = b"fn main() {}\n";
-        let matches = verify_content_matches(content, "");
+        let matches = verify_content_matches(content, "", 0);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn test_verify_empty_content() {
         let content = b"";
-        let matches = verify_content_matches(content, "foo");
+        let matches = verify_content_matches(content, "foo", 0);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn test_verify_no_trailing_newline() {
         let content = b"line one\nline two";
-        let matches = verify_content_matches(content, "two");
+        let matches = verify_content_matches(content, "two", 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].line_number, 2);
+    }
+
+    // ---- Context line tests ----
+
+    #[test]
+    fn test_verify_with_context_lines() {
+        let content = b"line one\nline two\nline three\nline four\nline five\n";
+        let matches = verify_content_matches(content, "three", 1);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 3);
+        assert_eq!(matches[0].context_before.len(), 1);
+        assert_eq!(matches[0].context_before[0].line_number, 2);
+        assert_eq!(matches[0].context_before[0].content, "line two");
+        assert_eq!(matches[0].context_after.len(), 1);
+        assert_eq!(matches[0].context_after[0].line_number, 4);
+        assert_eq!(matches[0].context_after[0].content, "line four");
+    }
+
+    #[test]
+    fn test_verify_with_context_at_start() {
+        let content = b"line one\nline two\nline three\n";
+        let matches = verify_content_matches(content, "one", 2);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 1);
+        // No context before first line
+        assert_eq!(matches[0].context_before.len(), 0);
+        assert_eq!(matches[0].context_after.len(), 2);
+        assert_eq!(matches[0].context_after[0].line_number, 2);
+        assert_eq!(matches[0].context_after[1].line_number, 3);
+    }
+
+    #[test]
+    fn test_verify_with_context_at_end() {
+        let content = b"line one\nline two\nline three\n";
+        let matches = verify_content_matches(content, "three", 2);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 3);
+        assert_eq!(matches[0].context_before.len(), 2);
+        assert_eq!(matches[0].context_before[0].line_number, 1);
+        assert_eq!(matches[0].context_before[1].line_number, 2);
+        // No context after last line
+        assert_eq!(matches[0].context_after.len(), 0);
+    }
+
+    #[test]
+    fn test_verify_with_zero_context() {
+        let content = b"line one\nline two\nline three\n";
+        let matches = verify_content_matches(content, "two", 0);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].context_before.is_empty());
+        assert!(matches[0].context_after.is_empty());
+    }
+
+    #[test]
+    fn test_verify_context_adjacent_matches_no_overlap() {
+        // When two matches are adjacent, context should not overlap
+        let content = b"line 1\nmatch A\nmatch B\nline 4\n";
+        let matches = verify_content_matches(content, "match", 1);
+        assert_eq!(matches.len(), 2);
+        // First match context_after should include "match B" (it's context even though it's also a match)
+        assert_eq!(matches[0].context_after.len(), 1);
+        assert_eq!(matches[0].context_after[0].line_number, 3);
+        // Second match context_before should include "match A"
+        assert_eq!(matches[1].context_before.len(), 1);
+        assert_eq!(matches[1].context_before[0].line_number, 2);
     }
 
     // ---- Single-segment search tests ----
@@ -478,7 +604,7 @@ mod tests {
         );
 
         let tombstones = TombstoneSet::new();
-        let results = search_single_segment(&seg, "println", &tombstones).unwrap();
+        let results = search_single_segment_with_context(&seg, "println", &tombstones, 0).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path, PathBuf::from("main.rs"));
         assert_eq!(results[0].lines.len(), 1);
@@ -512,7 +638,7 @@ mod tests {
         let mut tombstones = TombstoneSet::new();
         tombstones.insert(FileId(0));
 
-        let results = search_single_segment(&seg, "println", &tombstones).unwrap();
+        let results = search_single_segment_with_context(&seg, "println", &tombstones, 0).unwrap();
         // Only lib.rs should appear (main.rs is tombstoned)
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path, PathBuf::from("lib.rs"));
@@ -535,7 +661,7 @@ mod tests {
         );
 
         let tombstones = TombstoneSet::new();
-        let results = search_single_segment(&seg, "foobar", &tombstones).unwrap();
+        let results = search_single_segment_with_context(&seg, "foobar", &tombstones, 0).unwrap();
         assert!(results.is_empty());
     }
 
@@ -557,7 +683,7 @@ mod tests {
 
         let tombstones = TombstoneSet::new();
         // Queries < 3 chars produce no trigrams, so no candidates
-        let results = search_single_segment(&seg, "fn", &tombstones).unwrap();
+        let results = search_single_segment_with_context(&seg, "fn", &tombstones, 0).unwrap();
         assert!(results.is_empty());
     }
 
@@ -583,7 +709,7 @@ mod tests {
         let result = search_segments(&snapshot, "println").unwrap();
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].path, PathBuf::from("main.rs"));
-        assert_eq!(result.total_count, 1);
+        assert_eq!(result.total_match_count, 1);
     }
 
     #[test]
@@ -710,7 +836,7 @@ mod tests {
         let snapshot: SegmentList = Arc::new(vec![]);
         let result = search_segments(&snapshot, "println").unwrap();
         assert_eq!(result.files.len(), 0);
-        assert_eq!(result.total_count, 0);
+        assert_eq!(result.total_match_count, 0);
     }
 
     #[test]
@@ -852,5 +978,63 @@ mod tests {
         let result = search_segments_with_pattern(&snapshot, &pattern).unwrap();
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].lines.len(), 3);
+    }
+
+    // ---- search_segments_with_options tests ----
+
+    #[test]
+    fn test_search_segments_with_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"use std::io;\n\nfn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                mtime: 0,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let opts = SearchOptions { context_lines: 1 };
+        let result = search_segments_with_options(&snapshot, "println", &opts).unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].lines.len(), 1);
+
+        let line = &result.files[0].lines[0];
+        assert_eq!(line.line_number, 4);
+        // Context before: line 3 "fn main() {"
+        assert_eq!(line.context_before.len(), 1);
+        assert_eq!(line.context_before[0].line_number, 3);
+        assert!(line.context_before[0].content.contains("fn main()"));
+        // Context after: line 5 "}"
+        assert_eq!(line.context_after.len(), 1);
+        assert_eq!(line.context_after[0].line_number, 5);
+    }
+
+    #[test]
+    fn test_search_segments_default_no_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"line 1\nline 2\nfn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                mtime: 0,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        // Original search_segments should produce no context
+        let result = search_segments(&snapshot, "println").unwrap();
+        assert_eq!(result.files[0].lines[0].context_before.len(), 0);
+        assert_eq!(result.files[0].lines[0].context_after.len(), 0);
     }
 }

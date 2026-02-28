@@ -195,6 +195,8 @@ impl ContentVerifier {
                     .line_content(text.as_bytes(), line_num)
                     .to_string(),
                 ranges,
+                context_before: vec![],
+                context_after: vec![],
             })
             .collect()
     }
@@ -232,6 +234,8 @@ impl ContentVerifier {
                     .line_content(text.as_bytes(), line_num)
                     .to_string(),
                 ranges,
+                context_before: vec![],
+                context_after: vec![],
             })
             .collect()
     }

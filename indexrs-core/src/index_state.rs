@@ -246,7 +246,7 @@ mod tests {
             .collect();
         assert!(paths.contains(&"main.rs"));
         assert!(paths.contains(&"lib.rs"));
-        assert_eq!(result.total_count, 2);
+        assert_eq!(result.total_match_count, 2);
     }
 
     #[test]
