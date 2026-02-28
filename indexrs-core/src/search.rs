@@ -86,16 +86,47 @@ pub struct ContextBlock {
 
 /// Aggregate result of a search query.
 ///
-/// Contains the matched files, total match count, and query duration.
+/// Contains the matched files, total match/file counts, and query duration.
 /// Implements `Display` for plain-text summary output.
+///
+/// Files are ordered by relevance score (descending). Use [`paginate()`](Self::paginate)
+/// for offset-based pagination over the file list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
-    /// Total number of matching lines across all files.
-    pub total_count: usize,
+    /// Total number of matching lines across all files (before pagination).
+    pub total_match_count: usize,
+    /// Total number of files with matches (before pagination).
+    pub total_file_count: usize,
     /// Files that matched the query, ordered by relevance score (descending).
     pub files: Vec<FileMatch>,
     /// Wall-clock time taken to execute the query.
     pub duration: Duration,
+}
+
+impl SearchResult {
+    /// Return a paginated view of this result set.
+    ///
+    /// `offset` is the number of files to skip (0-based).
+    /// `limit` is the maximum number of files to return.
+    ///
+    /// The returned `SearchResult` preserves the original `total_match_count`,
+    /// `total_file_count`, and `duration` so consumers know the full result
+    /// size for pagination UI.
+    pub fn paginate(&self, offset: usize, limit: usize) -> SearchResult {
+        let files: Vec<FileMatch> = self
+            .files
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect();
+        SearchResult {
+            total_match_count: self.total_match_count,
+            total_file_count: self.total_file_count,
+            files,
+            duration: self.duration,
+        }
+    }
 }
 
 impl fmt::Display for SearchResult {
@@ -103,9 +134,7 @@ impl fmt::Display for SearchResult {
         write!(
             f,
             "{} results in {} files ({:.1?})",
-            self.total_count,
-            self.files.len(),
-            self.duration,
+            self.total_match_count, self.total_file_count, self.duration,
         )
     }
 }
@@ -117,7 +146,8 @@ mod tests {
     #[test]
     fn test_search_result_display() {
         let result = SearchResult {
-            total_count: 42,
+            total_match_count: 42,
+            total_file_count: 2,
             files: vec![
                 FileMatch {
                     file_id: FileId(1),
@@ -145,7 +175,8 @@ mod tests {
     #[test]
     fn test_search_result_display_empty() {
         let result = SearchResult {
-            total_count: 0,
+            total_match_count: 0,
+            total_file_count: 0,
             files: vec![],
             duration: Duration::from_micros(100),
         };
@@ -295,5 +326,119 @@ mod tests {
         };
         assert!(line.context_before.is_empty());
         assert!(line.context_after.is_empty());
+    }
+
+    #[test]
+    fn test_search_result_total_file_count() {
+        let result = SearchResult {
+            total_match_count: 42,
+            total_file_count: 10,
+            files: vec![],
+            duration: Duration::from_millis(5),
+        };
+        assert_eq!(result.total_file_count, 10);
+    }
+
+    #[test]
+    fn test_search_result_paginate_basic() {
+        let files: Vec<FileMatch> = (0..10)
+            .map(|i| FileMatch {
+                file_id: FileId(i),
+                path: PathBuf::from(format!("file_{i}.rs")),
+                language: Language::Rust,
+                lines: vec![],
+                score: 1.0 - (i as f64 / 10.0),
+            })
+            .collect();
+
+        let result = SearchResult {
+            total_match_count: 50,
+            total_file_count: 10,
+            files,
+            duration: Duration::from_millis(5),
+        };
+
+        let page = result.paginate(0, 3);
+        assert_eq!(page.files.len(), 3);
+        assert_eq!(page.total_file_count, 10);
+        assert_eq!(page.total_match_count, 50);
+        assert_eq!(page.files[0].path, PathBuf::from("file_0.rs"));
+        assert_eq!(page.files[2].path, PathBuf::from("file_2.rs"));
+    }
+
+    #[test]
+    fn test_search_result_paginate_offset() {
+        let files: Vec<FileMatch> = (0..10)
+            .map(|i| FileMatch {
+                file_id: FileId(i),
+                path: PathBuf::from(format!("file_{i}.rs")),
+                language: Language::Rust,
+                lines: vec![],
+                score: 0.5,
+            })
+            .collect();
+
+        let result = SearchResult {
+            total_match_count: 50,
+            total_file_count: 10,
+            files,
+            duration: Duration::from_millis(5),
+        };
+
+        let page = result.paginate(3, 4);
+        assert_eq!(page.files.len(), 4);
+        assert_eq!(page.files[0].path, PathBuf::from("file_3.rs"));
+        assert_eq!(page.files[3].path, PathBuf::from("file_6.rs"));
+    }
+
+    #[test]
+    fn test_search_result_paginate_past_end() {
+        let files: Vec<FileMatch> = (0..3)
+            .map(|i| FileMatch {
+                file_id: FileId(i),
+                path: PathBuf::from(format!("file_{i}.rs")),
+                language: Language::Rust,
+                lines: vec![],
+                score: 0.5,
+            })
+            .collect();
+
+        let result = SearchResult {
+            total_match_count: 10,
+            total_file_count: 3,
+            files,
+            duration: Duration::from_millis(5),
+        };
+
+        // Offset beyond available files
+        let page = result.paginate(5, 10);
+        assert_eq!(page.files.len(), 0);
+        assert_eq!(page.total_file_count, 3);
+    }
+
+    #[test]
+    fn test_search_result_paginate_partial_last_page() {
+        let files: Vec<FileMatch> = (0..7)
+            .map(|i| FileMatch {
+                file_id: FileId(i),
+                path: PathBuf::from(format!("file_{i}.rs")),
+                language: Language::Rust,
+                lines: vec![],
+                score: 0.5,
+            })
+            .collect();
+
+        let result = SearchResult {
+            total_match_count: 35,
+            total_file_count: 7,
+            files,
+            duration: Duration::from_millis(5),
+        };
+
+        // Last page has only 2 items instead of 5
+        let page = result.paginate(5, 5);
+        assert_eq!(page.files.len(), 2);
+        assert_eq!(page.files[0].path, PathBuf::from("file_5.rs"));
+        assert_eq!(page.files[1].path, PathBuf::from("file_6.rs"));
     }
 }

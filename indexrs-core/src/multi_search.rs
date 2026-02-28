@@ -171,7 +171,8 @@ pub fn search_segments(snapshot: &SegmentList, query: &str) -> Result<SearchResu
 
     if snapshot.is_empty() || query.len() < 3 {
         return Ok(SearchResult {
-            total_count: 0,
+            total_match_count: 0,
+            total_file_count: 0,
             files: Vec::new(),
             duration: start.elapsed(),
         });
@@ -207,10 +208,12 @@ pub fn search_segments(snapshot: &SegmentList, query: &str) -> Result<SearchResu
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let total_count: usize = files.iter().map(|f| f.lines.len()).sum();
+    let total_file_count = files.len();
+    let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
 
     Ok(SearchResult {
-        total_count,
+        total_match_count,
+        total_file_count,
         files,
         duration: start.elapsed(),
     })
@@ -336,7 +339,8 @@ pub fn search_segments_with_pattern(
 
     if snapshot.is_empty() {
         return Ok(SearchResult {
-            total_count: 0,
+            total_match_count: 0,
+            total_file_count: 0,
             files: Vec::new(),
             duration: start.elapsed(),
         });
@@ -366,10 +370,12 @@ pub fn search_segments_with_pattern(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let total_count: usize = files.iter().map(|f| f.lines.len()).sum();
+    let total_file_count = files.len();
+    let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
 
     Ok(SearchResult {
-        total_count,
+        total_match_count,
+        total_file_count,
         files,
         duration: start.elapsed(),
     })
@@ -585,7 +591,7 @@ mod tests {
         let result = search_segments(&snapshot, "println").unwrap();
         assert_eq!(result.files.len(), 1);
         assert_eq!(result.files[0].path, PathBuf::from("main.rs"));
-        assert_eq!(result.total_count, 1);
+        assert_eq!(result.total_match_count, 1);
     }
 
     #[test]
@@ -712,7 +718,7 @@ mod tests {
         let snapshot: SegmentList = Arc::new(vec![]);
         let result = search_segments(&snapshot, "println").unwrap();
         assert_eq!(result.files.len(), 0);
-        assert_eq!(result.total_count, 0);
+        assert_eq!(result.total_match_count, 0);
     }
 
     #[test]
