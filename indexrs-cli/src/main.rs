@@ -14,17 +14,24 @@ async fn main() {
     match cli.command {
         Command::Search {
             query,
+            regex: _,
+            case_sensitive: _,
+            ignore_case: _,
+            smart_case: _,
             language: _,
             path: _,
             limit: _,
-            format: _,
+            context: _,
+            stats: _,
         } => {
             println!("TODO: implement search (query: {query:?})");
         }
         Command::Files {
             query,
             language: _,
+            path: _,
             limit: _,
+            sort: _,
         } => {
             println!("TODO: implement files (query: {query:?})");
         }
@@ -40,6 +47,7 @@ async fn main() {
             file,
             line: _,
             context: _,
+            highlight_line: _,
         } => {
             println!("TODO: implement preview (file: {})", file.display());
         }
