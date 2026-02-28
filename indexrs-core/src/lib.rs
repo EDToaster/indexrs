@@ -15,6 +15,7 @@ pub mod posting;
 pub mod query;
 pub mod query_plan;
 pub mod query_trigrams;
+pub mod ranking;
 pub mod recovery;
 pub mod search;
 pub mod segment;
@@ -56,6 +57,7 @@ pub use query_plan::{
 pub use query_trigrams::{
     TrigramQuery, extract_literal_trigrams, extract_query_trigrams, extract_regex_trigrams,
 };
+pub use ranking::{MatchType, RankingConfig};
 pub use recovery::{cleanup_lock_file, recover_segments};
 pub use search::{
     ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult,
