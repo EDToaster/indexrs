@@ -8,8 +8,9 @@
 //! - Tombstone overhead per segment
 //!
 //! Usage:
-//!   cargo run -p indexrs-core --example bench_space -- <directory>
+//!   cargo run -p indexrs-core --example bench_space -- <directory> [segment-budget-mb]
 //!   cargo run -p indexrs-core --example bench_space --release -- <directory>
+//!   cargo run -p indexrs-core --example bench_space --release -- <directory> 256
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -52,15 +53,24 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
+/// Default segment budget: 256 MB (matches DEFAULT_COMPACTION_BUDGET).
+const DEFAULT_SEGMENT_BUDGET_MB: u64 = 256;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <directory>", args[0]);
+        eprintln!("Usage: {} <directory> [segment-budget-mb]", args[0]);
         eprintln!();
         eprintln!("Estimates how much disk space an indexrs index would use.");
+        eprintln!("Optional segment-budget-mb sets per-segment content cap (default: {DEFAULT_SEGMENT_BUDGET_MB}).");
         std::process::exit(1);
     }
     let dir = PathBuf::from(&args[1]);
+    let segment_budget_mb: u64 = args
+        .get(2)
+        .map(|s| s.parse().expect("segment-budget-mb must be a number"))
+        .unwrap_or(DEFAULT_SEGMENT_BUDGET_MB);
+    let segment_budget_bytes = segment_budget_mb * 1024 * 1024;
 
     let t0 = Instant::now();
 
@@ -222,6 +232,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("  Positional postings:      {}", human_bytes(ram_positional_postings));
     eprintln!("  HashMap overhead:         ~{}", human_bytes(ram_hashmap_overhead));
     eprintln!("  Estimated peak total:     ~{}", human_bytes(peak_ram));
+
+    // Per-segment estimates: scale proportionally by content budget
+    eprintln!();
+    if raw_content_bytes > 0 && segment_budget_bytes > 0 {
+        let num_segments = (raw_content_bytes + segment_budget_bytes - 1) / segment_budget_bytes;
+        let fraction = if raw_content_bytes > segment_budget_bytes {
+            segment_budget_bytes as f64 / raw_content_bytes as f64
+        } else {
+            1.0
+        };
+        let seg_ram_content = (ram_file_content as f64 * fraction) as u64;
+        let seg_ram_file_postings = (ram_file_postings as f64 * fraction) as u64;
+        let seg_ram_positional = (ram_positional_postings as f64 * fraction) as u64;
+        let seg_ram_hashmap = (ram_hashmap_overhead as f64 * fraction) as u64;
+        let seg_peak_ram = seg_ram_content + seg_ram_file_postings + seg_ram_positional + seg_ram_hashmap;
+
+        eprintln!("=== Peak RAM (budgeted, {} MB/segment) ===", segment_budget_mb);
+        eprintln!("  Estimated segments:       {num_segments}");
+        eprintln!("  File content in memory:   {}", human_bytes(seg_ram_content));
+        eprintln!("  File-level postings:      {}", human_bytes(seg_ram_file_postings));
+        eprintln!("  Positional postings:      {}", human_bytes(seg_ram_positional));
+        eprintln!("  HashMap overhead:         ~{}", human_bytes(seg_ram_hashmap));
+        eprintln!("  Estimated peak total:     ~{}", human_bytes(seg_peak_ram));
+    } else {
+        eprintln!("=== Peak RAM (budgeted) ===");
+        eprintln!("  (no content or no budget to estimate)");
+    }
 
     eprintln!();
     eprintln!("Done in {:.1?}", t0.elapsed());
