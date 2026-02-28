@@ -209,8 +209,7 @@ fn print_stats(
     eprintln!();
     eprintln!(
         "  Search sanity:    \"fn \" -> {} matches in {} files",
-        result.total_match_count,
-        result.total_file_count
+        result.total_match_count, result.total_file_count
     );
 
     Ok(())

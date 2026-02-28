@@ -993,8 +993,7 @@ mod tests {
             SegmentId(0),
             vec![InputFile {
                 path: "main.rs".to_string(),
-                content: b"use std::io;\n\nfn main() {\n    println!(\"hello\");\n}\n"
-                    .to_vec(),
+                content: b"use std::io;\n\nfn main() {\n    println!(\"hello\");\n}\n".to_vec(),
                 mtime: 0,
             }],
         );
@@ -1027,8 +1026,7 @@ mod tests {
             SegmentId(0),
             vec![InputFile {
                 path: "main.rs".to_string(),
-                content: b"line 1\nline 2\nfn main() {\n    println!(\"hello\");\n}\n"
-                    .to_vec(),
+                content: b"line 1\nline 2\nfn main() {\n    println!(\"hello\");\n}\n".to_vec(),
                 mtime: 0,
             }],
         );
