@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use indexrs_core::{
     DEFAULT_MAX_FILE_SIZE, DirectoryWalkerBuilder, Language, Trigram, encode_delta_varint,
-    extract_trigrams, extract_unique_trigrams, is_binary_content, is_binary_path,
+    extract_trigrams_folded, extract_unique_trigrams_folded, is_binary_content, is_binary_path,
 };
 
 /// Metadata entry size in meta.bin (fixed 58 bytes per file).
@@ -156,14 +156,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let file_id = i as u32;
 
         // File-level postings (unique trigrams per file)
-        let unique: HashSet<Trigram> = extract_unique_trigrams(content);
+        let unique: HashSet<Trigram> = extract_unique_trigrams_folded(content);
         unique_trigrams_per_file += unique.len() as u64;
         for tri in unique {
             file_postings.entry(tri).or_default().push(file_id);
         }
 
         // Count total occurrences for positional posting estimate
-        total_trigram_occurrences += extract_trigrams(content).count() as u64;
+        total_trigram_occurrences += extract_trigrams_folded(content).count() as u64;
     }
     eprintln!("\x1b[2K\rBuilt trigram posting lists for {fc} files");
 
