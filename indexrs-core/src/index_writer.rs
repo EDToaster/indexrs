@@ -99,22 +99,31 @@ impl TrigramIndexWriter {
 
         // Encode all positional posting lists, recording offsets and counts
         let mut pos_postings_buf = Vec::new();
-        let mut pos_posting_entries: Vec<(u32, u32)> = Vec::with_capacity(trigrams.len()); // (offset, len)
+        let mut pos_posting_entries: Vec<(u32, u32)> = Vec::with_capacity(trigrams.len());
+
+        let positional_postings = builder.positional_postings();
 
         for trigram in &trigrams {
-            let positions = &builder.positional_postings()[trigram];
-            let raw_positions: Vec<(u32, u32)> =
-                positions.iter().map(|(fid, off)| (fid.0, *off)).collect();
-            let encoded = encode_positional_postings(&raw_positions);
+            if let Some(positions) = positional_postings.get(trigram) {
+                let raw_positions: Vec<(u32, u32)> =
+                    positions.iter().map(|(fid, off)| (fid.0, *off)).collect();
+                let encoded = encode_positional_postings(&raw_positions);
 
-            let offset: u32 = pos_postings_buf.len().try_into().map_err(|_| {
-                IndexError::IndexCorruption("positional posting offset exceeds u32::MAX".into())
-            })?;
-            let len: u32 = positions.len().try_into().map_err(|_| {
-                IndexError::IndexCorruption("positional posting count exceeds u32::MAX".into())
-            })?;
-            pos_postings_buf.extend_from_slice(&encoded);
-            pos_posting_entries.push((offset, len));
+                let offset: u32 = pos_postings_buf.len().try_into().map_err(|_| {
+                    IndexError::IndexCorruption(
+                        "positional posting offset exceeds u32::MAX".into(),
+                    )
+                })?;
+                let len: u32 = positions.len().try_into().map_err(|_| {
+                    IndexError::IndexCorruption(
+                        "positional posting count exceeds u32::MAX".into(),
+                    )
+                })?;
+                pos_postings_buf.extend_from_slice(&encoded);
+                pos_posting_entries.push((offset, len));
+            } else {
+                pos_posting_entries.push((0, 0));
+            }
         }
 
         // Build the complete binary output
@@ -160,6 +169,7 @@ impl TrigramIndexWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index_reader::TrigramIndexReader;
     use crate::posting::PostingListBuilder;
     use crate::types::FileId;
 
@@ -277,5 +287,34 @@ mod tests {
             .collect();
         assert_eq!(entries.len(), 1);
         assert!(entries[0] == "trigrams.bin");
+    }
+
+    #[test]
+    fn test_write_file_only_builder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trigrams.bin");
+
+        let mut builder = PostingListBuilder::file_only();
+        builder.add_file(FileId(0), b"fn main() {}");
+        builder.add_file(FileId(1), b"fn parse() {}");
+        builder.finalize();
+
+        // This should NOT panic
+        TrigramIndexWriter::write(&builder, &path).unwrap();
+
+        let reader = TrigramIndexReader::open(&path).unwrap();
+        assert_eq!(reader.trigram_count(), 17);
+
+        // File-level lookups work
+        let fids = reader
+            .lookup_file_ids(Trigram::from_bytes(b'f', b'n', b' '))
+            .unwrap();
+        assert_eq!(fids, vec![FileId(0), FileId(1)]);
+
+        // Positional lookups return empty
+        let positions = reader
+            .lookup_positions(Trigram::from_bytes(b'f', b'n', b' '))
+            .unwrap();
+        assert!(positions.is_empty());
     }
 }
