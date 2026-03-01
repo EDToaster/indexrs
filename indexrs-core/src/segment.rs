@@ -910,9 +910,7 @@ mod tests {
 
         let mut count = 0usize;
         let writer = SegmentWriter::new(&base_dir, SegmentId(1));
-        writer
-            .build_with_progress(files, || count += 1)
-            .unwrap();
+        writer.build_with_progress(files, || count += 1).unwrap();
 
         assert_eq!(count, 3, "callback should fire once per file");
     }

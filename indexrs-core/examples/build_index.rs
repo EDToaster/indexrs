@@ -45,7 +45,11 @@ fn walk_and_collect(dir: &PathBuf) -> Result<Vec<InputFile>, Box<dyn std::error:
     for (idx, w) in walked.iter().enumerate() {
         if idx % 100 == 0 || idx + 1 == total {
             let pct = (idx + 1) * 100 / total;
-            eprint!("\x1b[2K\r  Filtering files... {pct}% ({}/{})", idx + 1, total);
+            eprint!(
+                "\x1b[2K\r  Filtering files... {pct}% ({}/{})",
+                idx + 1,
+                total
+            );
             let _ = std::io::stderr().flush();
         }
         if is_binary_path(&w.path) {

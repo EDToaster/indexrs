@@ -269,12 +269,13 @@ impl SegmentManager {
             if DEFAULT_COMPACTION_BUDGET > 0 && batch_bytes > DEFAULT_COMPACTION_BUDGET {
                 let seg_id = self.next_segment_id()?;
                 let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-                segments.push(Arc::new(
-                    writer.build_with_progress(std::mem::take(&mut batch), || {
+                segments.push(Arc::new(writer.build_with_progress(
+                    std::mem::take(&mut batch),
+                    || {
                         done += 1;
                         on_progress(done, total);
-                    })?,
-                ));
+                    },
+                )?));
                 batch_bytes = 0;
             }
         }
@@ -283,12 +284,10 @@ impl SegmentManager {
         if !batch.is_empty() {
             let seg_id = self.next_segment_id()?;
             let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-            segments.push(Arc::new(
-                writer.build_with_progress(batch, || {
-                    done += 1;
-                    on_progress(done, total);
-                })?,
-            ));
+            segments.push(Arc::new(writer.build_with_progress(batch, || {
+                done += 1;
+                on_progress(done, total);
+            })?));
         }
 
         self.state.publish(segments);
