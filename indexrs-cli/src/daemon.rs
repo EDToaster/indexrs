@@ -21,6 +21,12 @@ use crate::search_cmd::{self, SearchCmdOptions};
 /// Idle timeout before daemon self-terminates.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
+/// Maximum time to wait for a spawned daemon to become ready.
+const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Interval between connection attempts when waiting for daemon startup.
+const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 /// Request from CLI client to daemon.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -319,6 +325,47 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
     }
 
     Ok(())
+}
+
+/// Spawn a daemon as a detached background process.
+fn spawn_daemon_process(repo_root: &Path) -> Result<(), IndexError> {
+    let exe = std::env::current_exe().map_err(IndexError::Io)?;
+    std::process::Command::new(exe)
+        .arg("daemon-start")
+        .arg("--repo")
+        .arg(repo_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(IndexError::Io)?;
+    Ok(())
+}
+
+/// Connect to a running daemon, or spawn one and wait for it to be ready.
+pub async fn ensure_daemon(repo_root: &Path) -> Result<UnixStream, IndexError> {
+    // Fast path: daemon already running.
+    if let Some(stream) = try_connect(repo_root).await {
+        return Ok(stream);
+    }
+
+    // Spawn a new daemon process.
+    spawn_daemon_process(repo_root)?;
+
+    // Poll until the socket is ready or timeout.
+    let deadline = tokio::time::Instant::now() + DAEMON_STARTUP_TIMEOUT;
+    loop {
+        tokio::time::sleep(DAEMON_POLL_INTERVAL).await;
+        if let Some(stream) = try_connect(repo_root).await {
+            return Ok(stream);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(IndexError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "daemon did not start within timeout",
+            )));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -694,6 +741,60 @@ mod tests {
             lines.iter().any(|l| l.contains("println")),
             "result should contain 'println'"
         );
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_ensure_daemon_connects_to_running() {
+        use indexrs_core::segment::InputFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "test.rs".to_string(),
+                content: b"fn test() {}\n".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+        drop(manager);
+
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+
+        // Start daemon in-process first.
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // ensure_daemon should find the running daemon.
+        let stream = ensure_daemon(&repo_root).await.expect("should connect");
+
+        // Verify with Ping/Pong.
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        let req = serde_json::to_string(&DaemonRequest::Ping).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await.unwrap();
+        let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+        assert!(matches!(resp, DaemonResponse::Pong));
 
         // Shutdown.
         let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
