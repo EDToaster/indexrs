@@ -184,13 +184,23 @@ pub fn search_segments_with_options(
     let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
 
     for segment in snapshot.iter() {
+        // Compute remaining budget for this segment
+        let segment_budget = options
+            .max_results
+            .map(|max| max.saturating_sub(merged.len()));
+
+        // Skip this segment entirely if budget is exhausted
+        if segment_budget == Some(0) {
+            break;
+        }
+
         let tombstones = segment.load_tombstones()?;
         let file_matches = search_single_segment_with_context(
             segment,
             query,
             &tombstones,
             options.context_lines,
-            None,
+            segment_budget,
         )?;
 
         for fm in file_matches {
@@ -1368,5 +1378,65 @@ mod tests {
         let limited =
             search_single_segment_with_pattern(&seg, &pattern, &tombstones, 0, Some(3)).unwrap();
         assert_eq!(limited.len(), 3);
+    }
+
+    #[test]
+    fn test_search_segments_with_options_max_results_early_termination() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Segment 0: 3 files with "println"
+        let seg0 = build_segment(
+            &base_dir,
+            SegmentId(0),
+            (0..3)
+                .map(|i| InputFile {
+                    path: format!("a/file_{i}.rs"),
+                    content: format!("fn f{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                    mtime: 0,
+                })
+                .collect(),
+        );
+
+        // Segment 1: 3 more files with "println" (different paths)
+        let seg1 = build_segment(
+            &base_dir,
+            SegmentId(1),
+            (0..3)
+                .map(|i| InputFile {
+                    path: format!("b/file_{i}.rs"),
+                    content: format!("fn g{i}() {{ println!(\"world\"); }}\n").into_bytes(),
+                    mtime: 0,
+                })
+                .collect(),
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg0, seg1]);
+
+        // Without limit: all 6
+        let all = search_segments_with_options(
+            &snapshot,
+            "println",
+            &SearchOptions {
+                context_lines: 0,
+                max_results: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(all.total_file_count, 6);
+
+        // With limit=2: exactly 2 files returned
+        let limited = search_segments_with_options(
+            &snapshot,
+            "println",
+            &SearchOptions {
+                context_lines: 0,
+                max_results: Some(2),
+            },
+        )
+        .unwrap();
+        assert_eq!(limited.files.len(), 2);
+        assert_eq!(limited.total_file_count, 2);
     }
 }
