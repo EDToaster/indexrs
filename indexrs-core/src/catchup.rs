@@ -113,7 +113,11 @@ mod tests {
             .current_dir(path)
             .output()
             .unwrap();
-        assert!(out.status.success(), "git commit failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]
