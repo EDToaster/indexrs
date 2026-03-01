@@ -350,6 +350,7 @@ fn search_single_segment_with_pattern(
     pattern: &MatchPattern,
     tombstones: &TombstoneSet,
     context_lines: usize,
+    max_file_results: Option<usize>,
 ) -> Result<Vec<FileMatch>, IndexError> {
     // Extract the literal text for trigram candidate filtering.
     // For Regex patterns, we extract the literal prefix before metacharacters.
@@ -457,6 +458,13 @@ fn search_single_segment_with_pattern(
             lines: line_matches,
             score,
         });
+
+        // Early termination: stop once we have enough file results
+        if let Some(max) = max_file_results
+            && file_matches.len() >= max
+        {
+            break;
+        }
     }
 
     Ok(file_matches)
@@ -489,7 +497,8 @@ pub fn search_segments_with_pattern(
 
     for segment in snapshot.iter() {
         let tombstones = segment.load_tombstones()?;
-        let file_matches = search_single_segment_with_pattern(segment, pattern, &tombstones, 0)?;
+        let file_matches =
+            search_single_segment_with_pattern(segment, pattern, &tombstones, 0, None)?;
 
         for fm in file_matches {
             let seg_id = segment.segment_id();
@@ -550,6 +559,7 @@ pub fn search_segments_with_pattern_and_options(
             pattern,
             &tombstones,
             options.context_lines,
+            None,
         )?;
 
         for fm in file_matches {
@@ -1330,5 +1340,33 @@ mod tests {
         // Should have context
         assert!(!result.files[0].lines[0].context_before.is_empty());
         assert!(!result.files[0].lines[0].context_after.is_empty());
+    }
+
+    #[test]
+    fn test_search_single_segment_pattern_early_termination() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..5)
+            .map(|i| InputFile {
+                path: format!("file_{i}.rs"),
+                content: format!("fn f{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let tombstones = TombstoneSet::new();
+        let pattern = MatchPattern::Literal("println".to_string());
+
+        // Without limit
+        let all = search_single_segment_with_pattern(&seg, &pattern, &tombstones, 0, None).unwrap();
+        assert_eq!(all.len(), 5);
+
+        // With limit=3
+        let limited =
+            search_single_segment_with_pattern(&seg, &pattern, &tombstones, 0, Some(3)).unwrap();
+        assert_eq!(limited.len(), 3);
     }
 }
