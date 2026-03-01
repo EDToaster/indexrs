@@ -8,8 +8,11 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
 
 use indexrs_core::SegmentManager;
+use indexrs_core::checkpoint::{Checkpoint, write_checkpoint};
 use indexrs_core::error::IndexError;
+use indexrs_core::git_diff::GitChangeDetector;
 use indexrs_core::search::MatchPattern;
+use indexrs_core::HybridDetector;
 
 use crate::args::SortOrder;
 use crate::color::ColorConfig;
@@ -81,6 +84,50 @@ pub async fn try_connect(repo_root: &Path) -> Option<UnixStream> {
     UnixStream::connect(&path).await.ok()
 }
 
+/// Run the HybridDetector event loop, applying changes to the index.
+///
+/// Blocks the calling thread until the detector's channel disconnects
+/// (which happens when the detector is dropped).
+fn run_live_indexing(
+    repo_root: &Path,
+    indexrs_dir: &Path,
+    manager: &std::sync::Arc<SegmentManager>,
+) -> Result<(), IndexError> {
+    let mut detector = HybridDetector::new(repo_root.to_path_buf())?;
+    let rx = detector.start()?;
+
+    for batch in rx.iter() {
+        if batch.is_empty() {
+            continue;
+        }
+        tracing::debug!(event_count = batch.len(), "applying live change batch");
+
+        if let Err(e) = manager.apply_changes(repo_root, &batch) {
+            tracing::warn!(error = %e, "failed to apply live changes");
+            continue;
+        }
+
+        // Update checkpoint.
+        let git = GitChangeDetector::new(repo_root.to_path_buf());
+        let git_commit = git.get_head_sha().ok();
+        let snapshot = manager.snapshot();
+        let file_count: u64 = snapshot.iter().map(|s| s.entry_count() as u64).sum();
+        let cp = Checkpoint::new(git_commit, file_count);
+        if let Err(e) = write_checkpoint(indexrs_dir, &cp) {
+            tracing::warn!(error = %e, "failed to update checkpoint");
+        }
+
+        // Check if compaction needed.
+        if manager.should_compact() {
+            tracing::info!("compaction triggered by live changes");
+            drop(manager.compact_background());
+        }
+    }
+
+    detector.stop();
+    Ok(())
+}
+
 /// Start a daemon process listening on a Unix domain socket.
 ///
 /// The daemon loads the index from `repo_root/.indexrs/`, listens on the Unix
@@ -102,15 +149,21 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
     let manager = std::sync::Arc::new(SegmentManager::new(&indexrs_dir)?);
     let caught_up = std::sync::Arc::new(AtomicBool::new(false));
 
-    // Spawn background catch-up task.
+    // Spawn background catch-up + live indexing task.
     {
         let mgr = manager.clone();
         let cu = caught_up.clone();
         let repo = repo_root.to_path_buf();
         let idir = indexrs_dir.clone();
         tokio::spawn(async move {
-            match tokio::task::spawn_blocking(move || indexrs_core::run_catchup(&repo, &idir, &mgr))
-                .await
+            // Phase 1: catch-up.
+            match tokio::task::spawn_blocking({
+                let repo = repo.clone();
+                let idir = idir.clone();
+                let mgr = mgr.clone();
+                move || indexrs_core::run_catchup(&repo, &idir, &mgr)
+            })
+            .await
             {
                 Ok(Ok(changes)) => {
                     if !changes.is_empty() {
@@ -128,7 +181,21 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
                 }
             }
             cu.store(true, Ordering::SeqCst);
-            tracing::info!("daemon catch-up complete");
+            tracing::info!("daemon catch-up complete, starting live watcher");
+
+            // Phase 2: start HybridDetector for live changes.
+            // Use std::thread::spawn (not spawn_blocking) so the blocking
+            // event loop does not prevent the tokio runtime from shutting
+            // down during tests or graceful termination.
+            std::thread::spawn({
+                let repo = repo.clone();
+                let idir = idir.clone();
+                let mgr = mgr.clone();
+                move || match run_live_indexing(&repo, &idir, &mgr) {
+                    Ok(()) => tracing::debug!("live indexing stopped"),
+                    Err(e) => tracing::warn!(error = %e, "live indexing failed"),
+                }
+            });
         });
     }
 
