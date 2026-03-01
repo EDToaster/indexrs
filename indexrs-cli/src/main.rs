@@ -49,6 +49,10 @@ async fn main() {
 }
 
 async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::IndexError> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+
     match cli.command {
         Command::Search {
             query,
@@ -104,6 +108,7 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 language,
                 path_glob: path,
                 color: color.enabled,
+                cwd: cwd.clone(),
             };
 
             let stdout = std::io::stdout();
@@ -136,6 +141,7 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 sort: sort_str.to_string(),
                 limit,
                 color: color.enabled,
+                cwd: cwd.clone(),
             };
 
             let stdout = std::io::stdout();

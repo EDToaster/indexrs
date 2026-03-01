@@ -44,6 +44,7 @@ pub enum DaemonRequest {
         language: Option<String>,
         path_glob: Option<String>,
         color: bool,
+        cwd: Option<String>,
     },
     Files {
         language: Option<String>,
@@ -51,6 +52,7 @@ pub enum DaemonRequest {
         sort: String,
         limit: Option<usize>,
         color: bool,
+        cwd: Option<String>,
     },
     Ping,
     Shutdown,
@@ -250,6 +252,7 @@ fn handle_search_request(
     manager: &SegmentManager,
     opts: &SearchCmdOptions,
     color: bool,
+    path_rewriter: &PathRewriter,
 ) -> Result<(Vec<String>, Duration), String> {
     // Validate regex patterns before searching (the core silently ignores invalid regex).
     if let MatchPattern::Regex(ref pat) = opts.pattern {
@@ -263,14 +266,8 @@ fn handle_search_request(
     let mut buf = Vec::new();
     {
         let mut writer = StreamingWriter::new(&mut buf);
-        search_cmd::run_search_streaming(
-            &snapshot,
-            opts,
-            &color,
-            &PathRewriter::identity(),
-            &mut writer,
-        )
-        .map_err(|e| e.to_string())?;
+        search_cmd::run_search_streaming(&snapshot, opts, &color, path_rewriter, &mut writer)
+            .map_err(|e| e.to_string())?;
     }
 
     let output = String::from_utf8_lossy(&buf);
@@ -379,10 +376,15 @@ async fn handle_connection(
                 language,
                 path_glob,
                 color,
+                cwd,
             } => {
                 // Capture staleness before the search so the flag reflects the
                 // snapshot state, not whether catch-up finished mid-search.
                 let stale = !caught_up.load(Ordering::Relaxed);
+                let path_rewriter = match cwd {
+                    Some(ref cwd_str) => PathRewriter::new(repo_root, Path::new(cwd_str)),
+                    None => PathRewriter::identity(),
+                };
                 let pattern = search_cmd::resolve_match_pattern(
                     &query,
                     regex,
@@ -398,7 +400,7 @@ async fn handle_connection(
                     path_glob,
                     stats: false,
                 };
-                match handle_search_request(manager, &opts, color) {
+                match handle_search_request(manager, &opts, color, &path_rewriter) {
                     Ok((lines, elapsed)) => {
                         for line in &lines {
                             let resp = serde_json::to_string(&DaemonResponse::Line {
@@ -437,8 +439,13 @@ async fn handle_connection(
                 sort,
                 limit,
                 color,
+                cwd,
             } => {
                 let stale = !caught_up.load(Ordering::Relaxed);
+                let path_rewriter = match cwd {
+                    Some(ref cwd_str) => PathRewriter::new(repo_root, Path::new(cwd_str)),
+                    None => PathRewriter::identity(),
+                };
                 match handle_files_request(
                     manager,
                     language,
@@ -446,7 +453,7 @@ async fn handle_connection(
                     sort,
                     limit,
                     color,
-                    &PathRewriter::identity(),
+                    &path_rewriter,
                 ) {
                     Ok((lines, elapsed)) => {
                         for line_content in &lines {
@@ -667,6 +674,7 @@ mod tests {
             language: None,
             path_glob: None,
             color: false,
+            cwd: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("hello"));
@@ -680,6 +688,7 @@ mod tests {
             sort: "path".to_string(),
             limit: None,
             color: false,
+            cwd: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("rust"));
@@ -697,6 +706,7 @@ mod tests {
             language: None,
             path_glob: None,
             color: true,
+            cwd: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
@@ -714,6 +724,7 @@ mod tests {
             sort: "path".to_string(),
             limit: None,
             color: true,
+            cwd: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
@@ -938,6 +949,7 @@ mod tests {
             sort: "path".to_string(),
             limit: None,
             color: false,
+            cwd: None,
         })
         .unwrap();
         writer
@@ -1016,6 +1028,7 @@ mod tests {
             language: None,
             path_glob: None,
             color: false,
+            cwd: None,
         })
         .unwrap();
         writer
@@ -1091,6 +1104,7 @@ mod tests {
             language: None,
             path_glob: None,
             color: false,
+            cwd: None,
         })
         .unwrap();
         writer
@@ -1177,6 +1191,7 @@ mod tests {
             language: None,
             path_glob: None,
             color: false,
+            cwd: None,
         };
 
         let mut buf = Vec::new();
@@ -1253,6 +1268,7 @@ mod tests {
             language: None,
             path_glob: None,
             color: true,
+            cwd: None,
         })
         .unwrap();
         writer
