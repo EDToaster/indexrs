@@ -78,6 +78,15 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 (false, true)
             };
 
+            // Trigram search requires at least 3 characters for non-regex queries.
+            if !regex && query.len() < 3 {
+                eprintln!(
+                    "warning: search query must be at least 3 characters (got {})",
+                    query.len()
+                );
+                return Ok(ExitCode::NoResults);
+            }
+
             let request = daemon::DaemonRequest::Search {
                 query,
                 regex,
