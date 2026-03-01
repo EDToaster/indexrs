@@ -50,31 +50,40 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             path,
             limit,
             context,
-            stats,
+            stats: _,
         } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
-            let manager = repo::load_index(&repo_root)?;
-            let snapshot = manager.snapshot();
 
-            let pattern = search_cmd::resolve_match_pattern(
-                &query,
+            // Resolve smart case: daemon uses explicit case flags, not smart_case.
+            let (eff_case_sensitive, eff_ignore_case) = if case_sensitive {
+                (true, false)
+            } else if ignore_case {
+                (false, true)
+            } else if smart_case || (!case_sensitive && !ignore_case) {
+                // Smart case default: case-sensitive if query has uppercase
+                if query.chars().any(|c| c.is_uppercase()) {
+                    (true, false)
+                } else {
+                    (false, true)
+                }
+            } else {
+                (false, true)
+            };
+
+            let request = daemon::DaemonRequest::Search {
+                query,
                 regex,
-                case_sensitive,
-                ignore_case,
-                smart_case,
-            );
-            let opts = search_cmd::SearchCmdOptions {
-                pattern,
-                context_lines: context.unwrap_or(0),
+                case_sensitive: eff_case_sensitive,
+                ignore_case: eff_ignore_case,
                 limit,
+                context_lines: context.unwrap_or(0),
                 language,
                 path_glob: path,
-                stats,
             };
 
             let stdout = std::io::stdout();
             let mut writer = StreamingWriter::new(stdout.lock());
-            search_cmd::run_search(&snapshot, &opts, color, &mut writer)
+            daemon::run_via_daemon(&repo_root, request, &mut writer).await
         }
         Command::Files {
             query: _,
@@ -84,19 +93,23 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             sort,
         } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
-            let manager = repo::load_index(&repo_root)?;
-            let snapshot = manager.snapshot();
 
-            let filter = files::FilesFilter {
+            let sort_str = match sort {
+                args::SortOrder::Path => "path",
+                args::SortOrder::Modified => "modified",
+                args::SortOrder::Size => "size",
+            };
+
+            let request = daemon::DaemonRequest::Files {
                 language,
                 path_glob: path,
-                sort,
+                sort: sort_str.to_string(),
                 limit,
             };
 
             let stdout = std::io::stdout();
             let mut writer = StreamingWriter::new(stdout.lock());
-            files::run_files(&snapshot, &filter, color, &mut writer)
+            daemon::run_via_daemon(&repo_root, request, &mut writer).await
         }
         Command::Preview {
             file,
