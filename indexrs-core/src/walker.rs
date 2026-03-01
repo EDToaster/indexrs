@@ -191,8 +191,23 @@ impl Walker {
     ///
     /// Files are returned in arbitrary order (non-deterministic).
     pub fn run_parallel(self) -> Result<Vec<WalkedFile>> {
+        self.run_parallel_with_progress(|_| {})
+    }
+
+    /// Walk the directory tree in parallel, calling `on_file(count)` after
+    /// each file is discovered (where `count` is the running total).
+    ///
+    /// Like [`run_parallel`](Self::run_parallel) but with a progress callback.
+    /// The callback receives the approximate running file count and may be
+    /// called from multiple threads concurrently, so it must be `Fn + Sync`.
+    /// Files are returned in arbitrary order (non-deterministic).
+    pub fn run_parallel_with_progress<F: Fn(usize) + Sync>(
+        self,
+        on_file: F,
+    ) -> Result<Vec<WalkedFile>> {
         let files: Mutex<Vec<WalkedFile>> = Mutex::new(Vec::new());
         let errors: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let count = std::sync::atomic::AtomicUsize::new(0);
 
         self.builder.build_parallel().run(|| {
             Box::new(|entry| {
@@ -217,6 +232,8 @@ impl Walker {
                     path: entry.into_path(),
                     metadata,
                 });
+                let current = count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                on_file(current);
                 WalkState::Continue
             })
         });
@@ -477,6 +494,30 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["a.rs", "b.rs", "sub/c.rs"]);
+    }
+
+    // ---------------------------------------------------------------
+    // Parallel walking with progress
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parallel_walk_with_progress_reports_count() {
+        let tmp = TempDir::new().unwrap();
+        create_file(tmp.path(), "a.rs", "fn a() {}");
+        create_file(tmp.path(), "b.rs", "fn b() {}");
+        create_file(tmp.path(), "sub/c.rs", "fn c() {}");
+
+        let max_count = std::sync::atomic::AtomicUsize::new(0);
+        let files = DirectoryWalkerBuilder::new(tmp.path())
+            .threads(2)
+            .build()
+            .run_parallel_with_progress(|count| {
+                max_count.store(count, std::sync::atomic::Ordering::Relaxed);
+            })
+            .unwrap();
+
+        assert_eq!(files.len(), 3);
+        assert_eq!(max_count.load(std::sync::atomic::Ordering::Relaxed), 3);
     }
 
     // ---------------------------------------------------------------
