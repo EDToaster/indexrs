@@ -12,6 +12,7 @@
 //!   cargo run -p indexrs-core --example build_index --release -- .
 //!   cargo run -p indexrs-core --example build_index --release -- ~/src/my-repo
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -38,9 +39,15 @@ fn human_bytes(bytes: u64) -> String {
 
 fn walk_and_collect(dir: &PathBuf) -> Result<Vec<InputFile>, Box<dyn std::error::Error>> {
     let walked = DirectoryWalkerBuilder::new(dir).build().run()?;
+    let total = walked.len();
     let mut files = Vec::new();
 
-    for w in &walked {
+    for (idx, w) in walked.iter().enumerate() {
+        if idx % 100 == 0 || idx + 1 == total {
+            let pct = (idx + 1) * 100 / total;
+            eprint!("\x1b[2K\r  Filtering files... {pct}% ({}/{})", idx + 1, total);
+            let _ = std::io::stderr().flush();
+        }
         if is_binary_path(&w.path) {
             continue;
         }
@@ -69,6 +76,7 @@ fn walk_and_collect(dir: &PathBuf) -> Result<Vec<InputFile>, Box<dyn std::error:
             mtime,
         });
     }
+    eprintln!();
 
     Ok(files)
 }
@@ -77,13 +85,24 @@ fn full_build(dir: &PathBuf, manager: &SegmentManager) -> Result<(), Box<dyn std
     eprintln!("  Walking directory...");
     let files = walk_and_collect(dir)?;
     let file_count = files.len();
-    eprintln!("  Found {file_count} indexable files");
+    let total_bytes: u64 = files.iter().map(|f| f.content.len() as u64).sum();
+    eprintln!(
+        "  Found {} indexable files ({})",
+        file_count,
+        human_bytes(total_bytes)
+    );
 
-    eprintln!("  Building segments...");
+    eprint!("  Building segments...");
+    let _ = std::io::stderr().flush();
+    let t_build = Instant::now();
     manager.index_files(files)?;
 
     let snap = manager.snapshot();
-    eprintln!("  Built {} segment(s)", snap.len());
+    eprintln!(
+        " {} segment(s) in {:.1?}",
+        snap.len(),
+        t_build.elapsed()
+    );
 
     Ok(())
 }
