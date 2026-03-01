@@ -6,7 +6,10 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use rayon::prelude::*;
 
 use crate::error::IndexError;
 use crate::index_state::SegmentList;
@@ -15,8 +18,13 @@ use crate::ranking::{MatchType, RankingConfig, ScoringInput, score_file_match};
 use crate::search::{ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult};
 use crate::segment::Segment;
 use crate::tombstone::TombstoneSet;
-use crate::types::SegmentId;
+use crate::types::{FileId, SegmentId};
 use crate::verify::ContentVerifier;
+
+/// Minimum number of candidates before switching from sequential to parallel
+/// verification. Below this threshold, the overhead of rayon's work-stealing
+/// outweighs the benefit of parallelism.
+const PAR_THRESHOLD: usize = 64;
 
 /// Verify that a query string actually appears in file content, and return
 /// the matching lines with highlight ranges and optional context lines.
@@ -252,32 +260,114 @@ fn search_single_segment_with_context(
 ) -> Result<Vec<FileMatch>, IndexError> {
     let candidates = find_candidates(segment.trigram_reader(), query)?;
 
+    if candidates.len() < PAR_THRESHOLD {
+        return search_single_segment_with_context_seq(
+            segment,
+            query,
+            tombstones,
+            context_lines,
+            max_file_results,
+            candidates,
+        );
+    }
+
+    let budget = AtomicUsize::new(max_file_results.unwrap_or(usize::MAX));
+
+    let file_matches: Vec<FileMatch> = candidates
+        .par_iter()
+        .filter_map(|&file_id| {
+            // Check budget before doing expensive work
+            if budget.load(Ordering::Relaxed) == 0 {
+                return None;
+            }
+
+            if tombstones.contains(file_id) {
+                return None;
+            }
+
+            let meta = segment.get_metadata(file_id).ok()??;
+
+            let content = segment
+                .content_reader()
+                .read_content(meta.content_offset, meta.content_len)
+                .ok()?;
+
+            let line_matches = verify_content_matches(&content, query, context_lines);
+            if line_matches.is_empty() {
+                return None;
+            }
+
+            // Decrement budget atomically; if already 0, discard this result
+            if budget
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
+                    if b > 0 { Some(b - 1) } else { None }
+                })
+                .is_err()
+            {
+                return None;
+            }
+
+            let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let input = ScoringInput {
+                path: &meta.path,
+                query,
+                match_type: MatchType::Substring,
+                match_count: total_match_ranges,
+                line_count: meta.line_count,
+                mtime_epoch_secs: meta.mtime_epoch_secs,
+                now_epoch_secs: now,
+            };
+            let config = RankingConfig::default();
+            let score = score_file_match(&input, &config);
+
+            Some(FileMatch {
+                file_id,
+                path: PathBuf::from(&meta.path),
+                language: meta.language,
+                lines: line_matches,
+                score,
+            })
+        })
+        .collect();
+
+    Ok(file_matches)
+}
+
+/// Sequential fallback for `search_single_segment_with_context` when the
+/// candidate set is small enough that rayon overhead is not worthwhile.
+fn search_single_segment_with_context_seq(
+    segment: &Segment,
+    query: &str,
+    tombstones: &TombstoneSet,
+    context_lines: usize,
+    max_file_results: Option<usize>,
+    candidates: Vec<FileId>,
+) -> Result<Vec<FileMatch>, IndexError> {
     let mut file_matches = Vec::new();
 
     for file_id in candidates {
-        // Skip tombstoned entries
         if tombstones.contains(file_id) {
             continue;
         }
 
-        // Read metadata
         let meta = match segment.get_metadata(file_id)? {
             Some(m) => m,
             None => continue,
         };
 
-        // Read and decompress content
         let content = segment
             .content_reader()
             .read_content(meta.content_offset, meta.content_len)?;
 
-        // Verify the query actually appears in the content
         let line_matches = verify_content_matches(&content, query, context_lines);
         if line_matches.is_empty() {
             continue;
         }
 
-        // Compute relevance score using the weighted ranking system
         let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -303,7 +393,6 @@ fn search_single_segment_with_context(
             score,
         });
 
-        // Early termination: stop once we have enough file results
         if let Some(max) = max_file_results
             && file_matches.len() >= max
         {
@@ -354,6 +443,92 @@ fn regex_literal_prefix(pattern: &str) -> String {
     prefix
 }
 
+/// Verify a single candidate file against a `MatchPattern`, returning a `FileMatch`
+/// if the pattern matches. Shared by both sequential and parallel pattern search paths.
+fn verify_candidate_with_pattern(
+    segment: &Segment,
+    file_id: FileId,
+    pattern: &MatchPattern,
+    verifier: &ContentVerifier,
+    context_lines: usize,
+) -> Option<FileMatch> {
+    let meta = segment.get_metadata(file_id).ok()??;
+
+    let content = segment
+        .content_reader()
+        .read_content(meta.content_offset, meta.content_len)
+        .ok()?;
+
+    let line_matches = if context_lines > 0 {
+        let blocks = verifier.verify_with_context(&content);
+        if blocks.is_empty() {
+            return None;
+        }
+        // Flatten ContextBlocks into LineMatches with context populated
+        blocks
+            .into_iter()
+            .flat_map(|block| {
+                let before = block.before;
+                let after = block.after;
+                let match_count = block.matches.len();
+                block
+                    .matches
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(i, m)| LineMatch {
+                        context_before: if i == 0 { before.clone() } else { vec![] },
+                        context_after: if i == match_count - 1 {
+                            after.clone()
+                        } else {
+                            vec![]
+                        },
+                        ..m
+                    })
+            })
+            .collect()
+    } else {
+        let matches = verifier.verify(&content);
+        if matches.is_empty() {
+            return None;
+        }
+        matches
+    };
+
+    let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let match_type = match pattern {
+        MatchPattern::Regex(_) => MatchType::Regex,
+        _ => MatchType::Substring,
+    };
+    let pattern_query = match pattern {
+        MatchPattern::Literal(s)
+        | MatchPattern::LiteralCaseInsensitive(s)
+        | MatchPattern::Regex(s) => s.as_str(),
+    };
+    let input = ScoringInput {
+        path: &meta.path,
+        query: pattern_query,
+        match_type,
+        match_count: total_match_ranges,
+        line_count: meta.line_count,
+        mtime_epoch_secs: meta.mtime_epoch_secs,
+        now_epoch_secs: now,
+    };
+    let config = RankingConfig::default();
+    let score = score_file_match(&input, &config);
+
+    Some(FileMatch {
+        file_id,
+        path: PathBuf::from(&meta.path),
+        language: meta.language,
+        lines: line_matches,
+        score,
+    })
+}
+
 /// Search a single segment using a `MatchPattern` for verification.
 fn search_single_segment_with_pattern(
     segment: &Segment,
@@ -383,6 +558,63 @@ fn search_single_segment_with_pattern(
     };
 
     let verifier = ContentVerifier::new(pattern.clone(), context_lines as u32);
+
+    if candidates.len() < PAR_THRESHOLD {
+        return search_single_segment_with_pattern_seq(
+            segment,
+            pattern,
+            &verifier,
+            tombstones,
+            context_lines,
+            max_file_results,
+            candidates,
+        );
+    }
+
+    let budget = AtomicUsize::new(max_file_results.unwrap_or(usize::MAX));
+
+    let file_matches: Vec<FileMatch> = candidates
+        .par_iter()
+        .filter_map(|&file_id| {
+            if budget.load(Ordering::Relaxed) == 0 {
+                return None;
+            }
+
+            if tombstones.contains(file_id) {
+                return None;
+            }
+
+            let file_match =
+                verify_candidate_with_pattern(segment, file_id, pattern, &verifier, context_lines)?;
+
+            // Decrement budget atomically; if already 0, discard this result
+            if budget
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
+                    if b > 0 { Some(b - 1) } else { None }
+                })
+                .is_err()
+            {
+                return None;
+            }
+
+            Some(file_match)
+        })
+        .collect();
+
+    Ok(file_matches)
+}
+
+/// Sequential fallback for `search_single_segment_with_pattern` when the
+/// candidate set is small enough that rayon overhead is not worthwhile.
+fn search_single_segment_with_pattern_seq(
+    segment: &Segment,
+    pattern: &MatchPattern,
+    verifier: &ContentVerifier,
+    tombstones: &TombstoneSet,
+    context_lines: usize,
+    max_file_results: Option<usize>,
+    candidates: Vec<FileId>,
+) -> Result<Vec<FileMatch>, IndexError> {
     let mut file_matches = Vec::new();
 
     for file_id in candidates {
@@ -390,90 +622,16 @@ fn search_single_segment_with_pattern(
             continue;
         }
 
-        let meta = match segment.get_metadata(file_id)? {
-            Some(m) => m,
-            None => continue,
-        };
-
-        let content = segment
-            .content_reader()
-            .read_content(meta.content_offset, meta.content_len)?;
-
-        let line_matches = if context_lines > 0 {
-            let blocks = verifier.verify_with_context(&content);
-            if blocks.is_empty() {
-                continue;
-            }
-            // Flatten ContextBlocks into LineMatches with context populated
-            blocks
-                .into_iter()
-                .flat_map(|block| {
-                    let before = block.before;
-                    let after = block.after;
-                    let match_count = block.matches.len();
-                    block
-                        .matches
-                        .into_iter()
-                        .enumerate()
-                        .map(move |(i, m)| LineMatch {
-                            context_before: if i == 0 { before.clone() } else { vec![] },
-                            context_after: if i == match_count - 1 {
-                                after.clone()
-                            } else {
-                                vec![]
-                            },
-                            ..m
-                        })
-                })
-                .collect()
-        } else {
-            let matches = verifier.verify(&content);
-            if matches.is_empty() {
-                continue;
-            }
-            matches
-        };
-
-        // Compute relevance score using the weighted ranking system
-        let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let match_type = match pattern {
-            MatchPattern::Regex(_) => MatchType::Regex,
-            _ => MatchType::Substring,
-        };
-        let pattern_query = match pattern {
-            MatchPattern::Literal(s)
-            | MatchPattern::LiteralCaseInsensitive(s)
-            | MatchPattern::Regex(s) => s.as_str(),
-        };
-        let input = ScoringInput {
-            path: &meta.path,
-            query: pattern_query,
-            match_type,
-            match_count: total_match_ranges,
-            line_count: meta.line_count,
-            mtime_epoch_secs: meta.mtime_epoch_secs,
-            now_epoch_secs: now,
-        };
-        let config = RankingConfig::default();
-        let score = score_file_match(&input, &config);
-
-        file_matches.push(FileMatch {
-            file_id,
-            path: PathBuf::from(&meta.path),
-            language: meta.language,
-            lines: line_matches,
-            score,
-        });
-
-        // Early termination: stop once we have enough file results
-        if let Some(max) = max_file_results
-            && file_matches.len() >= max
+        if let Some(file_match) =
+            verify_candidate_with_pattern(segment, file_id, pattern, verifier, context_lines)
         {
-            break;
+            file_matches.push(file_match);
+
+            if let Some(max) = max_file_results
+                && file_matches.len() >= max
+            {
+                break;
+            }
         }
     }
 
@@ -1450,5 +1608,155 @@ mod tests {
         .unwrap();
         assert_eq!(limited.files.len(), 2);
         assert_eq!(limited.total_file_count, 2);
+    }
+
+    // ---- Parallel search tests (candidate count > PAR_THRESHOLD) ----
+
+    #[test]
+    fn test_parallel_search_many_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Build a segment with 200 files, all containing "println"
+        // This exceeds PAR_THRESHOLD (64), so the parallel path is exercised.
+        let files: Vec<InputFile> = (0..200)
+            .map(|i| InputFile {
+                path: format!("file_{i:03}.rs"),
+                content: format!("fn func_{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 1700000000 + i as u64,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let result = search_segments(&snapshot, "println").unwrap();
+        assert_eq!(result.total_file_count, 200);
+    }
+
+    #[test]
+    fn test_parallel_search_with_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..200)
+            .map(|i| InputFile {
+                path: format!("file_{i:03}.rs"),
+                content: format!("fn func_{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 1700000000 + i as u64,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let options = SearchOptions {
+            context_lines: 0,
+            max_results: Some(10),
+        };
+        let result = search_segments_with_options(&snapshot, "println", &options).unwrap();
+        assert!(result.total_file_count <= 10);
+        assert!(result.total_file_count >= 1);
+    }
+
+    #[test]
+    fn test_parallel_search_pattern_many_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..200)
+            .map(|i| InputFile {
+                path: format!("file_{i:03}.rs"),
+                content: format!("fn func_{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 1700000000 + i as u64,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+
+        let pattern = MatchPattern::Literal("println".to_string());
+        let result = search_segments_with_pattern(&snapshot, &pattern).unwrap();
+        assert_eq!(result.total_file_count, 200);
+    }
+
+    #[test]
+    fn test_parallel_search_pattern_with_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..200)
+            .map(|i| InputFile {
+                path: format!("file_{i:03}.rs"),
+                content: format!("fn func_{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 1700000000 + i as u64,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+
+        let pattern = MatchPattern::Literal("println".to_string());
+        let options = SearchOptions {
+            context_lines: 0,
+            max_results: Some(10),
+        };
+        let result =
+            search_segments_with_pattern_and_options(&snapshot, &pattern, &options).unwrap();
+        assert!(result.total_file_count <= 10);
+        assert!(result.total_file_count >= 1);
+    }
+
+    #[test]
+    fn test_parallel_search_with_tombstones() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..200)
+            .map(|i| InputFile {
+                path: format!("file_{i:03}.rs"),
+                content: format!("fn func_{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 1700000000 + i as u64,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+
+        // Tombstone even-numbered files
+        let mut ts = TombstoneSet::new();
+        for i in (0..200u32).step_by(2) {
+            ts.insert(FileId(i));
+        }
+        ts.write_to(&seg.dir_path().join("tombstones.bin")).unwrap();
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let result = search_segments(&snapshot, "println").unwrap();
+        // Only odd-numbered files should remain (100 files)
+        assert_eq!(result.total_file_count, 100);
+    }
+
+    #[test]
+    fn test_parallel_search_regex_many_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..200)
+            .map(|i| InputFile {
+                path: format!("file_{i:03}.rs"),
+                content: format!("fn func_{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 1700000000 + i as u64,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+
+        let pattern = MatchPattern::Regex(r"println!\(.*\)".to_string());
+        let result = search_segments_with_pattern(&snapshot, &pattern).unwrap();
+        assert_eq!(result.total_file_count, 200);
     }
 }
