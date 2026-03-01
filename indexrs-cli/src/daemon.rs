@@ -290,6 +290,7 @@ fn handle_files_request(
     sort: String,
     limit: Option<usize>,
     color: bool,
+    path_rewriter: &PathRewriter,
 ) -> Result<(Vec<String>, Duration), String> {
     let start = Instant::now();
     let snapshot = manager.snapshot();
@@ -311,7 +312,8 @@ fn handle_files_request(
     let mut buf = Vec::new();
     {
         let mut writer = StreamingWriter::new(&mut buf);
-        files::run_files(&snapshot, &filter, &color, &mut writer).map_err(|e| e.to_string())?;
+        files::run_files(&snapshot, &filter, &color, path_rewriter, &mut writer)
+            .map_err(|e| e.to_string())?;
     }
 
     let output = String::from_utf8_lossy(&buf);
@@ -437,7 +439,15 @@ async fn handle_connection(
                 color,
             } => {
                 let stale = !caught_up.load(Ordering::Relaxed);
-                match handle_files_request(manager, language, path_glob, sort, limit, color) {
+                match handle_files_request(
+                    manager,
+                    language,
+                    path_glob,
+                    sort,
+                    limit,
+                    color,
+                    &PathRewriter::identity(),
+                ) {
                     Ok((lines, elapsed)) => {
                         for line_content in &lines {
                             let resp = serde_json::to_string(&DaemonResponse::Line {

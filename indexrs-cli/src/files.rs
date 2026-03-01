@@ -9,6 +9,7 @@ use indexrs_core::types::SegmentId;
 use crate::args::SortOrder;
 use crate::color::ColorConfig;
 use crate::output::{ExitCode, StreamingWriter};
+use crate::paths::PathRewriter;
 
 /// Filter options for the files command.
 #[derive(Default)]
@@ -93,6 +94,7 @@ pub fn run_files<W: std::io::Write>(
     snapshot: &SegmentList,
     filter: &FilesFilter,
     color: &ColorConfig,
+    path_rewriter: &PathRewriter,
     writer: &mut StreamingWriter<W>,
 ) -> Result<ExitCode, IndexError> {
     let files = collect_files(snapshot, filter)?;
@@ -102,7 +104,8 @@ pub fn run_files<W: std::io::Write>(
     }
 
     for file in &files {
-        let line = color.format_file_path(&file.path);
+        let display_path = path_rewriter.rewrite(&file.path);
+        let line = color.format_file_path(&display_path);
         if writer.write_line(&line).is_err() {
             // Broken pipe (SIGPIPE) — exit silently
             break;
@@ -232,5 +235,41 @@ mod tests {
         };
         let files = collect_files(&snapshot, &filter).unwrap();
         assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_run_files_rewrites_paths_to_cwd_relative() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = build_test_index(dir.path());
+        let snapshot = manager.snapshot();
+
+        let mut buf = Vec::new();
+        let color = ColorConfig::new(false);
+        let rewriter = PathRewriter::new(Path::new("/repo"), Path::new("/repo/src"));
+
+        let exit = {
+            let mut writer = StreamingWriter::new(&mut buf);
+            run_files(
+                &snapshot,
+                &FilesFilter::default(),
+                &color,
+                &rewriter,
+                &mut writer,
+            )
+            .unwrap()
+        };
+        let output = String::from_utf8(buf).unwrap();
+
+        // "src/main.rs" should become "main.rs"
+        assert!(
+            output.contains("main.rs\n"),
+            "expected rewritten src/main.rs -> main.rs, got: {output}"
+        );
+        // "README.md" should become "../README.md"
+        assert!(
+            output.contains("../README.md\n"),
+            "expected ../README.md, got: {output}"
+        );
+        assert!(matches!(exit, ExitCode::Success));
     }
 }
