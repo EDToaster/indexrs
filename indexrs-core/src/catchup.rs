@@ -93,16 +93,27 @@ mod tests {
     use std::fs;
 
     fn init_git_repo(path: &Path) {
-        std::process::Command::new("git")
+        let out = std::process::Command::new("git")
             .args(["init"])
             .current_dir(path)
             .output()
             .unwrap();
-        std::process::Command::new("git")
+        assert!(out.status.success(), "git init failed");
+        // Configure user for CI environments where no global git config exists.
+        for (key, val) in [("user.name", "test"), ("user.email", "test@test.com")] {
+            let out = std::process::Command::new("git")
+                .args(["config", key, val])
+                .current_dir(path)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git config {key} failed");
+        }
+        let out = std::process::Command::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(path)
             .output()
             .unwrap();
+        assert!(out.status.success(), "git commit failed: {}", String::from_utf8_lossy(&out.stderr));
     }
 
     #[test]
