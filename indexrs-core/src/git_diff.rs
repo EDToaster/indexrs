@@ -66,27 +66,61 @@ impl GitChangeDetector {
     /// multiple sources (committed, unstaged, untracked), the latest source
     /// wins. Paths under `.indexrs/` are always excluded since those are
     /// index files, not source files.
+    ///
+    /// The three git subprocess calls run in parallel using scoped threads,
+    /// since they are independent read-only queries against git state.
     pub fn detect_changes(&self) -> Result<Vec<ChangeEvent>> {
+        // Run the three git commands in parallel using scoped threads.
+        let (committed_output, unstaged_output, untracked_output) = std::thread::scope(|s| {
+            // 1. Committed changes since last indexed commit.
+            //    Use -z for NUL-delimited output to handle filenames with
+            //    tabs, newlines, or other special characters.
+            let committed_handle = s.spawn(|| -> Result<Option<String>> {
+                if let Some(ref base) = self.last_indexed_commit {
+                    Ok(Some(self.run_git(&[
+                        "diff",
+                        "--name-status",
+                        "-z",
+                        base,
+                        "HEAD",
+                    ])?))
+                } else {
+                    Ok(None)
+                }
+            });
+
+            // 2. Unstaged working-tree changes.
+            let unstaged_handle =
+                s.spawn(|| -> Result<String> { self.run_git(&["diff", "--name-status", "-z"]) });
+
+            // 3. Untracked files.
+            let untracked_handle = s.spawn(|| -> Result<String> {
+                self.run_git(&["ls-files", "-z", "--others", "--exclude-standard"])
+            });
+
+            let committed = committed_handle.join().expect("committed thread panicked");
+            let unstaged = unstaged_handle.join().expect("unstaged thread panicked");
+            let untracked = untracked_handle.join().expect("untracked thread panicked");
+
+            (committed, unstaged, untracked)
+        });
+
+        // Merge results into the HashMap, preserving dedup order:
+        // committed < unstaged < untracked (later sources override earlier).
         let mut changes: HashMap<PathBuf, ChangeKind> = HashMap::new();
 
-        // 1. Committed changes since last indexed commit.
-        //    Use -z for NUL-delimited output to handle filenames with
-        //    tabs, newlines, or other special characters.
-        if let Some(ref base) = self.last_indexed_commit {
-            let output = self.run_git(&["diff", "--name-status", "-z", base, "HEAD"])?;
+        if let Some(output) = committed_output? {
             for event in parse_name_status_nul(&output) {
                 changes.insert(event.path, event.kind);
             }
         }
 
-        // 2. Unstaged working-tree changes.
-        let unstaged = self.run_git(&["diff", "--name-status", "-z"])?;
+        let unstaged = unstaged_output?;
         for event in parse_name_status_nul(&unstaged) {
             changes.insert(event.path, event.kind);
         }
 
-        // 3. Untracked files.
-        let untracked = self.run_git(&["ls-files", "-z", "--others", "--exclude-standard"])?;
+        let untracked = untracked_output?;
         for event in parse_untracked_nul(&untracked) {
             changes.insert(event.path, event.kind);
         }
