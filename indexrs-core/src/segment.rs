@@ -159,6 +159,16 @@ impl Segment {
         reader.get(file_id)
     }
 
+    /// Look up only the `size_bytes` field for a file by its ID.
+    ///
+    /// Lightweight alternative to [`get_metadata()`](Self::get_metadata) --
+    /// avoids deserializing the full entry. Used for candidate ordering
+    /// (sort by file size before verification).
+    pub fn get_size_bytes(&self, file_id: FileId) -> Result<Option<u32>, IndexError> {
+        let reader = MetadataReader::new(&self.meta_mmap, &self.paths_mmap)?;
+        reader.get_size_bytes(file_id)
+    }
+
     /// Return all file IDs in this segment.
     ///
     /// Used when trigram-based candidate filtering is not possible (e.g.,
@@ -849,6 +859,33 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert!(loaded.contains(FileId(0)));
         assert!(!loaded.contains(FileId(1)));
+    }
+
+    #[test]
+    fn test_segment_get_size_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![
+            InputFile {
+                path: "small.rs".to_string(),
+                content: b"ab".to_vec(), // 2 bytes
+                mtime: 0,
+            },
+            InputFile {
+                path: "large.rs".to_string(),
+                content: vec![b'x'; 5000], // 5000 bytes
+                mtime: 0,
+            },
+        ];
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        assert_eq!(segment.get_size_bytes(FileId(0)).unwrap(), Some(2));
+        assert_eq!(segment.get_size_bytes(FileId(1)).unwrap(), Some(5000));
+        assert_eq!(segment.get_size_bytes(FileId(99)).unwrap(), None);
     }
 
     #[test]

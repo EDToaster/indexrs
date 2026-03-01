@@ -15,7 +15,7 @@ use crate::ranking::{MatchType, RankingConfig, ScoringInput, score_file_match};
 use crate::search::{ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult};
 use crate::segment::Segment;
 use crate::tombstone::TombstoneSet;
-use crate::types::SegmentId;
+use crate::types::{FileId, SegmentId};
 use crate::verify::ContentVerifier;
 
 /// Verify that a query string actually appears in file content, and return
@@ -242,6 +242,41 @@ pub fn search_segments_with_options(
     })
 }
 
+/// Sort candidate file IDs by file size (ascending) for faster verification.
+///
+/// Smaller files verify faster (less data to decompress and scan) and are
+/// more likely to be human-written source code. Combined with early
+/// termination, this means the first N results come back much faster.
+///
+/// Uses a stable sort so equal-size files retain their original order.
+/// Falls back to `u32::MAX` for any file ID whose size cannot be looked up
+/// (pushes unknown entries to the end).
+fn sort_candidates_by_size(segment: &Segment, candidates: Vec<FileId>) -> Vec<FileId> {
+    if candidates.len() <= 1 {
+        return candidates;
+    }
+
+    // Build a size lookup: for each candidate, read just size_bytes.
+    // This is cheap -- O(1) per candidate via direct mmap indexing.
+    let sizes: Vec<u32> = candidates
+        .iter()
+        .map(|fid| {
+            segment
+                .get_size_bytes(*fid)
+                .ok()
+                .flatten()
+                .unwrap_or(u32::MAX)
+        })
+        .collect();
+
+    // Sort candidates by their corresponding size (stable sort preserves
+    // original order for equal sizes).
+    let mut indices: Vec<usize> = (0..candidates.len()).collect();
+    indices.sort_by_key(|&i| sizes[i]);
+
+    indices.into_iter().map(|i| candidates[i]).collect()
+}
+
 /// Search a single segment with context line support.
 fn search_single_segment_with_context(
     segment: &Segment,
@@ -251,6 +286,7 @@ fn search_single_segment_with_context(
     max_file_results: Option<usize>,
 ) -> Result<Vec<FileMatch>, IndexError> {
     let candidates = find_candidates(segment.trigram_reader(), query)?;
+    let candidates = sort_candidates_by_size(segment, candidates);
 
     let mut file_matches = Vec::new();
 
@@ -381,6 +417,7 @@ fn search_single_segment_with_pattern(
     } else {
         return Ok(Vec::new());
     };
+    let candidates = sort_candidates_by_size(segment, candidates);
 
     let verifier = ContentVerifier::new(pattern.clone(), context_lines as u32);
     let mut file_matches = Vec::new();
@@ -1450,5 +1487,176 @@ mod tests {
         .unwrap();
         assert_eq!(limited.files.len(), 2);
         assert_eq!(limited.total_file_count, 2);
+    }
+
+    // ---- Candidate ordering tests ----
+
+    #[test]
+    fn test_sort_candidates_by_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Create files of varying sizes; IDs assigned in order: 0=medium, 1=small, 2=large
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "medium.rs".to_string(),
+                    content: vec![b'x'; 500],
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "small.rs".to_string(),
+                    content: vec![b'x'; 100],
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "large.rs".to_string(),
+                    content: vec![b'x'; 2000],
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let candidates = vec![FileId(0), FileId(1), FileId(2)];
+        let sorted = sort_candidates_by_size(&seg, candidates);
+
+        // Should be ordered: small(1, 100B), medium(0, 500B), large(2, 2000B)
+        assert_eq!(sorted, vec![FileId(1), FileId(0), FileId(2)]);
+    }
+
+    #[test]
+    fn test_sort_candidates_by_size_preserves_order_for_equal_sizes() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Two files with the same size
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "a.rs".to_string(),
+                    content: vec![b'x'; 200],
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "b.rs".to_string(),
+                    content: vec![b'x'; 200],
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let candidates = vec![FileId(0), FileId(1)];
+        let sorted = sort_candidates_by_size(&seg, candidates);
+
+        // Stable sort: original order preserved for equal sizes
+        assert_eq!(sorted, vec![FileId(0), FileId(1)]);
+    }
+
+    #[test]
+    fn test_sort_candidates_by_size_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 0,
+            }],
+        );
+
+        let sorted = sort_candidates_by_size(&seg, vec![]);
+        assert!(sorted.is_empty());
+    }
+
+    #[test]
+    fn test_search_single_segment_prefers_smaller_files() {
+        // Verify that with early termination (max_file_results=1), the smaller file
+        // is returned first (proving candidates were sorted by size).
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // File 0 is large (5000+ bytes), file 1 is small (~25 bytes).
+        // Both contain the query "fn main".
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "large.rs".to_string(),
+                    content: {
+                        let mut c = b"fn main() { /* large */ }".to_vec();
+                        c.extend(vec![b' '; 5000]);
+                        c
+                    },
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "small.rs".to_string(),
+                    content: b"fn main() { /* small */ }".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let tombstones = TombstoneSet::new();
+        // Request only 1 result -- with ordering, the small file should be returned
+        let results =
+            search_single_segment_with_context(&seg, "fn main", &tombstones, 0, Some(1)).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].path,
+            PathBuf::from("small.rs"),
+            "smaller file should be verified first and returned under early termination"
+        );
+    }
+
+    #[test]
+    fn test_search_single_segment_with_pattern_prefers_smaller_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "large.rs".to_string(),
+                    content: {
+                        let mut c = b"fn main() { /* large */ }".to_vec();
+                        c.extend(vec![b' '; 5000]);
+                        c
+                    },
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "small.rs".to_string(),
+                    content: b"fn main() { /* small */ }".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let tombstones = TombstoneSet::new();
+        let pattern = MatchPattern::Literal("fn main".to_string());
+        let results =
+            search_single_segment_with_pattern(&seg, &pattern, &tombstones, 0, Some(1)).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].path,
+            PathBuf::from("small.rs"),
+            "smaller file should be verified first with pattern search too"
+        );
     }
 }

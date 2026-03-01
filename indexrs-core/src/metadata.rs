@@ -286,6 +286,50 @@ impl<'a> MetadataReader<'a> {
         Ok(None)
     }
 
+    /// Look up only the `size_bytes` field for a file by its ID.
+    ///
+    /// This is a lightweight alternative to [`get()`](Self::get) that avoids
+    /// deserializing the full entry (no path string allocation). Useful for
+    /// sorting candidates by file size before verification.
+    ///
+    /// Uses O(1) direct indexing when file IDs are sequential (the common case).
+    pub fn get_size_bytes(&self, file_id: FileId) -> Result<Option<u32>, IndexError> {
+        // Byte offset of size_bytes within a 58-byte entry: bytes [30..34]
+        const SIZE_BYTES_OFFSET: usize = 30;
+
+        // Fast path: direct indexing (O(1) when IDs are sequential)
+        if file_id.0 < self.entry_count {
+            let entry_offset = HEADER_SIZE + (file_id.0 as usize) * ENTRY_SIZE;
+            let entry_data = &self.data[entry_offset..entry_offset + ENTRY_SIZE];
+            let stored_id = u32::from_le_bytes(entry_data[0..4].try_into().unwrap());
+            if stored_id == file_id.0 {
+                let size = u32::from_le_bytes(
+                    entry_data[SIZE_BYTES_OFFSET..SIZE_BYTES_OFFSET + 4]
+                        .try_into()
+                        .unwrap(),
+                );
+                return Ok(Some(size));
+            }
+        }
+
+        // Slow path: linear scan for non-contiguous IDs
+        for i in 0..self.entry_count {
+            let entry_offset = HEADER_SIZE + (i as usize) * ENTRY_SIZE;
+            let entry_data = &self.data[entry_offset..entry_offset + ENTRY_SIZE];
+            let stored_id = u32::from_le_bytes(entry_data[0..4].try_into().unwrap());
+            if stored_id == file_id.0 {
+                let size = u32::from_le_bytes(
+                    entry_data[SIZE_BYTES_OFFSET..SIZE_BYTES_OFFSET + 4]
+                        .try_into()
+                        .unwrap(),
+                );
+                return Ok(Some(size));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Iterate over all file metadata entries in order of index position.
     ///
     /// Returns an iterator yielding `Result<FileMetadata, IndexError>` for
@@ -770,5 +814,24 @@ mod tests {
         assert_eq!(entry.content_offset, u64::MAX);
         assert_eq!(entry.content_len, u32::MAX);
         assert_eq!(entry.content_hash, [0xFF; 16]);
+    }
+
+    #[test]
+    fn test_reader_get_size_bytes() {
+        let mut builder = MetadataBuilder::new();
+        builder.add_file(make_entry(0, "small.rs", Language::Rust)); // size_bytes = 1000
+        builder.add_file(make_entry(1, "medium.rs", Language::Rust)); // size_bytes = 1001
+        builder.add_file(make_entry(2, "large.rs", Language::Rust)); // size_bytes = 1002
+
+        let mut meta_buf = Vec::new();
+        let mut paths_buf = Vec::new();
+        builder.write_to(&mut meta_buf, &mut paths_buf).unwrap();
+
+        let reader = MetadataReader::new(&meta_buf, &paths_buf).unwrap();
+
+        assert_eq!(reader.get_size_bytes(FileId(0)).unwrap(), Some(1000));
+        assert_eq!(reader.get_size_bytes(FileId(1)).unwrap(), Some(1001));
+        assert_eq!(reader.get_size_bytes(FileId(2)).unwrap(), Some(1002));
+        assert_eq!(reader.get_size_bytes(FileId(99)).unwrap(), None);
     }
 }
