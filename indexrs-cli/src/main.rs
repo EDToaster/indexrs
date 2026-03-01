@@ -63,6 +63,11 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
         } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
 
+            if !repo_root.join(".indexrs").join("segments").exists() {
+                eprintln!("error: no index found. Run 'indexrs init' first.");
+                return Ok(ExitCode::Error);
+            }
+
             // Resolve smart case: daemon uses explicit case flags, not smart_case.
             let (eff_case_sensitive, eff_ignore_case) = if case_sensitive {
                 (true, false)
@@ -113,6 +118,11 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
         } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
 
+            if !repo_root.join(".indexrs").join("segments").exists() {
+                eprintln!("error: no index found. Run 'indexrs init' first.");
+                return Ok(ExitCode::Error);
+            }
+
             let sort_str = match sort {
                 args::SortOrder::Path => "path",
                 args::SortOrder::Modified => "modified",
@@ -160,9 +170,20 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             println!("Files: {file_count}");
             Ok(ExitCode::Success)
         }
-        Command::Reindex { full: _ } => {
-            eprintln!("reindex: not yet implemented");
-            Ok(ExitCode::Error)
+        Command::Reindex { full } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            if full {
+                // Full rebuild — same as init --force.
+                init::run_init(&repo_root, true)?;
+            } else {
+                // Send Reindex request to daemon.
+                let request = daemon::DaemonRequest::Reindex;
+                let stdout = std::io::stdout();
+                let mut writer = StreamingWriter::new(stdout.lock());
+                daemon::run_via_daemon(&repo_root, request, &mut writer).await?;
+                eprintln!("Reindex triggered.");
+            }
+            Ok(ExitCode::Success)
         }
         Command::Init { force } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;

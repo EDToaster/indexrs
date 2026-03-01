@@ -53,6 +53,7 @@ pub enum DaemonRequest {
     },
     Ping,
     Shutdown,
+    Reindex,
 }
 
 /// Response from daemon to CLI client, one JSON line per message.
@@ -87,40 +88,54 @@ pub async fn try_connect(repo_root: &Path) -> Option<UnixStream> {
 /// Run the HybridDetector event loop, applying changes to the index.
 ///
 /// Blocks the calling thread until the detector's channel disconnects
-/// (which happens when the detector is dropped).
+/// (which happens when the detector is dropped). Periodically checks
+/// `reindex_flag` and triggers a manual reindex when it is set.
 fn run_live_indexing(
     repo_root: &Path,
     indexrs_dir: &Path,
     manager: &std::sync::Arc<SegmentManager>,
+    reindex_flag: &AtomicBool,
 ) -> Result<(), IndexError> {
     let mut detector = HybridDetector::new(repo_root.to_path_buf())?;
     let rx = detector.start()?;
 
-    for batch in rx.iter() {
-        if batch.is_empty() {
-            continue;
-        }
-        tracing::debug!(event_count = batch.len(), "applying live change batch");
-
-        if let Err(e) = manager.apply_changes(repo_root, &batch) {
-            tracing::warn!(error = %e, "failed to apply live changes");
-            continue;
+    loop {
+        // Check for external reindex requests between batches.
+        if reindex_flag.swap(false, Ordering::SeqCst) {
+            tracing::info!("external reindex request received");
+            detector.reindex();
         }
 
-        // Update checkpoint.
-        let git = GitChangeDetector::new(repo_root.to_path_buf());
-        let git_commit = git.get_head_sha().ok();
-        let snapshot = manager.snapshot();
-        let file_count: u64 = snapshot.iter().map(|s| s.entry_count() as u64).sum();
-        let cp = Checkpoint::new(git_commit, file_count);
-        if let Err(e) = write_checkpoint(indexrs_dir, &cp) {
-            tracing::warn!(error = %e, "failed to update checkpoint");
-        }
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(batch) => {
+                if batch.is_empty() {
+                    continue;
+                }
+                tracing::debug!(event_count = batch.len(), "applying live change batch");
 
-        // Check if compaction needed.
-        if manager.should_compact() {
-            tracing::info!("compaction triggered by live changes");
-            drop(manager.compact_background());
+                if let Err(e) = manager.apply_changes(repo_root, &batch) {
+                    tracing::warn!(error = %e, "failed to apply live changes");
+                    continue;
+                }
+
+                // Update checkpoint.
+                let git = GitChangeDetector::new(repo_root.to_path_buf());
+                let git_commit = git.get_head_sha().ok();
+                let snapshot = manager.snapshot();
+                let file_count: u64 = snapshot.iter().map(|s| s.entry_count() as u64).sum();
+                let cp = Checkpoint::new(git_commit, file_count);
+                if let Err(e) = write_checkpoint(indexrs_dir, &cp) {
+                    tracing::warn!(error = %e, "failed to update checkpoint");
+                }
+
+                // Check if compaction needed.
+                if manager.should_compact() {
+                    tracing::info!("compaction triggered by live changes");
+                    drop(manager.compact_background());
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
@@ -148,11 +163,13 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
     let indexrs_dir = repo_root.join(".indexrs");
     let manager = std::sync::Arc::new(SegmentManager::new(&indexrs_dir)?);
     let caught_up = std::sync::Arc::new(AtomicBool::new(false));
+    let reindex_flag = std::sync::Arc::new(AtomicBool::new(false));
 
     // Spawn background catch-up + live indexing task.
     {
         let mgr = manager.clone();
         let cu = caught_up.clone();
+        let rf = reindex_flag.clone();
         let repo = repo_root.to_path_buf();
         let idir = indexrs_dir.clone();
         tokio::spawn(async move {
@@ -191,7 +208,8 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
                 let repo = repo.clone();
                 let idir = idir.clone();
                 let mgr = mgr.clone();
-                move || match run_live_indexing(&repo, &idir, &mgr) {
+                let rf = rf.clone();
+                move || match run_live_indexing(&repo, &idir, &mgr, &rf) {
                     Ok(()) => tracing::debug!("live indexing stopped"),
                     Err(e) => tracing::warn!(error = %e, "live indexing failed"),
                 }
@@ -204,8 +222,9 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
             Ok(Ok((stream, _))) => {
                 let mgr = manager.clone();
                 let cu = caught_up.clone();
+                let rf = reindex_flag.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, &mgr, &cu).await {
+                    if let Err(e) = handle_connection(stream, &mgr, &cu, &rf).await {
                         eprintln!("daemon: connection error: {e}");
                     }
                 });
@@ -303,6 +322,7 @@ async fn handle_connection(
     stream: UnixStream,
     manager: &SegmentManager,
     caught_up: &AtomicBool,
+    reindex_flag: &AtomicBool,
 ) -> Result<(), IndexError> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -434,6 +454,14 @@ async fn handle_connection(
                         .map_err(IndexError::Io)?;
                 }
             },
+            DaemonRequest::Reindex => {
+                reindex_flag.store(true, Ordering::SeqCst);
+                let resp = serde_json::to_string(&DaemonResponse::Pong).unwrap();
+                writer
+                    .write_all(format!("{resp}\n").as_bytes())
+                    .await
+                    .map_err(IndexError::Io)?;
+            }
         }
 
         line.clear();
@@ -635,6 +663,14 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, DaemonRequest::Ping));
+    }
+
+    #[test]
+    fn test_request_roundtrip_reindex() {
+        let req = DaemonRequest::Reindex;
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, DaemonRequest::Reindex));
     }
 
     #[test]
