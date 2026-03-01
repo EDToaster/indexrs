@@ -4,6 +4,7 @@ pub(crate) struct PathRewriter {
     transform: PathTransform,
 }
 
+#[allow(dead_code)] // RelativeTo and Absolute used once daemon CWD plumbing lands (Task 4)
 enum PathTransform {
     Identity,
     RelativeTo { cwd_from_root: PathBuf },
@@ -11,6 +12,7 @@ enum PathTransform {
 }
 
 impl PathRewriter {
+    #[allow(dead_code)] // Used once daemon CWD plumbing lands (Task 4)
     pub(crate) fn new(repo_root: &Path, cwd: &Path) -> Self {
         if cwd == repo_root {
             return Self::identity();

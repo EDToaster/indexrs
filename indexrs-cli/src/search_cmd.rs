@@ -10,6 +10,7 @@ use indexrs_core::search::{MatchPattern, SearchOptions};
 
 use crate::color::ColorConfig;
 use crate::output::{ExitCode, StreamingWriter};
+use crate::paths::PathRewriter;
 
 pub struct SearchCmdOptions {
     pub pattern: MatchPattern,
@@ -60,6 +61,7 @@ pub fn run_search<W: std::io::Write>(
     snapshot: &SegmentList,
     opts: &SearchCmdOptions,
     color: &ColorConfig,
+    path_rewriter: &PathRewriter,
     writer: &mut StreamingWriter<W>,
 ) -> Result<ExitCode, IndexError> {
     let search_opts = SearchOptions {
@@ -81,11 +83,11 @@ pub fn run_search<W: std::io::Write>(
         .map_err(|e| IndexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
 
     for file_match in &result.files {
-        let path_str = file_match.path.to_string_lossy();
+        let raw_path = file_match.path.to_string_lossy();
 
-        // Path filter
+        // Path filter (use raw repo-relative path for glob matching)
         if let Some(ref matcher) = glob_matcher
-            && !matcher.is_match(path_str.as_ref())
+            && !matcher.is_match(raw_path.as_ref())
         {
             continue;
         }
@@ -96,6 +98,8 @@ pub fn run_search<W: std::io::Write>(
         {
             continue;
         }
+
+        let path_str = path_rewriter.rewrite(&raw_path);
 
         for line_match in &file_match.lines {
             let col = line_match
@@ -138,6 +142,7 @@ pub fn run_search_streaming<W: std::io::Write>(
     snapshot: &SegmentList,
     opts: &SearchCmdOptions,
     color: &ColorConfig,
+    path_rewriter: &PathRewriter,
     writer: &mut StreamingWriter<W>,
 ) -> Result<ExitCode, IndexError> {
     let search_opts = SearchOptions {
@@ -163,11 +168,11 @@ pub fn run_search_streaming<W: std::io::Write>(
 
     let mut has_results = false;
     for file_match in rx {
-        let path_str = file_match.path.to_string_lossy();
+        let raw_path = file_match.path.to_string_lossy();
 
-        // Path filter
+        // Path filter (use raw repo-relative path for glob matching)
         if let Some(ref matcher) = glob_matcher
-            && !matcher.is_match(path_str.as_ref())
+            && !matcher.is_match(raw_path.as_ref())
         {
             continue;
         }
@@ -180,6 +185,8 @@ pub fn run_search_streaming<W: std::io::Write>(
         }
 
         has_results = true;
+        let path_str = path_rewriter.rewrite(&raw_path);
+
         for line_match in &file_match.lines {
             let col = line_match
                 .ranges
@@ -299,7 +306,14 @@ mod tests {
 
         let exit = {
             let mut writer = StreamingWriter::new(&mut buf);
-            run_search(&snapshot, &opts, &color, &mut writer).unwrap()
+            run_search(
+                &snapshot,
+                &opts,
+                &color,
+                &PathRewriter::identity(),
+                &mut writer,
+            )
+            .unwrap()
         };
         let output = String::from_utf8(buf).unwrap();
 
@@ -328,7 +342,14 @@ mod tests {
 
         let exit = {
             let mut writer = StreamingWriter::new(&mut buf);
-            run_search(&snapshot, &opts, &color, &mut writer).unwrap()
+            run_search(
+                &snapshot,
+                &opts,
+                &color,
+                &PathRewriter::identity(),
+                &mut writer,
+            )
+            .unwrap()
         };
         assert!(matches!(exit, ExitCode::NoResults));
     }
@@ -353,7 +374,14 @@ mod tests {
 
         let exit = {
             let mut writer = StreamingWriter::new(&mut buf);
-            run_search_streaming(&snapshot, &opts, &color, &mut writer).unwrap()
+            run_search_streaming(
+                &snapshot,
+                &opts,
+                &color,
+                &PathRewriter::identity(),
+                &mut writer,
+            )
+            .unwrap()
         };
         let output = String::from_utf8(buf).unwrap();
 
@@ -382,8 +410,53 @@ mod tests {
 
         let exit = {
             let mut writer = StreamingWriter::new(&mut buf);
-            run_search_streaming(&snapshot, &opts, &color, &mut writer).unwrap()
+            run_search_streaming(
+                &snapshot,
+                &opts,
+                &color,
+                &PathRewriter::identity(),
+                &mut writer,
+            )
+            .unwrap()
         };
         assert!(matches!(exit, ExitCode::NoResults));
+    }
+
+    #[test]
+    fn test_search_rewrites_paths_to_cwd_relative() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = build_test_index(dir.path());
+        let snapshot = manager.snapshot();
+
+        let mut buf = Vec::new();
+        let color = ColorConfig::new(false);
+        // Simulate CWD = repo/src (inside repo)
+        let rewriter = PathRewriter::new(Path::new("/repo"), Path::new("/repo/src"));
+
+        let opts = SearchCmdOptions {
+            pattern: MatchPattern::LiteralCaseInsensitive("println".to_string()),
+            context_lines: 0,
+            limit: 1000,
+            language: None,
+            path_glob: None,
+            stats: false,
+        };
+
+        let exit = {
+            let mut writer = StreamingWriter::new(&mut buf);
+            run_search(&snapshot, &opts, &color, &rewriter, &mut writer).unwrap()
+        };
+        let output = String::from_utf8(buf).unwrap();
+
+        // "src/main.rs" should become "main.rs" with CWD = /repo/src
+        assert!(
+            output.contains("main.rs:2:"),
+            "expected rewritten path, got: {output}"
+        );
+        assert!(
+            !output.contains("src/main.rs:"),
+            "path should not have src/ prefix"
+        );
+        assert!(matches!(exit, ExitCode::Success));
     }
 }

@@ -4,7 +4,6 @@ mod daemon;
 mod files;
 mod init;
 mod output;
-#[allow(dead_code)]
 mod paths;
 mod preview;
 mod repo;
