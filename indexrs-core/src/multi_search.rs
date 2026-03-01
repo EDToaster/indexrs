@@ -4,8 +4,9 @@
 //! filtering tombstoned entries, verifying matches in file content, deduplicating
 //! across segments (preferring the newest), and returning a unified [`SearchResult`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::error::IndexError;
@@ -570,6 +571,69 @@ pub fn search_segments_with_pattern_and_options(
         files,
         duration: start.elapsed(),
     })
+}
+
+/// Stream search results through a channel as they're found.
+///
+/// Unlike [`search_segments_with_pattern_and_options()`], this function sends
+/// each `FileMatch` through the channel immediately after verification,
+/// enabling consumers to display results incrementally.
+///
+/// Results arrive in segment-order (newest segment first), not sorted by
+/// relevance score. The caller is responsible for any post-hoc ordering.
+///
+/// Cancellation: if the receiving end of the channel is dropped (e.g., fzf
+/// exits), the search loop terminates early and returns `Ok(())`.
+///
+/// Deduplication: segments are processed newest-first. If a file path was
+/// already sent from a newer segment, it is skipped in older segments.
+pub fn search_segments_streaming(
+    snapshot: &SegmentList,
+    pattern: &MatchPattern,
+    options: &SearchOptions,
+    sender: mpsc::Sender<FileMatch>,
+) -> Result<(), IndexError> {
+    if snapshot.is_empty() {
+        return Ok(());
+    }
+
+    let mut sent_paths: HashSet<PathBuf> = HashSet::new();
+    let mut sent_count: usize = 0;
+
+    // Process segments in reverse order (newest first) for dedup correctness
+    for segment in snapshot.iter().rev() {
+        let tombstones = segment.load_tombstones()?;
+        let file_matches = search_single_segment_with_pattern(
+            segment,
+            pattern,
+            &tombstones,
+            options.context_lines,
+            None, // no per-segment limit; we limit globally via sent_count
+        )?;
+
+        for fm in file_matches {
+            // Dedup: skip if already sent from a newer segment
+            if sent_paths.contains(&fm.path) {
+                continue;
+            }
+
+            sent_paths.insert(fm.path.clone());
+
+            // Send the match; if receiver dropped, stop searching
+            if sender.send(fm).is_err() {
+                return Ok(());
+            }
+
+            sent_count += 1;
+            if let Some(max) = options.max_results
+                && sent_count >= max
+            {
+                return Ok(());
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1450,5 +1514,168 @@ mod tests {
         .unwrap();
         assert_eq!(limited.files.len(), 2);
         assert_eq!(limited.total_file_count, 2);
+    }
+
+    // ---- Streaming search tests ----
+
+    #[test]
+    fn test_search_segments_streaming_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "main.rs".to_string(),
+                    content: b"fn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "lib.rs".to_string(),
+                    content: b"pub fn lib() { println!(\"world\"); }\n".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let pattern = MatchPattern::LiteralCaseInsensitive("println".to_string());
+        let options = SearchOptions::default();
+
+        let (tx, rx) = mpsc::channel();
+        let result = search_segments_streaming(&snapshot, &pattern, &options, tx);
+        assert!(result.is_ok());
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        assert_eq!(matches.len(), 2);
+        let paths: Vec<String> = matches
+            .iter()
+            .map(|m| m.path.to_string_lossy().to_string())
+            .collect();
+        assert!(paths.contains(&"main.rs".to_string()));
+        assert!(paths.contains(&"lib.rs".to_string()));
+    }
+
+    #[test]
+    fn test_search_segments_streaming_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Build a segment with many matching files
+        let files: Vec<InputFile> = (0..10)
+            .map(|i| InputFile {
+                path: format!("file_{i}.rs"),
+                content: format!("fn f{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let pattern = MatchPattern::LiteralCaseInsensitive("println".to_string());
+        let options = SearchOptions::default();
+
+        let (tx, rx) = mpsc::channel();
+
+        // Receive one result then drop the receiver
+        let handle = std::thread::spawn(move || {
+            let first = rx.recv().unwrap();
+            drop(rx); // drop receiver to signal cancellation
+            first
+        });
+
+        let result = search_segments_streaming(&snapshot, &pattern, &options, tx);
+        assert!(result.is_ok()); // should not error on cancellation
+
+        let first_match = handle.join().unwrap();
+        assert!(!first_match.lines.is_empty());
+    }
+
+    #[test]
+    fn test_search_segments_streaming_dedup_newest_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        // Segment 0: old version of main.rs
+        let seg0 = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"fn main() { println!(\"old version\"); }\n".to_vec(),
+                mtime: 100,
+            }],
+        );
+
+        // Segment 1: new version of main.rs
+        let seg1 = build_segment(
+            &base_dir,
+            SegmentId(1),
+            vec![InputFile {
+                path: "main.rs".to_string(),
+                content: b"fn main() { println!(\"new version\"); }\n".to_vec(),
+                mtime: 200,
+            }],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg0, seg1]);
+        let pattern = MatchPattern::LiteralCaseInsensitive("println".to_string());
+        let options = SearchOptions::default();
+
+        let (tx, rx) = mpsc::channel();
+        search_segments_streaming(&snapshot, &pattern, &options, tx).unwrap();
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        // Should only have one result (deduped)
+        assert_eq!(matches.len(), 1);
+        // Should be from the newer segment
+        assert!(matches[0].lines[0].content.contains("new version"));
+    }
+
+    #[test]
+    fn test_search_segments_streaming_max_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files: Vec<InputFile> = (0..10)
+            .map(|i| InputFile {
+                path: format!("file_{i}.rs"),
+                content: format!("fn f{i}() {{ println!(\"hello\"); }}\n").into_bytes(),
+                mtime: 0,
+            })
+            .collect();
+
+        let seg = build_segment(&base_dir, SegmentId(0), files);
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let pattern = MatchPattern::LiteralCaseInsensitive("println".to_string());
+        let options = SearchOptions {
+            context_lines: 0,
+            max_results: Some(3),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        search_segments_streaming(&snapshot, &pattern, &options, tx).unwrap();
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        assert_eq!(matches.len(), 3);
+    }
+
+    #[test]
+    fn test_search_segments_streaming_empty_snapshot() {
+        let snapshot: SegmentList = Arc::new(vec![]);
+        let pattern = MatchPattern::LiteralCaseInsensitive("println".to_string());
+        let options = SearchOptions::default();
+
+        let (tx, rx) = mpsc::channel();
+        search_segments_streaming(&snapshot, &pattern, &options, tx).unwrap();
+
+        let matches: Vec<FileMatch> = rx.into_iter().collect();
+        assert!(matches.is_empty());
     }
 }

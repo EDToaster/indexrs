@@ -136,7 +136,8 @@ fn handle_search_request(
     let mut buf = Vec::new();
     {
         let mut writer = StreamingWriter::new(&mut buf);
-        search_cmd::run_search(&snapshot, opts, &color, &mut writer).map_err(|e| e.to_string())?;
+        search_cmd::run_search_streaming(&snapshot, opts, &color, &mut writer)
+            .map_err(|e| e.to_string())?;
     }
 
     let output = String::from_utf8_lossy(&buf);
