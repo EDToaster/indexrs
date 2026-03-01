@@ -14,6 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
+use rayon::prelude::*;
 
 use crate::content::{ContentStoreReader, ContentStoreWriter};
 use crate::error::IndexError;
@@ -280,44 +281,67 @@ impl SegmentWriter {
         files: Vec<InputFile>,
         mut on_file_done: F,
     ) -> Result<Segment, IndexError> {
+        /// Zstd compression level matching `ContentStoreWriter::add_content`.
+        const ZSTD_LEVEL: i32 = 3;
+
+        /// Per-file results computed in the parallel phase.
+        struct ProcessedFile {
+            content_hash: [u8; 16],
+            language: Language,
+            line_count: u32,
+            compressed: Vec<u8>,
+        }
+
         let mut posting_builder = PostingListBuilder::file_only();
         let mut metadata_builder = MetadataBuilder::new();
         let mut content_writer =
             ContentStoreWriter::new(&temp_dir.join("content.zst")).map_err(IndexError::Io)?;
 
-        for (i, input) in files.iter().enumerate() {
+        // Phase 1: Parallel per-file processing (blake3 hash + zstd compress)
+        let processed: Vec<ProcessedFile> = files
+            .par_iter()
+            .map(|input| {
+                let hash = blake3::hash(&input.content);
+                let mut content_hash = [0u8; 16];
+                content_hash.copy_from_slice(&hash.as_bytes()[..16]);
+
+                let language = Language::from_path(Path::new(&input.path));
+                let line_count = input.content.iter().filter(|&&b| b == b'\n').count() as u32;
+
+                let compressed = zstd::bulk::compress(&input.content, ZSTD_LEVEL)
+                    .expect("zstd compression should not fail on valid input");
+
+                ProcessedFile {
+                    content_hash,
+                    language,
+                    line_count,
+                    compressed,
+                }
+            })
+            .collect();
+
+        // Phase 2: Sequential writes (offset ordering + PostingListBuilder mutation)
+        for (i, (input, proc_file)) in files.iter().zip(processed.iter()).enumerate() {
             let file_id = FileId(u32::try_from(i).map_err(|_| {
                 IndexError::IndexCorruption("too many files for segment (>4B)".to_string())
             })?);
 
-            // Hash content with blake3, truncate to 16 bytes
-            let hash = blake3::hash(&input.content);
-            let mut content_hash = [0u8; 16];
-            content_hash.copy_from_slice(&hash.as_bytes()[..16]);
-
-            // Detect language from path
-            let language = Language::from_path(Path::new(&input.path));
-
-            // Count lines
-            let line_count = input.content.iter().filter(|&&b| b == b'\n').count() as u32;
-
-            // Add to trigram posting lists
+            // Add to trigram posting lists (mutates HashMap, must be sequential)
             posting_builder.add_file(file_id, &input.content);
 
-            // Write compressed content and get (offset, compressed_len)
+            // Write pre-compressed content
             let (content_offset, content_len) = content_writer
-                .add_content(&input.content)
+                .add_raw(&proc_file.compressed)
                 .map_err(IndexError::Io)?;
 
-            // Add metadata entry
             metadata_builder.add_file(FileMetadata {
                 file_id,
                 path: input.path.clone(),
-                content_hash,
-                language,
+                content_hash: proc_file.content_hash,
+                language: proc_file.language,
                 size_bytes: u32::try_from(input.content.len()).unwrap_or(u32::MAX),
                 mtime_epoch_secs: input.mtime,
-                line_count,
+                line_count: proc_file.line_count,
                 content_offset,
                 content_len,
             });

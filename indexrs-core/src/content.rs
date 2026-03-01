@@ -109,6 +109,26 @@ impl ContentStoreWriter {
         Ok((offset, compressed_len))
     }
 
+    /// Write already-compressed content to the store.
+    ///
+    /// Unlike [`add_content`], this method does not compress the input —
+    /// the caller is responsible for providing zstd-compressed bytes.
+    /// Returns `(offset, compressed_len)` like `add_content`.
+    pub fn add_raw(&mut self, compressed: &[u8]) -> std::io::Result<(u64, u32)> {
+        let offset = self.current_offset;
+        let compressed_len: u32 = compressed.len().try_into().map_err(|_| {
+            std::io::Error::other(format!(
+                "compressed block size {} exceeds u32::MAX",
+                compressed.len()
+            ))
+        })?;
+
+        self.writer.write_all(compressed)?;
+        self.current_offset += compressed_len as u64;
+
+        Ok((offset, compressed_len))
+    }
+
     /// Finalize and flush the content store.
     ///
     /// Ensures all buffered data is written to disk. The writer is consumed
