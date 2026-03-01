@@ -27,7 +27,7 @@ async fn main() {
     };
     let color = ColorConfig::new(color_enabled);
 
-    let exit_code = match run(cli, &color) {
+    let exit_code = match run(cli, &color).await {
         Ok(code) => code as i32,
         Err(e) => {
             eprintln!("error: {e}");
@@ -38,7 +38,7 @@ async fn main() {
     std::process::exit(exit_code);
 }
 
-fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::IndexError> {
+async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::IndexError> {
     match cli.command {
         Command::Search {
             query,
@@ -130,6 +130,11 @@ fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::IndexErr
         Command::Reindex { full: _ } => {
             eprintln!("reindex: not yet implemented");
             Ok(ExitCode::Error)
+        }
+        Command::DaemonStart => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            daemon::start_daemon(&repo_root).await?;
+            Ok(ExitCode::Success)
         }
     }
 }

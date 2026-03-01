@@ -156,4 +156,8 @@ pub enum Command {
         #[arg(long)]
         full: bool,
     },
+
+    /// Internal: run as daemon process (hidden from help)
+    #[command(name = "daemon-start", hide = true)]
+    DaemonStart,
 }
