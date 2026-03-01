@@ -16,21 +16,29 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     let indexrs_dir = repo_root.join(".indexrs");
 
     // Check for existing index unless --force.
-    if !force
-        && let Ok(Some(_)) = read_checkpoint(&indexrs_dir)
-    {
-        return Err(IndexError::Io(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "index already exists. Use --force to rebuild.",
-        )));
+    if !force {
+        match read_checkpoint(&indexrs_dir) {
+            Ok(Some(_)) => {
+                return Err(IndexError::Io(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "index already exists. Use --force to rebuild.",
+                )));
+            }
+            Err(e) => return Err(e),
+            Ok(None) => {} // No checkpoint — proceed with init.
+        }
     }
 
-    // If forcing, remove existing segments.
+    // If forcing, remove existing segments and stale checkpoint.
     if force {
         let segments_dir = indexrs_dir.join("segments");
         if segments_dir.exists() {
             eprintln!("Removing existing index...");
             std::fs::remove_dir_all(&segments_dir)?;
+        }
+        let checkpoint_path = indexrs_dir.join("checkpoint.json");
+        if checkpoint_path.exists() {
+            std::fs::remove_file(&checkpoint_path)?;
         }
     }
 
@@ -44,9 +52,19 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     // Collect indexable files.
     let mut files = Vec::new();
     for wf in &walked {
+        // Pre-filter by size and extension before reading content.
+        if wf.metadata.len() > DEFAULT_MAX_FILE_SIZE {
+            continue;
+        }
+        if indexrs_core::is_binary_path(&wf.path) {
+            continue;
+        }
         let content = match std::fs::read(&wf.path) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::warn!(path = %wf.path.display(), error = %e, "skipping file: read error");
+                continue;
+            }
         };
         if !should_index_file(&wf.path, &content, DEFAULT_MAX_FILE_SIZE) {
             continue;
