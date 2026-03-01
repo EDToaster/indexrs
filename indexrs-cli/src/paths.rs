@@ -12,10 +12,18 @@ enum PathTransform {
 
 impl PathRewriter {
     pub(crate) fn new(repo_root: &Path, cwd: &Path) -> Self {
+        // Canonicalize both to handle symlinks (e.g., macOS /var -> /private/var).
+        let repo_root = repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| repo_root.to_path_buf());
+        let cwd = cwd
+            .canonicalize()
+            .unwrap_or_else(|_| cwd.to_path_buf());
+
         if cwd == repo_root {
             return Self::identity();
         }
-        match cwd.strip_prefix(repo_root) {
+        match cwd.strip_prefix(&repo_root) {
             Ok(rel) => Self {
                 transform: PathTransform::RelativeTo {
                     cwd_from_root: rel.to_path_buf(),
