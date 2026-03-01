@@ -132,14 +132,16 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     progress.update("Walking file tree...");
 
     let walker = DirectoryWalkerBuilder::new(repo_root).build();
-    let walked = walker.run_with_progress(|count| {
+    let progress = std::sync::Mutex::new(progress);
+    let walked = walker.run_parallel_with_progress(|count| {
         if count % step == 0 {
-            progress.update(&format!(
+            progress.lock().unwrap().update(&format!(
                 "Walking file tree... {} files found",
                 fmt_count(count)
             ));
         }
     })?;
+    let mut progress = progress.into_inner().unwrap();
 
     let walk_elapsed = walk_start.elapsed();
     progress.finish(&format!(
