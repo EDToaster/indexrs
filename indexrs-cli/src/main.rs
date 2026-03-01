@@ -181,7 +181,6 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 let stdout = std::io::stdout();
                 let mut writer = StreamingWriter::new(stdout.lock());
                 daemon::run_via_daemon(&repo_root, request, &mut writer).await?;
-                eprintln!("Reindex triggered.");
             }
             Ok(ExitCode::Success)
         }

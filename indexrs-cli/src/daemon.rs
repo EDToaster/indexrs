@@ -72,6 +72,8 @@ pub enum DaemonResponse {
     Error { message: String },
     /// Ping response.
     Pong,
+    /// Progress update (e.g. during reindex).
+    Progress { message: String },
 }
 
 /// Return the Unix socket path for a given repo root.
@@ -222,9 +224,10 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
             Ok(Ok((stream, _))) => {
                 let mgr = manager.clone();
                 let cu = caught_up.clone();
-                let rf = reindex_flag.clone();
+                let repo = repo_root.to_path_buf();
+                let idir = indexrs_dir.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, &mgr, &cu, &rf).await {
+                    if let Err(e) = handle_connection(stream, &mgr, &cu, &repo, &idir).await {
                         eprintln!("daemon: connection error: {e}");
                     }
                 });
@@ -320,9 +323,10 @@ fn handle_files_request(
 /// newline-delimited JSON responses back.
 async fn handle_connection(
     stream: UnixStream,
-    manager: &SegmentManager,
+    manager: &std::sync::Arc<SegmentManager>,
     caught_up: &AtomicBool,
-    reindex_flag: &AtomicBool,
+    repo_root: &Path,
+    indexrs_dir: &Path,
 ) -> Result<(), IndexError> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -455,12 +459,65 @@ async fn handle_connection(
                 }
             },
             DaemonRequest::Reindex => {
-                reindex_flag.store(true, Ordering::SeqCst);
-                let resp = serde_json::to_string(&DaemonResponse::Pong).unwrap();
-                writer
-                    .write_all(format!("{resp}\n").as_bytes())
-                    .await
-                    .map_err(IndexError::Io)?;
+                let start = Instant::now();
+                let repo = repo_root.to_path_buf();
+                let idir = indexrs_dir.to_path_buf();
+                let mgr = manager.clone();
+
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+                let handle = tokio::task::spawn_blocking(move || {
+                    indexrs_core::run_catchup_with_progress(&repo, &idir, &mgr, |msg| {
+                        let _ = tx.send(msg.to_string());
+                    })
+                });
+
+                // Stream progress messages to client.
+                while let Some(msg) = rx.recv().await {
+                    let resp =
+                        serde_json::to_string(&DaemonResponse::Progress { message: msg }).unwrap();
+                    writer
+                        .write_all(format!("{resp}\n").as_bytes())
+                        .await
+                        .map_err(IndexError::Io)?;
+                }
+
+                // Task finished (tx dropped). Get the result.
+                match handle.await {
+                    Ok(Ok(changes)) => {
+                        let elapsed = start.elapsed();
+                        let resp = serde_json::to_string(&DaemonResponse::Done {
+                            total: changes.len(),
+                            duration_ms: elapsed.as_millis() as u64,
+                            stale: false,
+                        })
+                        .unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
+                    Ok(Err(e)) => {
+                        let resp = serde_json::to_string(&DaemonResponse::Error {
+                            message: e.to_string(),
+                        })
+                        .unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
+                    Err(e) => {
+                        let resp = serde_json::to_string(&DaemonResponse::Error {
+                            message: format!("reindex task panicked: {e}"),
+                        })
+                        .unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
+                }
             }
         }
 
@@ -542,6 +599,12 @@ pub async fn run_via_daemon<W: std::io::Write>(
                 }
             }
             DaemonResponse::Done { total, stale, .. } => {
+                // Clear any progress line on TTY.
+                let stderr = std::io::stderr();
+                if std::io::IsTerminal::is_terminal(&stderr) {
+                    use std::io::Write;
+                    let _ = write!(stderr.lock(), "\r{:<80}\r", "");
+                }
                 let _ = writer.finish();
                 if stale {
                     eprintln!("warning: index is updating, results may be incomplete");
@@ -554,6 +617,18 @@ pub async fn run_via_daemon<W: std::io::Write>(
             }
             DaemonResponse::Error { message } => {
                 return Err(IndexError::Io(std::io::Error::other(message)));
+            }
+            DaemonResponse::Progress { message } => {
+                let stderr = std::io::stderr();
+                let mut handle = stderr.lock();
+                if std::io::IsTerminal::is_terminal(&handle) {
+                    use std::io::Write;
+                    let _ = write!(handle, "\r{message:<80}");
+                    let _ = handle.flush();
+                } else {
+                    use std::io::Write;
+                    let _ = writeln!(handle, "{message}");
+                }
             }
             DaemonResponse::Pong => {}
         }
@@ -740,6 +815,18 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, DaemonResponse::Pong));
+    }
+
+    #[test]
+    fn test_response_roundtrip_progress() {
+        let resp = DaemonResponse::Progress {
+            message: "Detecting changes...".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
+        assert!(
+            matches!(parsed, DaemonResponse::Progress { message } if message == "Detecting changes...")
+        );
     }
 
     #[tokio::test]
