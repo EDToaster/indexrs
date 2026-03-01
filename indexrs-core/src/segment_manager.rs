@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use rayon::prelude::*;
+
 use crate::changes::ChangeEvent;
 use crate::error::IndexError;
 use crate::index_state::{IndexState, SegmentList};
@@ -540,41 +542,53 @@ impl SegmentManager {
         );
         let start = std::time::Instant::now();
 
-        // Collect live entries, flushing to a new segment when budget is exceeded
+        // Phase 1: Collect all live (non-tombstoned) entries with their segment index.
+        // This is cheap — metadata is already memory-mapped.
+        let mut live_entries: Vec<(usize, FileMetadata)> = Vec::new();
+        for (seg_idx, segment) in current_segments.iter().enumerate() {
+            let tombstones = segment.load_tombstones()?;
+            let reader = segment.metadata_reader()?;
+            for entry_result in reader.iter_all() {
+                let entry: FileMetadata = entry_result?;
+                if !tombstones.contains(entry.file_id) {
+                    live_entries.push((seg_idx, entry));
+                }
+            }
+        }
+
+        // Phase 2: Decompress content in parallel using rayon.
+        // Each decompression is independent and CPU-bound (zstd decode).
+        let input_files: Vec<InputFile> = live_entries
+            .par_iter()
+            .map(|(seg_idx, entry)| {
+                let segment = &current_segments[*seg_idx];
+                let content = segment
+                    .content_reader()
+                    .read_content(entry.content_offset, entry.content_len)?;
+                Ok(InputFile {
+                    path: entry.path.clone(),
+                    content,
+                    mtime: entry.mtime_epoch_secs,
+                })
+            })
+            .collect::<Result<Vec<InputFile>, IndexError>>()?;
+
+        // Phase 3: Budget-batched segment writing (sequential).
         let mut batch: Vec<InputFile> = Vec::new();
         let mut batch_bytes: usize = 0;
         let mut new_segments: Vec<Arc<Segment>> = Vec::new();
 
-        for segment in &current_segments {
-            let tombstones = segment.load_tombstones()?;
-            let reader = segment.metadata_reader()?;
+        for file in input_files {
+            let content_len = file.content.len();
+            batch.push(file);
+            batch_bytes += content_len;
 
-            for entry_result in reader.iter_all() {
-                let entry: FileMetadata = entry_result?;
-
-                if tombstones.contains(entry.file_id) {
-                    continue;
-                }
-
-                let content = segment
-                    .content_reader()
-                    .read_content(entry.content_offset, entry.content_len)?;
-
-                let content_len = content.len();
-                batch.push(InputFile {
-                    path: entry.path,
-                    content,
-                    mtime: entry.mtime_epoch_secs,
-                });
-                batch_bytes += content_len;
-
-                // Flush if over budget (0 means unlimited)
-                if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
-                    let seg_id = self.next_segment_id()?;
-                    let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-                    new_segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
-                    batch_bytes = 0;
-                }
+            // Flush if over budget (0 means unlimited)
+            if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
+                let seg_id = self.next_segment_id()?;
+                let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+                new_segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
+                batch_bytes = 0;
             }
         }
 
