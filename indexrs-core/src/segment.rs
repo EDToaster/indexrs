@@ -226,6 +226,20 @@ impl SegmentWriter {
     ///
     /// Returns the opened Segment on success.
     pub fn build(self, files: Vec<InputFile>) -> Result<Segment, IndexError> {
+        self.build_with_progress(files, || {})
+    }
+
+    /// Build the segment from a set of input files, calling `on_file_done`
+    /// after each file has been processed (trigram extraction, content
+    /// compression, and metadata recording).
+    ///
+    /// This is identical to [`build`](Self::build) but accepts a progress
+    /// callback so callers can report indexing progress.
+    pub fn build_with_progress<F: FnMut()>(
+        self,
+        files: Vec<InputFile>,
+        on_file_done: F,
+    ) -> Result<Segment, IndexError> {
         let seg_name = format!("seg_{:04}", self.segment_id.0);
         let final_dir = self.base_dir.join(&seg_name);
         let temp_dir = self
@@ -239,7 +253,7 @@ impl SegmentWriter {
         fs::create_dir_all(&temp_dir)?;
 
         // Build result, cleaning up temp dir on error
-        match self.build_inner(&temp_dir, &final_dir, files) {
+        match self.build_inner(&temp_dir, &final_dir, files, on_file_done) {
             Ok(segment) => Ok(segment),
             Err(e) => {
                 // Best-effort cleanup of temp dir
@@ -249,11 +263,12 @@ impl SegmentWriter {
         }
     }
 
-    fn build_inner(
+    fn build_inner<F: FnMut()>(
         &self,
         temp_dir: &Path,
         final_dir: &Path,
         files: Vec<InputFile>,
+        mut on_file_done: F,
     ) -> Result<Segment, IndexError> {
         let mut posting_builder = PostingListBuilder::file_only();
         let mut metadata_builder = MetadataBuilder::new();
@@ -296,6 +311,8 @@ impl SegmentWriter {
                 content_offset,
                 content_len,
             });
+
+            on_file_done();
         }
 
         // Finalize posting lists (sort + dedup)
@@ -865,5 +882,38 @@ mod tests {
             .lookup_file_ids(crate::types::Trigram::from_bytes(b'f', b'n', b' '))
             .unwrap();
         assert_eq!(fids, vec![FileId(0)]);
+    }
+
+    #[test]
+    fn test_build_with_progress_callback_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![
+            InputFile {
+                path: "a.rs".to_string(),
+                content: b"fn a() {}".to_vec(),
+                mtime: 1,
+            },
+            InputFile {
+                path: "b.rs".to_string(),
+                content: b"fn b() {}".to_vec(),
+                mtime: 2,
+            },
+            InputFile {
+                path: "c.rs".to_string(),
+                content: b"fn c() {}".to_vec(),
+                mtime: 3,
+            },
+        ];
+
+        let mut count = 0usize;
+        let writer = SegmentWriter::new(&base_dir, SegmentId(1));
+        writer
+            .build_with_progress(files, || count += 1)
+            .unwrap();
+
+        assert_eq!(count, 3, "callback should fire once per file");
     }
 }
