@@ -2,6 +2,7 @@ mod args;
 mod color;
 mod daemon;
 mod files;
+mod init;
 mod output;
 mod preview;
 mod repo;
@@ -162,6 +163,11 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
         Command::Reindex { full: _ } => {
             eprintln!("reindex: not yet implemented");
             Ok(ExitCode::Error)
+        }
+        Command::Init { force } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            init::run_init(&repo_root, force)?;
+            Ok(ExitCode::Success)
         }
         Command::DaemonStart => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;

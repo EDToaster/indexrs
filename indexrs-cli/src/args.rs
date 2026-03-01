@@ -147,6 +147,13 @@ pub enum Command {
         highlight_line: Option<usize>,
     },
 
+    /// Initialize the index for this repository (required before first search)
+    Init {
+        /// Rebuild the index from scratch even if one exists
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Show index status (file count, last update, etc.)
     Status,
 
