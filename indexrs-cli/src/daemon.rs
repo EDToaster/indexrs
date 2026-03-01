@@ -599,12 +599,6 @@ pub async fn run_via_daemon<W: std::io::Write>(
                 }
             }
             DaemonResponse::Done { total, stale, .. } => {
-                // Clear any progress line on TTY.
-                let stderr = std::io::stderr();
-                if std::io::IsTerminal::is_terminal(&stderr) {
-                    use std::io::Write;
-                    let _ = write!(stderr.lock(), "\r{:<80}\r", "");
-                }
                 let _ = writer.finish();
                 if stale {
                     eprintln!("warning: index is updating, results may be incomplete");
@@ -619,16 +613,7 @@ pub async fn run_via_daemon<W: std::io::Write>(
                 return Err(IndexError::Io(std::io::Error::other(message)));
             }
             DaemonResponse::Progress { message } => {
-                let stderr = std::io::stderr();
-                let mut handle = stderr.lock();
-                if std::io::IsTerminal::is_terminal(&handle) {
-                    use std::io::Write;
-                    let _ = write!(handle, "\r{message:<80}");
-                    let _ = handle.flush();
-                } else {
-                    use std::io::Write;
-                    let _ = writeln!(handle, "{message}");
-                }
+                eprintln!("{message}");
             }
             DaemonResponse::Pong => {}
         }
