@@ -163,6 +163,12 @@ pub struct Walker {
 impl Walker {
     /// Walk the directory tree sequentially, returning all discovered files.
     pub fn run(self) -> Result<Vec<WalkedFile>> {
+        self.run_with_progress(|_| {})
+    }
+
+    /// Walk the directory tree sequentially, calling `on_file(count)` after
+    /// each file is discovered (where `count` is the running total).
+    pub fn run_with_progress<F: FnMut(usize)>(self, mut on_file: F) -> Result<Vec<WalkedFile>> {
         let mut files = Vec::new();
         for entry in self.builder.build() {
             let entry = entry.map_err(|e| IndexError::Walk(e.to_string()))?;
@@ -176,6 +182,7 @@ impl Walker {
                 path: entry.into_path(),
                 metadata,
             });
+            on_file(files.len());
         }
         Ok(files)
     }
