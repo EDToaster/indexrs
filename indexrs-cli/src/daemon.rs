@@ -15,7 +15,7 @@ use indexrs_core::search::MatchPattern;
 use crate::args::SortOrder;
 use crate::color::ColorConfig;
 use crate::files::{self, FilesFilter};
-use crate::output::StreamingWriter;
+use crate::output::{ExitCode, StreamingWriter};
 use crate::search_cmd::{self, SearchCmdOptions};
 
 /// Idle timeout before daemon self-terminates.
@@ -366,6 +366,60 @@ pub async fn ensure_daemon(repo_root: &Path) -> Result<UnixStream, IndexError> {
             )));
         }
     }
+}
+
+/// Send a request to the daemon and stream results to the writer.
+pub async fn run_via_daemon<W: std::io::Write>(
+    repo_root: &Path,
+    request: DaemonRequest,
+    writer: &mut StreamingWriter<W>,
+) -> Result<ExitCode, IndexError> {
+    let stream = ensure_daemon(repo_root).await?;
+    let (reader, mut sock_writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+
+    // Send request.
+    let json = serde_json::to_string(&request)
+        .map_err(|e| IndexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+    sock_writer
+        .write_all(format!("{json}\n").as_bytes())
+        .await
+        .map_err(IndexError::Io)?;
+
+    // Read responses.
+    let mut line = String::new();
+    while reader.read_line(&mut line).await.map_err(IndexError::Io)? > 0 {
+        let resp: DaemonResponse = serde_json::from_str(line.trim())
+            .map_err(|e| IndexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+
+        match resp {
+            DaemonResponse::Line { content } => {
+                if writer.write_line(&content).is_err() {
+                    break; // SIGPIPE — exit silently
+                }
+            }
+            DaemonResponse::Done { total, .. } => {
+                let _ = writer.finish();
+                return Ok(if total == 0 {
+                    ExitCode::NoResults
+                } else {
+                    ExitCode::Success
+                });
+            }
+            DaemonResponse::Error { message } => {
+                return Err(IndexError::Io(std::io::Error::other(message)));
+            }
+            DaemonResponse::Pong => {}
+        }
+
+        line.clear();
+    }
+
+    // Unexpected disconnect.
+    Err(IndexError::Io(std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        "daemon disconnected without sending Done",
+    )))
 }
 
 #[cfg(test)]
@@ -743,6 +797,71 @@ mod tests {
         );
 
         // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_run_via_daemon_search() {
+        use indexrs_core::segment::InputFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![InputFile {
+                path: "src/main.rs".to_string(),
+                content: b"fn main() {\n    println!(\"hello world\");\n}\n".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+        drop(manager);
+
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+
+        // Start daemon in-process.
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Use run_via_daemon to send a search.
+        let request = DaemonRequest::Search {
+            query: "println".to_string(),
+            regex: false,
+            case_sensitive: false,
+            ignore_case: true,
+            limit: 100,
+            context_lines: 0,
+            language: None,
+            path_glob: None,
+        };
+
+        let mut buf = Vec::new();
+        let exit = {
+            let mut writer = crate::output::StreamingWriter::new(&mut buf);
+            run_via_daemon(&repo_root, request, &mut writer)
+                .await
+                .unwrap()
+        };
+        let output = String::from_utf8(buf).unwrap();
+
+        assert!(matches!(exit, crate::output::ExitCode::Success));
+        assert!(
+            output.contains("println"),
+            "output should contain search results"
+        );
+
+        // Shutdown daemon.
+        let stream = try_connect(&repo_root).await.unwrap();
+        let (_, mut writer) = stream.into_split();
         let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
         writer
             .write_all(format!("{req}\n").as_bytes())
