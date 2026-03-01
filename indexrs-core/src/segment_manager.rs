@@ -14,7 +14,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
@@ -221,10 +221,10 @@ impl SegmentManager {
 
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
 
+        // Phase 1: Split files into batches by byte budget
+        let mut batches: Vec<Vec<InputFile>> = Vec::new();
         let mut batch: Vec<InputFile> = Vec::new();
         let mut batch_bytes: usize = 0;
-        let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
-        let segments_before = segments.len();
 
         for file in files {
             let content_len = file.content.len();
@@ -232,21 +232,39 @@ impl SegmentManager {
             batch_bytes += content_len;
 
             if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
-                let seg_id = self.next_segment_id()?;
-                let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-                segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
+                batches.push(std::mem::take(&mut batch));
                 batch_bytes = 0;
             }
         }
-
-        // Flush remaining files
         if !batch.is_empty() {
-            let seg_id = self.next_segment_id()?;
-            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-            segments.push(Arc::new(writer.build(batch)?));
+            batches.push(batch);
         }
 
-        let new_segment_count = segments.len() - segments_before;
+        if batches.is_empty() {
+            return Ok(());
+        }
+
+        // Phase 2: Pre-allocate segment IDs
+        let id_batches: Vec<(SegmentId, Vec<InputFile>)> = batches
+            .into_iter()
+            .map(|b| self.next_segment_id().map(|id| (id, b)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Phase 3: Build segments in parallel
+        let segments_dir = &self.segments_dir;
+        let results: Vec<Result<Arc<Segment>, IndexError>> = id_batches
+            .into_par_iter()
+            .map(|(seg_id, files)| {
+                let writer = SegmentWriter::new(segments_dir, seg_id);
+                writer.build(files).map(Arc::new)
+            })
+            .collect();
+        let new_segments: Vec<Arc<Segment>> = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+        // Phase 4: Publish
+        let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+        let new_segment_count = new_segments.len();
+        segments.extend(new_segments);
         self.state.publish(segments);
 
         tracing::info!(
@@ -271,7 +289,7 @@ impl SegmentManager {
     /// Behaves identically to [`index_files`](Self::index_files) but calls
     /// `on_progress(files_done, files_total)` after each file is processed
     /// during segment building.
-    pub fn index_files_with_progress<F: FnMut(usize, usize)>(
+    pub fn index_files_with_progress<F: FnMut(usize, usize) + Send>(
         &self,
         files: Vec<InputFile>,
         mut on_progress: F,
@@ -279,10 +297,11 @@ impl SegmentManager {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let total = files.len();
-        let mut done = 0usize;
+
+        // Phase 1: Split files into batches
+        let mut batches: Vec<Vec<InputFile>> = Vec::new();
         let mut batch: Vec<InputFile> = Vec::new();
         let mut batch_bytes: usize = 0;
-        let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
 
         for file in files {
             let content_len = file.content.len();
@@ -290,29 +309,51 @@ impl SegmentManager {
             batch_bytes += content_len;
 
             if DEFAULT_COMPACTION_BUDGET > 0 && batch_bytes > DEFAULT_COMPACTION_BUDGET {
-                let seg_id = self.next_segment_id()?;
-                let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-                segments.push(Arc::new(writer.build_with_progress(
-                    std::mem::take(&mut batch),
-                    || {
-                        done += 1;
-                        on_progress(done, total);
-                    },
-                )?));
+                batches.push(std::mem::take(&mut batch));
                 batch_bytes = 0;
             }
         }
-
-        // Flush remaining files
         if !batch.is_empty() {
-            let seg_id = self.next_segment_id()?;
-            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-            segments.push(Arc::new(writer.build_with_progress(batch, || {
-                done += 1;
-                on_progress(done, total);
-            })?));
+            batches.push(batch);
         }
 
+        if batches.is_empty() {
+            return Ok(());
+        }
+
+        // Phase 2: Pre-allocate segment IDs
+        let id_batches: Vec<(SegmentId, Vec<InputFile>)> = batches
+            .into_iter()
+            .map(|b| self.next_segment_id().map(|id| (id, b)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Phase 3: Build segments in parallel with atomic progress counter
+        let done = AtomicUsize::new(0);
+        let segments_dir = &self.segments_dir;
+
+        let results: Vec<Result<Arc<Segment>, IndexError>> = id_batches
+            .into_par_iter()
+            .map(|(seg_id, files)| {
+                let writer = SegmentWriter::new(segments_dir, seg_id);
+                writer
+                    .build_with_progress(files, || {
+                        done.fetch_add(1, Ordering::Relaxed);
+                    })
+                    .map(Arc::new)
+            })
+            .collect();
+
+        let new_segments: Vec<Arc<Segment>> = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+        // Report progress sequentially (callback is FnMut, not Sync)
+        let final_done = done.load(Ordering::Relaxed);
+        for i in 1..=final_done {
+            on_progress(i, total);
+        }
+
+        // Phase 4: Publish
+        let mut segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+        segments.extend(new_segments);
         self.state.publish(segments);
         Ok(())
     }
