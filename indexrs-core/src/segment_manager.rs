@@ -214,12 +214,7 @@ impl SegmentManager {
     ) -> Result<(), IndexError> {
         let file_count = files.len();
         let total_bytes: usize = files.iter().map(|f| f.content.len()).sum();
-        tracing::info!(
-            file_count,
-            total_bytes,
-            max_segment_bytes,
-            "indexing files"
-        );
+        tracing::info!(file_count, total_bytes, max_segment_bytes, "indexing files");
         let start = std::time::Instant::now();
 
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -427,7 +422,11 @@ impl SegmentManager {
         let new_file_count = new_files.len();
         if !new_files.is_empty() {
             let seg_id = self.next_segment_id()?;
-            tracing::debug!(segment_id = seg_id.0, new_file_count, "building replacement segment");
+            tracing::debug!(
+                segment_id = seg_id.0,
+                new_file_count,
+                "building replacement segment"
+            );
             let writer = SegmentWriter::new(&self.segments_dir, seg_id);
             let segment = writer.build(new_files)?;
             updated_segments.push(Arc::new(segment));

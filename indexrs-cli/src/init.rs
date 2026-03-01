@@ -1,12 +1,12 @@
 use std::path::Path;
 use std::time::Instant;
 
-use indexrs_core::checkpoint::{read_checkpoint, write_checkpoint, Checkpoint};
+use indexrs_core::checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
 use indexrs_core::error::IndexError;
 use indexrs_core::git_diff::GitChangeDetector;
 use indexrs_core::segment::InputFile;
 use indexrs_core::walker::DirectoryWalkerBuilder;
-use indexrs_core::{should_index_file, SegmentManager, DEFAULT_MAX_FILE_SIZE};
+use indexrs_core::{DEFAULT_MAX_FILE_SIZE, SegmentManager, should_index_file};
 
 /// Run the `indexrs init` command.
 ///

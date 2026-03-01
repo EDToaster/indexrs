@@ -59,7 +59,11 @@ pub enum DaemonResponse {
     /// A single output line (file path or search match).
     Line { content: String },
     /// End of results with summary.
-    Done { total: usize, duration_ms: u64, stale: bool },
+    Done {
+        total: usize,
+        duration_ms: u64,
+        stale: bool,
+    },
     /// Error message.
     Error { message: String },
     /// Ping response.
@@ -96,7 +100,37 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
 
     let indexrs_dir = repo_root.join(".indexrs");
     let manager = std::sync::Arc::new(SegmentManager::new(&indexrs_dir)?);
-    let caught_up = std::sync::Arc::new(AtomicBool::new(true));
+    let caught_up = std::sync::Arc::new(AtomicBool::new(false));
+
+    // Spawn background catch-up task.
+    {
+        let mgr = manager.clone();
+        let cu = caught_up.clone();
+        let repo = repo_root.to_path_buf();
+        let idir = indexrs_dir.clone();
+        tokio::spawn(async move {
+            match tokio::task::spawn_blocking(move || indexrs_core::run_catchup(&repo, &idir, &mgr))
+                .await
+            {
+                Ok(Ok(changes)) => {
+                    if !changes.is_empty() {
+                        tracing::info!(
+                            change_count = changes.len(),
+                            "daemon catch-up applied changes"
+                        );
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "daemon catch-up failed");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "daemon catch-up task panicked");
+                }
+            }
+            cu.store(true, Ordering::SeqCst);
+            tracing::info!("daemon catch-up complete");
+        });
+    }
 
     loop {
         match timeout(IDLE_TIMEOUT, listener.accept()).await {
@@ -664,6 +698,11 @@ mod tests {
         let indexrs_dir = dir.path().join(".indexrs");
         std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
 
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), b"fn main() {}\n").unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), b"pub fn hello() {}\n").unwrap();
+
         let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
         manager
             .index_files(vec![
@@ -811,6 +850,14 @@ mod tests {
         let indexrs_dir = dir.path().join(".indexrs");
         std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
 
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
+
         // Build an index with searchable content.
         let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
         manager
@@ -894,6 +941,14 @@ mod tests {
         let indexrs_dir = dir.path().join(".indexrs");
         std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
 
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
+
         let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
         manager
             .index_files(vec![InputFile {
@@ -959,6 +1014,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let indexrs_dir = dir.path().join(".indexrs");
         std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Write source files to disk so background catch-up doesn't tombstone them.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/main.rs"),
+            b"fn main() {\n    println!(\"hello world\");\n}\n",
+        )
+        .unwrap();
 
         let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
         manager

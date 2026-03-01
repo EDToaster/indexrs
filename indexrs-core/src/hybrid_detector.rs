@@ -117,7 +117,10 @@ impl HybridDetector {
                         Ok(events) => {
                             let deduped = dedup_events(events);
                             if !deduped.is_empty() {
-                                tracing::debug!(event_count = deduped.len(), "forwarding watcher events");
+                                tracing::debug!(
+                                    event_count = deduped.len(),
+                                    "forwarding watcher events"
+                                );
                                 if tx.send(deduped).is_err() {
                                     watcher_disconnected = true;
                                     break;
@@ -152,7 +155,10 @@ impl HybridDetector {
                     tracing::debug!("reindex requested, running git diff");
                     match git.detect_changes() {
                         Ok(events) if !events.is_empty() => {
-                            tracing::debug!(event_count = events.len(), "reindex git diff found changes");
+                            tracing::debug!(
+                                event_count = events.len(),
+                                "reindex git diff found changes"
+                            );
                             let _ = tx.send(dedup_events(events));
                         }
                         Err(e) => {
@@ -167,7 +173,10 @@ impl HybridDetector {
                 if elapsed >= poll_interval {
                     match git.detect_changes() {
                         Ok(events) if !events.is_empty() => {
-                            tracing::debug!(event_count = events.len(), "periodic git diff found changes");
+                            tracing::debug!(
+                                event_count = events.len(),
+                                "periodic git diff found changes"
+                            );
                             let _ = tx.send(dedup_events(events));
                         }
                         Err(e) => {

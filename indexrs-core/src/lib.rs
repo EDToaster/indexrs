@@ -1,4 +1,5 @@
 pub mod binary;
+pub mod catchup;
 pub mod changes;
 pub mod checkpoint;
 pub mod codec;
@@ -33,6 +34,7 @@ pub use binary::{
     DEFAULT_MAX_FILE_SIZE, is_binary_content, is_binary_extension, is_binary_path,
     should_index_file,
 };
+pub use catchup::run_catchup;
 pub use changes::{ChangeEvent, ChangeKind};
 pub use checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
 pub use codec::{
