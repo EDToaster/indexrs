@@ -38,12 +38,14 @@ pub enum DaemonRequest {
         context_lines: usize,
         language: Option<String>,
         path_glob: Option<String>,
+        color: bool,
     },
     Files {
         language: Option<String>,
         path_glob: Option<String>,
         sort: String,
         limit: Option<usize>,
+        color: bool,
     },
     Ping,
     Shutdown,
@@ -232,6 +234,7 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                 context_lines,
                 language,
                 path_glob,
+                color: _,
             } => {
                 let pattern = search_cmd::resolve_match_pattern(
                     &query,
@@ -285,6 +288,7 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                 path_glob,
                 sort,
                 limit,
+                color: _,
             } => match handle_files_request(manager, language, path_glob, sort, limit) {
                 Ok((lines, elapsed)) => {
                     for line_content in &lines {
@@ -435,6 +439,7 @@ mod tests {
             context_lines: 0,
             language: None,
             path_glob: None,
+            color: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("hello"));
@@ -447,9 +452,48 @@ mod tests {
             path_glob: None,
             sort: "path".to_string(),
             limit: None,
+            color: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("rust"));
+    }
+
+    #[test]
+    fn test_request_serialize_search_with_color() {
+        let req = DaemonRequest::Search {
+            query: "hello".to_string(),
+            regex: false,
+            case_sensitive: false,
+            ignore_case: true,
+            limit: 1000,
+            context_lines: 0,
+            language: None,
+            path_glob: None,
+            color: true,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
+        match parsed {
+            DaemonRequest::Search { color, .. } => assert!(color),
+            _ => panic!("expected Search"),
+        }
+    }
+
+    #[test]
+    fn test_request_serialize_files_with_color() {
+        let req = DaemonRequest::Files {
+            language: None,
+            path_glob: None,
+            sort: "path".to_string(),
+            limit: None,
+            color: true,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
+        match parsed {
+            DaemonRequest::Files { color, .. } => assert!(color),
+            _ => panic!("expected Files"),
+        }
     }
 
     #[test]
@@ -620,6 +664,7 @@ mod tests {
             path_glob: None,
             sort: "path".to_string(),
             limit: None,
+            color: false,
         })
         .unwrap();
         writer
@@ -697,6 +742,7 @@ mod tests {
             context_lines: 0,
             language: None,
             path_glob: None,
+            color: false,
         })
         .unwrap();
         writer
@@ -763,6 +809,7 @@ mod tests {
             context_lines: 0,
             language: None,
             path_glob: None,
+            color: false,
         })
         .unwrap();
         writer
@@ -840,6 +887,7 @@ mod tests {
             context_lines: 0,
             language: None,
             path_glob: None,
+            color: false,
         };
 
         let mut buf = Vec::new();

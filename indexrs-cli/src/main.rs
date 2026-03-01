@@ -79,6 +79,7 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 context_lines: context.unwrap_or(0),
                 language,
                 path_glob: path,
+                color: color.enabled,
             };
 
             let stdout = std::io::stdout();
@@ -105,6 +106,7 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 path_glob: path,
                 sort: sort_str.to_string(),
                 limit,
+                color: color.enabled,
             };
 
             let stdout = std::io::stdout();
