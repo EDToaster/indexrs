@@ -8,6 +8,7 @@ clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 globset = "0.4"
+regex = "1"
 libc = "0.2"
 nu-ansi-term = "0.50"
 serde = { version = "1", features = ["derive"] }

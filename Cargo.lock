@@ -491,6 +491,7 @@ dependencies = [
  "indexrs-core",
  "libc",
  "nu-ansi-term",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

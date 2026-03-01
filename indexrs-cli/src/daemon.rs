@@ -8,6 +8,7 @@ use tokio::time::timeout;
 
 use indexrs_core::SegmentManager;
 use indexrs_core::error::IndexError;
+use indexrs_core::search::MatchPattern;
 
 use crate::args::SortOrder;
 use crate::color::ColorConfig;
@@ -113,7 +114,12 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
 fn handle_search_request(
     manager: &SegmentManager,
     opts: &SearchCmdOptions,
-) -> (Vec<String>, Duration) {
+) -> Result<(Vec<String>, Duration), String> {
+    // Validate regex patterns before searching (the core silently ignores invalid regex).
+    if let MatchPattern::Regex(ref pat) = opts.pattern {
+        regex::Regex::new(pat).map_err(|e| format!("invalid regex: {e}"))?;
+    }
+
     let start = Instant::now();
     let snapshot = manager.snapshot();
     let color = ColorConfig::new(false);
@@ -121,7 +127,7 @@ fn handle_search_request(
     let mut buf = Vec::new();
     {
         let mut writer = StreamingWriter::new(&mut buf);
-        let _ = search_cmd::run_search(&snapshot, opts, &color, &mut writer);
+        search_cmd::run_search(&snapshot, opts, &color, &mut writer).map_err(|e| e.to_string())?;
     }
 
     let output = String::from_utf8_lossy(&buf);
@@ -130,7 +136,7 @@ fn handle_search_request(
         .filter(|l| !l.is_empty())
         .map(|l| l.to_string())
         .collect();
-    (lines, start.elapsed())
+    Ok((lines, start.elapsed()))
 }
 
 /// Execute a Files request against the loaded index.
@@ -140,7 +146,7 @@ fn handle_files_request(
     path_glob: Option<String>,
     sort: String,
     limit: Option<usize>,
-) -> (Vec<String>, Duration) {
+) -> Result<(Vec<String>, Duration), String> {
     let start = Instant::now();
     let snapshot = manager.snapshot();
     let color = ColorConfig::new(false);
@@ -161,7 +167,7 @@ fn handle_files_request(
     let mut buf = Vec::new();
     {
         let mut writer = StreamingWriter::new(&mut buf);
-        let _ = files::run_files(&snapshot, &filter, &color, &mut writer);
+        files::run_files(&snapshot, &filter, &color, &mut writer).map_err(|e| e.to_string())?;
     }
 
     let output = String::from_utf8_lossy(&buf);
@@ -171,7 +177,7 @@ fn handle_files_request(
         .map(|l| l.to_string())
         .collect();
 
-    (lines, start.elapsed())
+    Ok((lines, start.elapsed()))
 }
 
 /// Handle a single client connection.
@@ -236,39 +242,59 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                     path_glob,
                     stats: false,
                 };
-                let (lines, elapsed) = handle_search_request(manager, &opts);
-                for line in &lines {
-                    let resp = serde_json::to_string(&DaemonResponse::Line {
-                        content: line.clone(),
-                    })
-                    .unwrap();
-                    writer
-                        .write_all(format!("{resp}\n").as_bytes())
-                        .await
-                        .map_err(IndexError::Io)?;
+                match handle_search_request(manager, &opts) {
+                    Ok((lines, elapsed)) => {
+                        for line in &lines {
+                            let resp = serde_json::to_string(&DaemonResponse::Line {
+                                content: line.clone(),
+                            })
+                            .unwrap();
+                            writer
+                                .write_all(format!("{resp}\n").as_bytes())
+                                .await
+                                .map_err(IndexError::Io)?;
+                        }
+                        let resp = serde_json::to_string(&DaemonResponse::Done {
+                            total: lines.len(),
+                            duration_ms: elapsed.as_millis() as u64,
+                        })
+                        .unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
+                    Err(msg) => {
+                        let resp =
+                            serde_json::to_string(&DaemonResponse::Error { message: msg }).unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
                 }
-                let resp = serde_json::to_string(&DaemonResponse::Done {
-                    total: lines.len(),
-                    duration_ms: elapsed.as_millis() as u64,
-                })
-                .unwrap();
-                writer
-                    .write_all(format!("{resp}\n").as_bytes())
-                    .await
-                    .map_err(IndexError::Io)?;
             }
             DaemonRequest::Files {
                 language,
                 path_glob,
                 sort,
                 limit,
-            } => {
-                let (lines, elapsed) =
-                    handle_files_request(manager, language, path_glob, sort, limit);
+            } => match handle_files_request(manager, language, path_glob, sort, limit) {
+                Ok((lines, elapsed)) => {
+                    for line_content in &lines {
+                        let resp = serde_json::to_string(&DaemonResponse::Line {
+                            content: line_content.clone(),
+                        })
+                        .unwrap();
+                        writer
+                            .write_all(format!("{resp}\n").as_bytes())
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
 
-                for line_content in &lines {
-                    let resp = serde_json::to_string(&DaemonResponse::Line {
-                        content: line_content.clone(),
+                    let resp = serde_json::to_string(&DaemonResponse::Done {
+                        total: lines.len(),
+                        duration_ms: elapsed.as_millis() as u64,
                     })
                     .unwrap();
                     writer
@@ -276,17 +302,15 @@ async fn handle_connection(stream: UnixStream, manager: &SegmentManager) -> Resu
                         .await
                         .map_err(IndexError::Io)?;
                 }
-
-                let resp = serde_json::to_string(&DaemonResponse::Done {
-                    total: lines.len(),
-                    duration_ms: elapsed.as_millis() as u64,
-                })
-                .unwrap();
-                writer
-                    .write_all(format!("{resp}\n").as_bytes())
-                    .await
-                    .map_err(IndexError::Io)?;
-            }
+                Err(msg) => {
+                    let resp =
+                        serde_json::to_string(&DaemonResponse::Error { message: msg }).unwrap();
+                    writer
+                        .write_all(format!("{resp}\n").as_bytes())
+                        .await
+                        .map_err(IndexError::Io)?;
+                }
+            },
         }
 
         line.clear();
@@ -522,6 +546,70 @@ mod tests {
         assert_eq!(lines.len(), 2, "should list both indexed files");
         assert!(lines.iter().any(|l| l.contains("main.rs")));
         assert!(lines.iter().any(|l| l.contains("lib.rs")));
+
+        // Shutdown.
+        let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(2), daemon_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_search_invalid_regex_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let indexrs_dir = dir.path().join(".indexrs");
+        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+
+        // Create a minimal valid index (empty is fine for error testing).
+        let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+        manager
+            .index_files(vec![indexrs_core::segment::InputFile {
+                path: "test.rs".to_string(),
+                content: b"fn test() {}\n".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+        drop(manager);
+
+        let repo_root = dir.path().to_path_buf();
+        let repo_root_clone = repo_root.clone();
+
+        let daemon_handle = tokio::spawn(async move {
+            start_daemon(&repo_root_clone).await.unwrap();
+        });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let stream = try_connect(&repo_root).await.expect("should connect");
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Send a Search request with an invalid regex.
+        let req = serde_json::to_string(&DaemonRequest::Search {
+            query: "[invalid(".to_string(),
+            regex: true,
+            case_sensitive: false,
+            ignore_case: false,
+            limit: 100,
+            context_lines: 0,
+            language: None,
+            path_glob: None,
+        })
+        .unwrap();
+        writer
+            .write_all(format!("{req}\n").as_bytes())
+            .await
+            .unwrap();
+
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await.unwrap();
+        let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+        assert!(
+            matches!(resp, DaemonResponse::Error { .. }),
+            "invalid regex should return Error, got {resp:?}"
+        );
 
         // Shutdown.
         let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
