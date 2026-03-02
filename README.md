@@ -23,10 +23,10 @@ The index is stored as immutable **segments** on disk. File changes are handled 
 ## Quick start
 
 ```bash
-# Build from source
-cargo build --release --workspace
+# Build from source (inside this repo)
+cargo install --path indexrs-cli
 
-# Index a repository (run from within the repo)
+# Index a repository (run from within the repo that you're indexing)
 indexrs init
 
 # Search for a substring
