@@ -29,10 +29,14 @@ pub fn list_resources() -> ListResourcesResult {
                 description: Some("Overall indexrs index status".to_string()),
                 mime_type: Some("text/plain".to_string()),
                 size: None,
+                title: None,
+                icons: None,
+                meta: None,
             }
             .no_annotation(),
         ],
         next_cursor: None,
+        meta: None,
     }
 }
 
@@ -45,6 +49,8 @@ pub fn list_resource_templates() -> ListResourceTemplatesResult {
                 name: "Indexed File".to_string(),
                 description: Some("Contents of a file as stored in the index".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
             }
             .no_annotation(),
             RawResourceTemplate {
@@ -54,6 +60,8 @@ pub fn list_resource_templates() -> ListResourceTemplatesResult {
                     "Directory tree listing of all indexed files in a repository".to_string(),
                 ),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
             }
             .no_annotation(),
             RawResourceTemplate {
@@ -61,10 +69,13 @@ pub fn list_resource_templates() -> ListResourceTemplatesResult {
                 name: "Repository Status".to_string(),
                 description: Some("Detailed indexing status for a specific repository".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
             }
             .no_annotation(),
         ],
         next_cursor: None,
+        meta: None,
     }
 }
 
@@ -122,9 +133,10 @@ pub fn parse_uri(uri: &str) -> Option<ResourceUri> {
 pub fn read_resource(
     state: &Arc<IndexState>,
     uri: &str,
-) -> Result<ReadResourceResult, rmcp::Error> {
-    let parsed = parse_uri(uri)
-        .ok_or_else(|| rmcp::Error::invalid_params(format!("Invalid resource URI: {uri}"), None))?;
+) -> Result<ReadResourceResult, rmcp::ErrorData> {
+    let parsed = parse_uri(uri).ok_or_else(|| {
+        rmcp::ErrorData::invalid_params(format!("Invalid resource URI: {uri}"), None)
+    })?;
 
     let content = match parsed {
         ResourceUri::Status => read_status(state),
@@ -138,6 +150,7 @@ pub fn read_resource(
             uri: uri.to_string(),
             mime_type: Some("text/plain".to_string()),
             text: content,
+            meta: None,
         }],
     })
 }
@@ -183,7 +196,7 @@ fn read_status(state: &Arc<IndexState>) -> String {
 /// Read a file's content from the index by path.
 ///
 /// Searches segments newest-first so the most recent version wins.
-fn read_file(state: &Arc<IndexState>, path: &str) -> Result<String, rmcp::Error> {
+fn read_file(state: &Arc<IndexState>, path: &str) -> Result<String, rmcp::ErrorData> {
     let segments = state.snapshot();
 
     // Search segments in reverse order (newest first)
@@ -206,14 +219,14 @@ fn read_file(state: &Arc<IndexState>, path: &str) -> Result<String, rmcp::Error>
                     .content_reader()
                     .read_content(meta.content_offset, meta.content_len)
                     .map_err(|e| {
-                        rmcp::Error::internal_error(
+                        rmcp::ErrorData::internal_error(
                             format!("Failed to read content for {path}: {e}"),
                             None,
                         )
                     })?;
 
                 return String::from_utf8(content_bytes).map_err(|_| {
-                    rmcp::Error::internal_error(
+                    rmcp::ErrorData::internal_error(
                         format!("File {path} contains non-UTF-8 content"),
                         None,
                     )
@@ -222,7 +235,7 @@ fn read_file(state: &Arc<IndexState>, path: &str) -> Result<String, rmcp::Error>
         }
     }
 
-    Err(rmcp::Error::resource_not_found(
+    Err(rmcp::ErrorData::resource_not_found(
         format!("File not found: {path}"),
         None,
     ))

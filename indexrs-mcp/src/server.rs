@@ -17,13 +17,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolResult, Content, Implementation, ListResourceTemplatesResult, ListResourcesResult,
-    PaginatedRequestParam, ReadResourceRequestParam, ReadResourceResult, ServerCapabilities,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
     ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
-use rmcp::{ServerHandler, schemars, tool};
+use rmcp::{ErrorData, ServerHandler, schemars, tool, tool_handler, tool_router};
 
 use indexrs_core::index_state::IndexState;
 use indexrs_core::metadata::FileMetadata;
@@ -177,6 +179,8 @@ pub struct IndexrsServer {
     daemon: Option<Arc<DaemonClient>>,
     /// Server start time for uptime calculation.
     start_time: Instant,
+    /// Tool router for MCP tool dispatch.
+    tool_router: ToolRouter<Self>,
 }
 
 impl IndexrsServer {
@@ -195,13 +199,14 @@ impl IndexrsServer {
             root_path,
             daemon,
             start_time: Instant::now(),
+            tool_router: Self::tool_router(),
         }
     }
 }
 
 // ---- Tools -------------------------------------------------------------------
 
-#[tool(tool_box)]
+#[tool_router]
 impl IndexrsServer {
     /// Get indexrs server version and basic status.
     #[tool(
@@ -218,8 +223,8 @@ impl IndexrsServer {
     )]
     async fn search_code(
         &self,
-        #[tool(aggr)] params: SearchCodeParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<SearchCodeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         // Validate parameters
         let context_lines = params.context_lines.unwrap_or(2);
         if context_lines > 10 {
@@ -293,8 +298,8 @@ impl IndexrsServer {
     )]
     async fn search_files(
         &self,
-        #[tool(aggr)] params: SearchFilesParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<SearchFilesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         // Validate parameters
         let max_results = params.max_results.unwrap_or(30).min(200);
         if max_results == 0 {
@@ -378,8 +383,8 @@ impl IndexrsServer {
     )]
     async fn get_file(
         &self,
-        #[tool(aggr)] params: GetFileParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<GetFileParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         let start_line = params.start_line.unwrap_or(1);
         if start_line == 0 {
             return Ok(errors::invalid_parameter(
@@ -496,8 +501,8 @@ impl IndexrsServer {
     )]
     async fn index_status(
         &self,
-        #[tool(aggr)] params: IndexStatusParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<IndexStatusParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         let snapshot = self.index_state.snapshot();
         let uptime = format_uptime(self.start_time.elapsed());
 
@@ -584,8 +589,8 @@ impl IndexrsServer {
     )]
     async fn reindex(
         &self,
-        #[tool(aggr)] params: ReindexParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<ReindexParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         // Dispatch through daemon if available
         if let Some(daemon) = &self.daemon {
             match daemon.request(indexrs_daemon::DaemonRequest::Reindex).await {
@@ -627,7 +632,7 @@ impl IndexrsServer {
         context_lines: u32,
         max_results: u32,
         offset: u32,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    ) -> Result<CallToolResult, ErrorData> {
         // Parse the query
         let query = match parse_query(query_string) {
             Ok(q) => q,
@@ -695,7 +700,7 @@ impl IndexrsServer {
         language: Option<&str>,
         max_results: usize,
         offset: usize,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    ) -> Result<CallToolResult, ErrorData> {
         // Language was already validated by the caller.
         let language_filter = language.map(|lang_str| {
             indexrs_core::match_language(lang_str)
@@ -792,7 +797,7 @@ impl IndexrsServer {
 
 // ---- ServerHandler -----------------------------------------------------------
 
-#[tool(tool_box)]
+#[tool_handler]
 impl ServerHandler for IndexrsServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -814,6 +819,7 @@ impl ServerHandler for IndexrsServer {
             server_info: Implementation {
                 name: "indexrs".to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -821,25 +827,25 @@ impl ServerHandler for IndexrsServer {
 
     async fn list_resources(
         &self,
-        _request: PaginatedRequestParam,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListResourcesResult, rmcp::Error> {
+    ) -> Result<ListResourcesResult, ErrorData> {
         Ok(resources::list_resources())
     }
 
     async fn list_resource_templates(
         &self,
-        _request: PaginatedRequestParam,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListResourceTemplatesResult, rmcp::Error> {
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
         Ok(resources::list_resource_templates())
     }
 
     async fn read_resource(
         &self,
-        request: ReadResourceRequestParam,
+        request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, rmcp::Error> {
+    ) -> Result<ReadResourceResult, ErrorData> {
         resources::read_resource(&self.index_state, &request.uri)
     }
 }
@@ -980,7 +986,12 @@ mod tests {
     fn test_tool_attributes_generated() {
         let attr = IndexrsServer::ping_tool_attr();
         assert_eq!(attr.name.as_ref(), "ping");
-        assert!(attr.description.as_ref().contains("indexrs server version"));
+        assert!(
+            attr.description
+                .as_ref()
+                .unwrap()
+                .contains("indexrs server version")
+        );
     }
 
     // ---- build_query_string tests ----
@@ -1149,7 +1160,7 @@ mod tests {
             max_results: None,
             offset: None,
         };
-        let result = server.search_code(params).await.unwrap();
+        let result = server.search_code(Parameters(params)).await.unwrap();
         // Empty index should return no-results message (not an error)
         assert_eq!(result.is_error, Some(false));
         let text = match &result.content[0].raw {
@@ -1173,7 +1184,7 @@ mod tests {
             max_results: None,
             offset: None,
         };
-        let result = server.search_code(params).await.unwrap();
+        let result = server.search_code(Parameters(params)).await.unwrap();
         assert_eq!(result.is_error, Some(true));
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
@@ -1197,7 +1208,7 @@ mod tests {
             max_results: Some(0),
             offset: None,
         };
-        let result = server.search_code(params).await.unwrap();
+        let result = server.search_code(Parameters(params)).await.unwrap();
         assert_eq!(result.is_error, Some(true));
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
@@ -1221,7 +1232,7 @@ mod tests {
             max_results: Some(200),
             offset: None,
         };
-        let result = server.search_code(params).await.unwrap();
+        let result = server.search_code(Parameters(params)).await.unwrap();
         assert_eq!(result.is_error, Some(true));
     }
 
@@ -1239,7 +1250,7 @@ mod tests {
             max_results: None,
             offset: None,
         };
-        let result = server.search_code(params).await.unwrap();
+        let result = server.search_code(Parameters(params)).await.unwrap();
         assert_eq!(result.is_error, Some(true));
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
@@ -1284,7 +1295,7 @@ mod tests {
             max_results: Some(20),
             offset: None,
         };
-        let result = server.search_code(params).await.unwrap();
+        let result = server.search_code(Parameters(params)).await.unwrap();
         assert_eq!(result.is_error, Some(false));
 
         let text = match &result.content[0].raw {
@@ -1333,7 +1344,7 @@ mod tests {
             max_results: None,
             offset: None,
         };
-        let result = server.search_code(params).await.unwrap();
+        let result = server.search_code(Parameters(params)).await.unwrap();
         assert_eq!(result.is_error, Some(false));
 
         let text = match &result.content[0].raw {
@@ -1379,7 +1390,7 @@ mod tests {
             max_results: Some(2),
             offset: None,
         };
-        let result = server.search_code(params).await.unwrap();
+        let result = server.search_code(Parameters(params)).await.unwrap();
         let text = match &result.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("expected text content"),
@@ -1398,7 +1409,7 @@ mod tests {
             max_results: Some(2),
             offset: Some(2),
         };
-        let result2 = server.search_code(params2).await.unwrap();
+        let result2 = server.search_code(Parameters(params2)).await.unwrap();
         let text2 = match &result2.content[0].raw {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("expected text content"),
@@ -1444,7 +1455,7 @@ mod tests {
             offset: None,
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("Found 2 files matching \"config\""));
@@ -1476,7 +1487,7 @@ mod tests {
             offset: None,
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("Found 1 files"));
@@ -1518,7 +1529,7 @@ mod tests {
             offset: None,
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("Found 2 files"));
@@ -1557,7 +1568,7 @@ mod tests {
             offset: None,
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("Found 1 files"));
@@ -1589,7 +1600,7 @@ mod tests {
             offset: Some(2),
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("Found 10 files"));
@@ -1619,7 +1630,7 @@ mod tests {
             offset: None,
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("No files found"));
@@ -1641,7 +1652,7 @@ mod tests {
             offset: None,
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0].as_text().unwrap().text.as_str();
@@ -1678,7 +1689,7 @@ mod tests {
             offset: None,
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("Found 1 files"));
@@ -1697,7 +1708,7 @@ mod tests {
             offset: None,
         };
 
-        let result = server.search_files(params).await.unwrap();
+        let result = server.search_files(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("No files found"));
@@ -1727,7 +1738,7 @@ mod tests {
             end_line: None,
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("src/main.rs"));
@@ -1758,7 +1769,7 @@ mod tests {
             end_line: None,
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0].as_text().unwrap().text.as_str();
@@ -1792,7 +1803,7 @@ mod tests {
             end_line: Some(10),
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("lines 5-10 of 20"));
@@ -1824,7 +1835,7 @@ mod tests {
             end_line: None,
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0].as_text().unwrap().text.as_str();
@@ -1854,7 +1865,7 @@ mod tests {
             end_line: Some(1),
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0].as_text().unwrap().text.as_str();
@@ -1889,7 +1900,7 @@ mod tests {
             end_line: None,
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("lines 1-500 of 600"));
@@ -1908,7 +1919,7 @@ mod tests {
             end_line: None,
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0].as_text().unwrap().text.as_str();
@@ -1937,7 +1948,7 @@ mod tests {
             end_line: None,
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0].as_text().unwrap().text.as_str();
@@ -1973,7 +1984,7 @@ mod tests {
             end_line: None,
         };
 
-        let result = server.get_file(params).await.unwrap();
+        let result = server.get_file(Parameters(params)).await.unwrap();
 
         let text = result.content[0].as_text().unwrap().text.as_str();
         assert!(text.contains("new content"));
@@ -1988,7 +1999,7 @@ mod tests {
         let server = IndexrsServer::new(state, None, None);
 
         let params = IndexStatusParams { repo: None };
-        let result = server.index_status(params).await.unwrap();
+        let result = server.index_status(Parameters(params)).await.unwrap();
 
         assert_eq!(result.is_error, Some(false));
         let text = result.content[0].raw.as_text().unwrap().text.as_str();
@@ -2025,7 +2036,7 @@ mod tests {
         let server = IndexrsServer::new(state, None, None);
 
         let params = IndexStatusParams { repo: None };
-        let result = server.index_status(params).await.unwrap();
+        let result = server.index_status(Parameters(params)).await.unwrap();
 
         let text = result.content[0].raw.as_text().unwrap().text.as_str();
         assert!(text.contains("indexrs status: healthy"));
@@ -2066,7 +2077,7 @@ mod tests {
         let server = IndexrsServer::new(state, None, None);
 
         let params = IndexStatusParams { repo: None };
-        let result = server.index_status(params).await.unwrap();
+        let result = server.index_status(Parameters(params)).await.unwrap();
 
         let text = result.content[0].raw.as_text().unwrap().text.as_str();
         assert!(text.contains("Files: 1 indexed"));
@@ -2096,7 +2107,7 @@ mod tests {
         let params = IndexStatusParams {
             repo: Some("myrepo".to_string()),
         };
-        let result = server.index_status(params).await.unwrap();
+        let result = server.index_status(Parameters(params)).await.unwrap();
 
         let text = result.content[0].raw.as_text().unwrap().text.as_str();
         assert!(text.contains("Repository: myrepo"));
@@ -2115,7 +2126,7 @@ mod tests {
             repo: Some("myproject".to_string()),
             full: None,
         };
-        let result = server.reindex(params).await.unwrap();
+        let result = server.reindex(Parameters(params)).await.unwrap();
 
         let text = result.content[0].raw.as_text().unwrap().text.as_str();
         assert!(text.contains("myproject"));
@@ -2132,7 +2143,7 @@ mod tests {
             repo: Some("myproject".to_string()),
             full: Some(true),
         };
-        let result = server.reindex(params).await.unwrap();
+        let result = server.reindex(Parameters(params)).await.unwrap();
 
         let text = result.content[0].raw.as_text().unwrap().text.as_str();
         assert!(text.contains("myproject"));
@@ -2149,7 +2160,7 @@ mod tests {
             repo: None,
             full: None,
         };
-        let result = server.reindex(params).await.unwrap();
+        let result = server.reindex(Parameters(params)).await.unwrap();
 
         let text = result.content[0].raw.as_text().unwrap().text.as_str();
         assert!(text.contains("default repository"));
