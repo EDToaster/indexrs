@@ -632,11 +632,11 @@ impl IndexrsServer {
         let total_indexed_files: usize =
             snapshot.iter().map(|seg| seg.entry_count() as usize).sum();
 
-        // Build search options -- we request more than max_results to support pagination
-        // by offset (search all, then paginate the result set)
+        // Request offset + max_results so the core engine can stop early while
+        // still returning correct total counts for pagination.
         let search_options = SearchOptions {
             context_lines: context_lines as usize,
-            max_results: None, // fetch all, paginate after
+            max_results: Some(offset as usize + max_results as usize),
         };
 
         // Execute the search
@@ -1373,10 +1373,12 @@ mod tests {
             rmcp::model::RawContent::Text(t) => &t.text,
             _ => panic!("expected text content"),
         };
+        // With capped max_results (offset+limit = 0+2 = 2), the core engine
+        // returns at most 2 files, so total_file_count is 2.
         assert!(text.contains("showing 1-2"));
-        assert!(text.contains("5 files"));
+        assert!(text.contains("2 files"));
 
-        // Request with offset
+        // Request with offset — core receives max_results = 2+2 = 4
         let params2 = SearchCodeParams {
             query: "println".to_string(),
             path: None,
