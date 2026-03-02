@@ -3,5 +3,6 @@ resolver = "3"
 members = [
     "indexrs-core",
     "indexrs-cli",
+    "indexrs-daemon",
     "indexrs-mcp",
 ]

@@ -30,6 +30,7 @@ use indexrs_core::metadata::FileMetadata;
 use indexrs_core::query::parse_query;
 use indexrs_core::search::SearchOptions;
 
+use crate::daemon_client::DaemonClient;
 use crate::errors;
 use crate::formatter::{self, FileListEntry};
 use crate::resources;
@@ -155,23 +156,35 @@ pub struct ReindexParams {
 /// The MCP server for indexrs.
 ///
 /// Holds shared state for snapshot-isolated reads of the index, plus the root
-/// path and server start time for uptime reporting.
+/// path, an optional daemon client for dispatch, and server start time for
+/// uptime reporting.
 #[derive(Clone)]
 pub struct IndexrsServer {
     /// Snapshot-isolated access to active index segments.
     pub index_state: Arc<IndexState>,
     /// Root path of the indexed repository.
     pub root_path: Option<PathBuf>,
+    /// Optional daemon client for dispatching search/reindex through the daemon.
+    daemon: Option<Arc<DaemonClient>>,
     /// Server start time for uptime calculation.
     start_time: Instant,
 }
 
 impl IndexrsServer {
     /// Create a new server with the given shared state.
-    pub fn new(index_state: Arc<IndexState>, root_path: Option<PathBuf>) -> Self {
+    ///
+    /// Pass `Some(daemon)` to route `search_code`, `search_files`, and
+    /// `reindex` through the daemon process. Pass `None` to use direct
+    /// index access (fallback path).
+    pub fn new(
+        index_state: Arc<IndexState>,
+        root_path: Option<PathBuf>,
+        daemon: Option<Arc<DaemonClient>>,
+    ) -> Self {
         Self {
             index_state,
             root_path,
+            daemon,
             start_time: Instant::now(),
         }
     }
@@ -182,7 +195,9 @@ impl IndexrsServer {
 #[tool(tool_box)]
 impl IndexrsServer {
     /// Get indexrs server version and basic status.
-    #[tool(description = "Get indexrs server version and basic status. Call this first to verify the server is running.")]
+    #[tool(
+        description = "Get indexrs server version and basic status. Call this first to verify the server is running."
+    )]
     fn ping(&self) -> String {
         format!("indexrs MCP server v{}", env!("CARGO_PKG_VERSION"))
     }
@@ -213,7 +228,6 @@ impl IndexrsServer {
             ));
         }
 
-        let offset = params.offset.unwrap_or(0);
         let case_sensitive = params.case_sensitive.unwrap_or(false);
 
         // Build query string incorporating filters
@@ -224,64 +238,43 @@ impl IndexrsServer {
             case_sensitive,
         );
 
-        // Parse the query
-        let query = match parse_query(&query_string) {
-            Ok(q) => q,
-            Err(e) => {
-                return Ok(errors::invalid_query(&e.to_string()));
-            }
-        };
-
-        // Get a snapshot of the current index state
-        let snapshot = self.index_state.snapshot();
-
-        // Count total indexed files for "no results" message
-        let total_indexed_files: usize =
-            snapshot.iter().map(|seg| seg.entry_count() as usize).sum();
-
-        // Build search options -- we request more than max_results to support pagination
-        // by offset (search all, then paginate the result set)
-        let search_options = SearchOptions {
-            context_lines: context_lines as usize,
-            max_results: None, // fetch all, paginate after
-        };
-
-        // Execute the search
-        let result =
-            match indexrs_core::search_segments_with_query(&snapshot, &query, &search_options) {
-                Ok(r) => r,
-                Err(e) => {
-                    return Ok(errors::invalid_query(&format!("Search failed: {e}")));
-                }
+        // Dispatch through daemon if available
+        if let Some(daemon) = &self.daemon {
+            let req = indexrs_daemon::DaemonRequest::QuerySearch {
+                query: query_string,
+                limit: max_results as usize,
+                context_lines: context_lines as usize,
+                color: false,
+                cwd: None,
             };
 
-        // Handle no results
-        if result.files.is_empty() {
-            return Ok(errors::no_results(
-                &params.query,
-                &[format!(
-                    "searched {total_indexed_files} indexed files with no matches"
-                )],
-            ));
+            match daemon.request(req).await {
+                Ok(result) => {
+                    if result.total == 0 {
+                        return Ok(errors::no_results(&params.query, &[]));
+                    }
+                    let mut text = String::new();
+                    if result.stale {
+                        text.push_str("Warning: Index may be stale. Consider running reindex.\n");
+                    }
+                    text.push_str(&result.text);
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+                Err(e) => {
+                    return Ok(errors::invalid_query(&e));
+                }
+            }
         }
 
-        // Paginate
-        let paginated = result.paginate(offset as usize, max_results as usize);
-
-        // Format results
-        let mut text = String::new();
-
-        // Staleness warning (placeholder -- no staleness tracking yet)
-        if let Some(warning) = formatter::format_staleness_warning(0, 0) {
-            text.push_str(&warning);
-        }
-
-        text.push_str(&formatter::format_search_results(
-            &paginated,
-            offset as usize,
-        ));
-
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        // Fallback: direct index search
+        self.search_code_direct(
+            &params.query,
+            &query_string,
+            context_lines,
+            max_results,
+            params.offset.unwrap_or(0),
+        )
+        .await
     }
 
     /// Search for files by name or path pattern across indexed repositories.
@@ -301,12 +294,11 @@ impl IndexrsServer {
                 "must be between 1 and 200",
             ));
         }
-        let offset = params.offset.unwrap_or(0);
 
-        // Parse language filter
-        let language_filter = match &params.language {
+        // Parse language filter (validate before daemon dispatch)
+        let language_str = match &params.language {
             Some(lang_str) => match indexrs_core::match_language(lang_str) {
-                Ok(lang) => Some(lang),
+                Ok(_lang) => Some(lang_str.clone()),
                 Err(_) => {
                     return Ok(errors::invalid_parameter(
                         "language",
@@ -319,94 +311,44 @@ impl IndexrsServer {
             None => None,
         };
 
-        // Compile glob pattern (if the query looks like a glob)
-        let glob_pattern = if params.query.contains('*')
-            || params.query.contains('?')
-            || params.query.contains('[')
-        {
-            match glob::Pattern::new(&params.query) {
-                Ok(p) => Some(p),
+        // Dispatch through daemon if available
+        if let Some(daemon) = &self.daemon {
+            let req = indexrs_daemon::DaemonRequest::Files {
+                language: language_str,
+                path_glob: Some(params.query.clone()),
+                sort: "path".to_string(),
+                limit: Some(max_results),
+                color: false,
+                cwd: None,
+            };
+
+            match daemon.request(req).await {
+                Ok(result) => {
+                    if result.text.is_empty() && result.total == 0 {
+                        let text = formatter::format_file_list(&params.query, 0, &[], 0);
+                        return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    }
+                    let mut text = String::new();
+                    if result.stale {
+                        text.push_str("Warning: Index may be stale. Consider running reindex.\n");
+                    }
+                    text.push_str(&result.text);
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
                 Err(e) => {
-                    return Ok(errors::invalid_parameter(
-                        "query",
-                        &format!("Invalid glob pattern: {e}"),
-                    ));
-                }
-            }
-        } else {
-            None
-        };
-
-        let query_lower = params.query.to_ascii_lowercase();
-
-        // Search across all segments
-        let snapshot = self.index_state.snapshot();
-        let mut all_matches: Vec<FileListEntry> = Vec::new();
-        // Track seen paths to deduplicate across segments (newest segment wins)
-        let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        // Iterate segments in reverse order (newest first for dedup)
-        for segment in snapshot.iter().rev() {
-            let tombstones = segment.load_tombstones().unwrap_or_default();
-            let reader = segment.metadata_reader();
-
-            for result in reader.iter_all() {
-                let meta = match result {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-
-                // Skip tombstoned files
-                if tombstones.contains(meta.file_id) {
-                    continue;
-                }
-
-                // Deduplicate: skip if already seen from a newer segment
-                if seen_paths.contains(&meta.path) {
-                    continue;
-                }
-
-                // Language filter
-                if let Some(lang) = language_filter
-                    && meta.language != lang
-                {
-                    seen_paths.insert(meta.path);
-                    continue;
-                }
-
-                // Match: glob or substring
-                let matches = if let Some(ref pattern) = glob_pattern {
-                    pattern.matches(&meta.path)
-                } else {
-                    meta.path.to_ascii_lowercase().contains(&query_lower)
-                };
-
-                seen_paths.insert(meta.path.clone());
-
-                if matches {
-                    all_matches.push(FileListEntry {
-                        path: meta.path,
-                        language: meta.language,
-                        size_bytes: meta.size_bytes,
-                    });
+                    return Ok(errors::invalid_query(&e));
                 }
             }
         }
 
-        // Sort by path for stable output
-        all_matches.sort_by(|a, b| a.path.cmp(&b.path));
-
-        let total_count = all_matches.len();
-
-        // Apply pagination
-        let page: Vec<FileListEntry> = all_matches
-            .into_iter()
-            .skip(offset)
-            .take(max_results)
-            .collect();
-
-        let text = formatter::format_file_list(&params.query, total_count, &page, offset);
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        // Fallback: direct index search
+        self.search_files_direct(
+            &params.query,
+            language_str.as_deref(),
+            max_results,
+            params.offset.unwrap_or(0),
+        )
+        .await
     }
 
     /// Read the contents of an indexed file.
@@ -624,13 +566,24 @@ impl IndexrsServer {
         &self,
         #[tool(aggr)] params: ReindexParams,
     ) -> Result<CallToolResult, rmcp::Error> {
+        // Dispatch through daemon if available
+        if let Some(daemon) = &self.daemon {
+            match daemon.request(indexrs_daemon::DaemonRequest::Reindex).await {
+                Ok(result) => {
+                    return Ok(CallToolResult::success(vec![Content::text(result.text)]));
+                }
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Reindex failed: {e}"
+                    ))]));
+                }
+            }
+        }
+
+        // Fallback: no daemon available, return informative message.
         let full = params.full.unwrap_or(false);
         let mode = if full { "full" } else { "incremental" };
-
         let repo_label = params.repo.as_deref().unwrap_or("default repository");
-
-        // The MCP server does not yet own a SegmentManager, so reindexing
-        // cannot be triggered from here. Return an informative message.
         let output = format!(
             "Reindex requested for {repo_label} ({mode})\n\
              \n\
@@ -640,6 +593,190 @@ impl IndexrsServer {
         );
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+}
+
+// ---- Direct-index fallback methods ------------------------------------------
+
+impl IndexrsServer {
+    /// Fallback: search code directly against the in-process index.
+    async fn search_code_direct(
+        &self,
+        raw_query: &str,
+        query_string: &str,
+        context_lines: u32,
+        max_results: u32,
+        offset: u32,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        // Parse the query
+        let query = match parse_query(query_string) {
+            Ok(q) => q,
+            Err(e) => {
+                return Ok(errors::invalid_query(&e.to_string()));
+            }
+        };
+
+        // Get a snapshot of the current index state
+        let snapshot = self.index_state.snapshot();
+
+        // Count total indexed files for "no results" message
+        let total_indexed_files: usize =
+            snapshot.iter().map(|seg| seg.entry_count() as usize).sum();
+
+        // Build search options -- we request more than max_results to support pagination
+        // by offset (search all, then paginate the result set)
+        let search_options = SearchOptions {
+            context_lines: context_lines as usize,
+            max_results: None, // fetch all, paginate after
+        };
+
+        // Execute the search
+        let result =
+            match indexrs_core::search_segments_with_query(&snapshot, &query, &search_options) {
+                Ok(r) => r,
+                Err(e) => {
+                    return Ok(errors::invalid_query(&format!("Search failed: {e}")));
+                }
+            };
+
+        // Handle no results
+        if result.files.is_empty() {
+            return Ok(errors::no_results(
+                raw_query,
+                &[format!(
+                    "searched {total_indexed_files} indexed files with no matches"
+                )],
+            ));
+        }
+
+        // Paginate
+        let paginated = result.paginate(offset as usize, max_results as usize);
+
+        // Format results
+        let mut text = String::new();
+
+        // Staleness warning (placeholder -- no staleness tracking yet)
+        if let Some(warning) = formatter::format_staleness_warning(0, 0) {
+            text.push_str(&warning);
+        }
+
+        text.push_str(&formatter::format_search_results(
+            &paginated,
+            offset as usize,
+        ));
+
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Fallback: search files directly against the in-process index.
+    async fn search_files_direct(
+        &self,
+        query: &str,
+        language: Option<&str>,
+        max_results: usize,
+        offset: usize,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        // Parse language filter
+        let language_filter = match language {
+            Some(lang_str) => match indexrs_core::match_language(lang_str) {
+                Ok(lang) => Some(lang),
+                Err(_) => {
+                    return Ok(errors::invalid_parameter(
+                        "language",
+                        &format!(
+                            "Unknown language: \"{lang_str}\". Examples: rust, python, typescript."
+                        ),
+                    ));
+                }
+            },
+            None => None,
+        };
+
+        // Compile glob pattern (if the query looks like a glob)
+        let glob_pattern = if query.contains('*') || query.contains('?') || query.contains('[') {
+            match glob::Pattern::new(query) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    return Ok(errors::invalid_parameter(
+                        "query",
+                        &format!("Invalid glob pattern: {e}"),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
+        let query_lower = query.to_ascii_lowercase();
+
+        // Search across all segments
+        let snapshot = self.index_state.snapshot();
+        let mut all_matches: Vec<FileListEntry> = Vec::new();
+        // Track seen paths to deduplicate across segments (newest segment wins)
+        let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Iterate segments in reverse order (newest first for dedup)
+        for segment in snapshot.iter().rev() {
+            let tombstones = segment.load_tombstones().unwrap_or_default();
+            let reader = segment.metadata_reader();
+
+            for result in reader.iter_all() {
+                let meta = match result {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                // Skip tombstoned files
+                if tombstones.contains(meta.file_id) {
+                    continue;
+                }
+
+                // Deduplicate: skip if already seen from a newer segment
+                if seen_paths.contains(&meta.path) {
+                    continue;
+                }
+
+                // Language filter
+                if let Some(lang) = language_filter
+                    && meta.language != lang
+                {
+                    seen_paths.insert(meta.path);
+                    continue;
+                }
+
+                // Match: glob or substring
+                let matches = if let Some(ref pattern) = glob_pattern {
+                    pattern.matches(&meta.path)
+                } else {
+                    meta.path.to_ascii_lowercase().contains(&query_lower)
+                };
+
+                seen_paths.insert(meta.path.clone());
+
+                if matches {
+                    all_matches.push(FileListEntry {
+                        path: meta.path,
+                        language: meta.language,
+                        size_bytes: meta.size_bytes,
+                    });
+                }
+            }
+        }
+
+        // Sort by path for stable output
+        all_matches.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let total_count = all_matches.len();
+
+        // Apply pagination
+        let page: Vec<FileListEntry> = all_matches
+            .into_iter()
+            .skip(offset)
+            .take(max_results)
+            .collect();
+
+        let text = formatter::format_file_list(query, total_count, &page, offset);
+        Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 }
 
@@ -792,7 +929,7 @@ mod tests {
         }
 
         state.publish(segments);
-        IndexrsServer::new(state, None)
+        IndexrsServer::new(state, None, None)
     }
 
     fn build_test_segment(
@@ -809,7 +946,7 @@ mod tests {
     #[test]
     fn test_server_creation() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         assert!(server.root_path.is_none());
     }
 
@@ -817,14 +954,14 @@ mod tests {
     fn test_server_creation_with_root() {
         let state = Arc::new(IndexState::new());
         let root = PathBuf::from("/tmp/myrepo");
-        let server = IndexrsServer::new(state, Some(root.clone()));
+        let server = IndexrsServer::new(state, Some(root.clone()), None);
         assert_eq!(server.root_path, Some(root));
     }
 
     #[test]
     fn test_server_info() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let info = server.get_info();
         assert_eq!(info.server_info.name, "indexrs");
         assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
@@ -836,7 +973,7 @@ mod tests {
     #[test]
     fn test_ping_tool() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let result = server.ping();
         assert!(result.contains("indexrs MCP server"));
         assert!(result.contains(env!("CARGO_PKG_VERSION")));
@@ -1014,7 +1151,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_code_empty_index() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let params = SearchCodeParams {
             query: "hello".to_string(),
             path: None,
@@ -1038,7 +1175,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_code_invalid_context_lines() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let params = SearchCodeParams {
             query: "hello".to_string(),
             path: None,
@@ -1062,7 +1199,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_code_invalid_max_results_zero() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let params = SearchCodeParams {
             query: "hello".to_string(),
             path: None,
@@ -1086,7 +1223,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_code_invalid_max_results_too_large() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let params = SearchCodeParams {
             query: "hello".to_string(),
             path: None,
@@ -1104,7 +1241,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_code_invalid_query() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let params = SearchCodeParams {
             query: "".to_string(),
             path: None,
@@ -1149,7 +1286,7 @@ mod tests {
         let state = Arc::new(IndexState::new());
         state.publish(vec![Arc::new(segment)]);
 
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let params = SearchCodeParams {
             query: "println".to_string(),
             path: None,
@@ -1198,7 +1335,7 @@ mod tests {
         let state = Arc::new(IndexState::new());
         state.publish(vec![Arc::new(segment)]);
 
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
         let params = SearchCodeParams {
             query: "println".to_string(),
             path: None,
@@ -1242,7 +1379,7 @@ mod tests {
         let state = Arc::new(IndexState::new());
         state.publish(vec![Arc::new(segment)]);
 
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         // Request first 2 results
         let params = SearchCodeParams {
@@ -1563,7 +1700,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_files_empty_index() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = SearchFilesParams {
             query: "test".to_string(),
@@ -1775,7 +1912,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_file_empty_index() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = GetFileParams {
             path: "anything.rs".to_string(),
@@ -1861,7 +1998,7 @@ mod tests {
     #[tokio::test]
     async fn test_index_status_empty_state() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = IndexStatusParams { repo: None };
         let result = server.index_status(params).await.unwrap();
@@ -1898,7 +2035,7 @@ mod tests {
 
         let state = Arc::new(IndexState::new());
         state.publish(vec![seg0]);
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = IndexStatusParams { repo: None };
         let result = server.index_status(params).await.unwrap();
@@ -1939,7 +2076,7 @@ mod tests {
 
         let state = Arc::new(IndexState::new());
         state.publish(vec![seg0]);
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = IndexStatusParams { repo: None };
         let result = server.index_status(params).await.unwrap();
@@ -1967,7 +2104,7 @@ mod tests {
 
         let state = Arc::new(IndexState::new());
         state.publish(vec![seg0]);
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = IndexStatusParams {
             repo: Some("myrepo".to_string()),
@@ -1985,7 +2122,7 @@ mod tests {
     #[tokio::test]
     async fn test_reindex_incremental() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = ReindexParams {
             repo: Some("myproject".to_string()),
@@ -2002,7 +2139,7 @@ mod tests {
     #[tokio::test]
     async fn test_reindex_full() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = ReindexParams {
             repo: Some("myproject".to_string()),
@@ -2019,7 +2156,7 @@ mod tests {
     #[tokio::test]
     async fn test_reindex_no_repo() {
         let state = Arc::new(IndexState::new());
-        let server = IndexrsServer::new(state, None);
+        let server = IndexrsServer::new(state, None, None);
 
         let params = ReindexParams {
             repo: None,

@@ -501,6 +501,7 @@ dependencies = [
  "clap",
  "globset",
  "indexrs-core",
+ "indexrs-daemon",
  "libc",
  "nu-ansi-term",
  "rayon",
@@ -538,12 +539,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "indexrs-daemon"
+version = "0.1.0"
+dependencies = [
+ "indexrs-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "indexrs-mcp"
 version = "0.1.0"
 dependencies = [
  "clap",
  "glob",
  "indexrs-core",
+ "indexrs-daemon",
  "rmcp",
  "schemars",
  "serde",

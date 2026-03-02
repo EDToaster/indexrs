@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
@@ -13,6 +12,8 @@ use indexrs_core::checkpoint::{Checkpoint, write_checkpoint};
 use indexrs_core::error::IndexError;
 use indexrs_core::git_diff::GitChangeDetector;
 use indexrs_core::search::MatchPattern;
+
+pub use indexrs_daemon::{DaemonRequest, DaemonResponse};
 
 use crate::args::SortOrder;
 use crate::color::ColorConfig;
@@ -25,76 +26,9 @@ use crate::wire;
 /// Idle timeout before daemon self-terminates.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
-/// Maximum time to wait for a spawned daemon to become ready.
-const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Interval between connection attempts when waiting for daemon startup.
-const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-/// Request from CLI client to daemon.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum DaemonRequest {
-    Search {
-        query: String,
-        regex: bool,
-        case_sensitive: bool,
-        ignore_case: bool,
-        limit: usize,
-        context_lines: usize,
-        language: Option<String>,
-        path_glob: Option<String>,
-        color: bool,
-        cwd: Option<String>,
-    },
-    QuerySearch {
-        query: String,
-        limit: usize,
-        context_lines: usize,
-        color: bool,
-        cwd: Option<String>,
-    },
-    Files {
-        language: Option<String>,
-        path_glob: Option<String>,
-        sort: String,
-        limit: Option<usize>,
-        color: bool,
-        cwd: Option<String>,
-    },
-    Ping,
-    Shutdown,
-    Reindex,
-}
-
-/// Response from daemon to CLI client, sent as TLV binary frames.
-#[derive(Debug, PartialEq)]
-pub enum DaemonResponse {
-    /// A single output line (file path or search match).
-    Line { content: String },
-    /// End of results with summary.
-    Done {
-        total: usize,
-        duration_ms: u64,
-        stale: bool,
-    },
-    /// Error message.
-    Error { message: String },
-    /// Ping response.
-    Pong,
-    /// Progress update (e.g. during reindex).
-    Progress { message: String },
-}
-
 /// Return the Unix socket path for a given repo root.
 pub fn socket_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(".indexrs").join("sock")
-}
-
-/// Try to connect to a running daemon. Returns None if no daemon is running.
-pub async fn try_connect(repo_root: &Path) -> Option<UnixStream> {
-    let path = socket_path(repo_root);
-    UnixStream::connect(&path).await.ok()
+    indexrs_daemon::socket_path(repo_root)
 }
 
 /// Run the HybridDetector event loop, applying changes to the index.
@@ -788,45 +722,10 @@ async fn handle_connection(
     Ok(())
 }
 
-/// Spawn a daemon as a detached background process.
-fn spawn_daemon_process(repo_root: &Path) -> Result<(), IndexError> {
-    let exe = std::env::current_exe().map_err(IndexError::Io)?;
-    std::process::Command::new(exe)
-        .arg("daemon-start")
-        .arg("--repo")
-        .arg(repo_root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(IndexError::Io)?;
-    Ok(())
-}
-
 /// Connect to a running daemon, or spawn one and wait for it to be ready.
 pub async fn ensure_daemon(repo_root: &Path) -> Result<UnixStream, IndexError> {
-    // Fast path: daemon already running.
-    if let Some(stream) = try_connect(repo_root).await {
-        return Ok(stream);
-    }
-
-    // Spawn a new daemon process.
-    spawn_daemon_process(repo_root)?;
-
-    // Poll until the socket is ready or timeout.
-    let deadline = tokio::time::Instant::now() + DAEMON_STARTUP_TIMEOUT;
-    loop {
-        tokio::time::sleep(DAEMON_POLL_INTERVAL).await;
-        if let Some(stream) = try_connect(repo_root).await {
-            return Ok(stream);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(IndexError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "daemon did not start within timeout",
-            )));
-        }
-    }
+    let exe = std::env::current_exe().map_err(IndexError::Io)?;
+    indexrs_daemon::client::ensure_daemon(&exe, repo_root).await
 }
 
 /// Send a request to the daemon and stream results to the writer.
@@ -893,6 +792,7 @@ pub async fn run_via_daemon<W: std::io::Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexrs_daemon::try_connect;
 
     #[test]
     fn test_request_serialize_search() {

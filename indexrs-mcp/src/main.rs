@@ -1,3 +1,4 @@
+pub mod daemon_client;
 pub mod errors;
 pub mod formatter;
 pub mod resources;
@@ -87,7 +88,8 @@ async fn main() {
         }
     }
 
-    let server = IndexrsServer::new(index_state, Some(repo_root));
+    let daemon = Arc::new(daemon_client::DaemonClient::new(repo_root.clone()));
+    let server = IndexrsServer::new(index_state, Some(repo_root), Some(daemon));
 
     let service = server
         .serve(stdio())
