@@ -68,7 +68,6 @@ pub fn setup_sigpipe() {
 }
 
 /// Format a byte count as a human-readable string (B, KB, MB, GB).
-#[allow(dead_code)]
 pub fn human_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * 1024;

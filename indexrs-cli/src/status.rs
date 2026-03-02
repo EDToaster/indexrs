@@ -15,7 +15,7 @@ pub fn run_status(repo_root: &Path) -> Result<(), indexrs_core::IndexError> {
         return Ok(());
     }
 
-    print_segment_summary(&manager, &snapshot);
+    print_segment_summary(&manager, &snapshot)?;
     print_language_breakdown(&snapshot)?;
     print_disk_usage(repo_root, &snapshot)?;
     print_search_sanity(&snapshot)?;
@@ -24,7 +24,10 @@ pub fn run_status(repo_root: &Path) -> Result<(), indexrs_core::IndexError> {
 }
 
 /// Print per-segment entry/tombstone counts and compaction recommendation.
-fn print_segment_summary(manager: &SegmentManager, snapshot: &indexrs_core::SegmentList) {
+fn print_segment_summary(
+    manager: &SegmentManager,
+    snapshot: &indexrs_core::SegmentList,
+) -> Result<(), indexrs_core::IndexError> {
     println!("=== Segment Summary ===");
 
     let mut total_entries: u64 = 0;
@@ -32,7 +35,8 @@ fn print_segment_summary(manager: &SegmentManager, snapshot: &indexrs_core::Segm
 
     for seg in snapshot.iter() {
         let entries = seg.entry_count() as u64;
-        let tombstoned = seg.load_tombstones().map(|ts| ts.len() as u64).unwrap_or(0);
+        let tombstones = seg.load_tombstones()?;
+        let tombstoned = tombstones.len() as u64;
         let live = entries.saturating_sub(tombstoned);
 
         println!(
@@ -62,6 +66,7 @@ fn print_segment_summary(manager: &SegmentManager, snapshot: &indexrs_core::Segm
     }
 
     println!();
+    Ok(())
 }
 
 /// Print a breakdown of live files by language, with size and line totals.
