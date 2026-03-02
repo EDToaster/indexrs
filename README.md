@@ -44,6 +44,58 @@ cargo run -p indexrs-core --example build_index --release -- <directory>
 cargo run -p indexrs-core --example bench_space --release -- <directory>
 ```
 
+## Query language
+
+The `--query` flag enables an advanced query language with boolean operators, filters, and pattern types. Without `--query`, the search argument is treated as a plain substring (or regex with `--regex`).
+
+```bash
+# Enable the query language
+indexrs search --query '<query expression>'
+```
+
+`--query` is mutually exclusive with `--regex`, `--case-sensitive`, `--ignore-case`, `--smart-case`, `--language`, and `--path` — those features are expressed inside the query string instead.
+
+### Syntax
+
+| Feature | Syntax | Example |
+|---|---|---|
+| Literal substring | bare word | `parse_query` |
+| Exact phrase | `"quoted text"` | `"fn main"` |
+| Regex | `/pattern/` | `/fn\s+\w+/` |
+| Implicit AND | space-separated terms | `foo bar` (files containing both) |
+| OR | `term1 OR term2` | `println OR eprintln` |
+| NOT | `NOT term` | `NOT test` |
+| Path filter | `path:prefix` | `path:src/core/` |
+| Language filter | `language:name` or `lang:ext` | `language:rust`, `lang:py` |
+| Case-sensitive | `case:yes term` | `case:yes FooBar` |
+
+Operator precedence: NOT binds tightest, then AND (implicit), then OR. So `a b OR c d` parses as `(a AND b) OR (c AND d)`.
+
+### Examples
+
+```bash
+# Find files containing both "Result" and "Error"
+indexrs search --query 'Result Error'
+
+# Find println or eprintln in Rust files
+indexrs search --query 'language:rust println OR eprintln'
+
+# Regex for function definitions, excluding tests
+indexrs search --query '/fn\s+\w+/ NOT test'
+
+# Exact phrase in files under src/
+indexrs search --query 'path:src/ "fn main"'
+
+# Case-sensitive match
+indexrs search --query 'case:yes ParseError'
+```
+
+### Supported languages
+
+`rust`, `python`, `typescript`, `javascript`, `go`, `c`, `cpp`, `java`, `ruby`, `shell`, `markdown`, `yaml`, `toml`, `json`, `xml`, `html`, `css`, `scss`, `sass`, `sql`, `protobuf`, `dockerfile`, `hcl`, `kotlin`, `swift`, `scala`, `elixir`, `erlang`, `haskell`, `ocaml`, `lua`, `perl`, `r`, `dart`, `zig`, `nix`
+
+Both full names and common extensions work: `language:rust` and `lang:rs` are equivalent.
+
 ## Building
 
 ```bash
