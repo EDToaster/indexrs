@@ -518,7 +518,7 @@ impl IndexrsServer {
                 for segment in snapshot.iter() {
                     let entry_count = segment.entry_count();
                     let tombstones = segment.load_tombstones().unwrap_or_default();
-                    let live = entry_count as u64 - tombstones.len() as u64;
+                    let live = (entry_count as u64).saturating_sub(tombstones.len() as u64);
                     let disk = segment_disk_size(segment);
                     output.push_str(&format!(
                         "  seg_{:04}  {} files ({} live, {} tombstoned)  {}\n",
