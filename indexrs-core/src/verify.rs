@@ -679,7 +679,8 @@ mod tests {
                 .map(|(i, _)| i)
                 .collect();
             assert_eq!(
-                idx.newline_offsets, expected,
+                idx.newline_offsets,
+                expected,
                 "mismatch for content: {:?}",
                 String::from_utf8_lossy(content)
             );

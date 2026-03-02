@@ -355,7 +355,11 @@ fn search_single_segment_with_context(
 
             let content = segment
                 .content_reader()
-                .read_content_with_size_hint(meta.content_offset, meta.content_len, meta.size_bytes as usize)
+                .read_content_with_size_hint(
+                    meta.content_offset,
+                    meta.content_len,
+                    meta.size_bytes as usize,
+                )
                 .ok()?;
 
             let line_matches = verify_content_matches(&content, query, context_lines);
@@ -425,9 +429,11 @@ fn search_single_segment_with_context_seq(
             None => continue,
         };
 
-        let content = segment
-            .content_reader()
-            .read_content_with_size_hint(meta.content_offset, meta.content_len, meta.size_bytes as usize)?;
+        let content = segment.content_reader().read_content_with_size_hint(
+            meta.content_offset,
+            meta.content_len,
+            meta.size_bytes as usize,
+        )?;
 
         let line_matches = verify_content_matches(&content, query, context_lines);
         if line_matches.is_empty() {
@@ -519,7 +525,11 @@ fn verify_candidate_with_pattern(
 
     let content = segment
         .content_reader()
-        .read_content_with_size_hint(meta.content_offset, meta.content_len, meta.size_bytes as usize)
+        .read_content_with_size_hint(
+            meta.content_offset,
+            meta.content_len,
+            meta.size_bytes as usize,
+        )
         .ok()?;
 
     let line_matches = if context_lines > 0 {
@@ -648,8 +658,15 @@ fn search_single_segment_with_pattern(
                 return None;
             }
 
-            let file_match =
-                verify_candidate_with_pattern(segment, file_id, pattern, &verifier, context_lines, now_epoch_secs, &ranking_config)?;
+            let file_match = verify_candidate_with_pattern(
+                segment,
+                file_id,
+                pattern,
+                &verifier,
+                context_lines,
+                now_epoch_secs,
+                &ranking_config,
+            )?;
 
             // Decrement budget atomically; if already 0, discard this result
             if budget
@@ -691,9 +708,15 @@ fn search_single_segment_with_pattern_seq(
             continue;
         }
 
-        if let Some(file_match) =
-            verify_candidate_with_pattern(segment, file_id, pattern, verifier, context_lines, now_epoch_secs, &ranking_config)
-        {
+        if let Some(file_match) = verify_candidate_with_pattern(
+            segment,
+            file_id,
+            pattern,
+            verifier,
+            context_lines,
+            now_epoch_secs,
+            &ranking_config,
+        ) {
             file_matches.push(file_match);
 
             if let Some(max) = max_file_results
@@ -1168,7 +1191,11 @@ fn search_single_segment_with_query(
 
         let content = segment
             .content_reader()
-            .read_content_with_size_hint(meta.content_offset, meta.content_len, meta.size_bytes as usize)
+            .read_content_with_size_hint(
+                meta.content_offset,
+                meta.content_len,
+                meta.size_bytes as usize,
+            )
             .ok()?;
 
         let line_matches = matcher.matches(&content)?;

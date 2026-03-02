@@ -514,6 +514,7 @@ dependencies = [
  "blake3",
  "ignore",
  "integer-encoding",
+ "memchr",
  "memmap2",
  "notify 8.2.0",
  "notify-debouncer-full",

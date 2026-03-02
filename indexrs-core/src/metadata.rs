@@ -259,7 +259,11 @@ impl<'a> MetadataReader<'a> {
     /// The caller must guarantee that `meta_data` has already been validated
     /// by a prior call to [`MetadataReader::new()`]. This is the case for
     /// `Segment`, which validates during `open()` and stores the mmaps.
-    pub(crate) fn new_unchecked(meta_data: &'a [u8], paths_data: &'a [u8], entry_count: u32) -> Self {
+    pub(crate) fn new_unchecked(
+        meta_data: &'a [u8],
+        paths_data: &'a [u8],
+        entry_count: u32,
+    ) -> Self {
         MetadataReader {
             data: meta_data,
             paths: paths_data,
