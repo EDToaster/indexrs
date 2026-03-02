@@ -14,12 +14,16 @@ use rayon::prelude::*;
 
 use crate::error::IndexError;
 use crate::index_state::SegmentList;
-use crate::intersection::find_candidates;
+use crate::intersection::{find_candidates, intersect_file_ids};
+use crate::metadata::FileMetadata;
+use crate::query::Query;
+use crate::query_match::QueryMatcher;
+use crate::query_trigrams::{TrigramQuery, extract_query_trigrams};
 use crate::ranking::{MatchType, RankingConfig, ScoringInput, score_file_match};
 use crate::search::{ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult};
 use crate::segment::Segment;
 use crate::tombstone::TombstoneSet;
-use crate::types::{FileId, SegmentId};
+use crate::types::{FileId, Language, SegmentId};
 use crate::verify::ContentVerifier;
 
 /// Minimum number of candidates before switching from sequential to parallel
@@ -890,6 +894,325 @@ pub fn search_segments_streaming(
     }
 
     Ok(())
+}
+
+// ── Query AST-based search pipeline ──
+
+/// Extract metadata-level pre-filters from a Query AST.
+///
+/// Recursively walks the AST and collects all `LanguageFilter` and `PathFilter`
+/// nodes. Returns `(languages, path_prefixes)` for use in pre-filtering
+/// candidates before content verification.
+fn extract_pre_filters(query: &Query) -> (Vec<Language>, Vec<String>) {
+    let mut languages = Vec::new();
+    let mut path_prefixes = Vec::new();
+    collect_pre_filters(query, &mut languages, &mut path_prefixes);
+    // Dedup languages (Language doesn't impl Ord, so use a set-style dedup)
+    let mut seen_langs = Vec::new();
+    for lang in languages {
+        if !seen_langs.contains(&lang) {
+            seen_langs.push(lang);
+        }
+    }
+    path_prefixes.sort();
+    path_prefixes.dedup();
+    (seen_langs, path_prefixes)
+}
+
+/// Recursively collect language and path filters from the query AST.
+fn collect_pre_filters(
+    query: &Query,
+    languages: &mut Vec<Language>,
+    path_prefixes: &mut Vec<String>,
+) {
+    match query {
+        Query::LanguageFilter(lang) => languages.push(*lang),
+        Query::PathFilter(prefix) => path_prefixes.push(prefix.clone()),
+        Query::And(children) => {
+            for child in children {
+                collect_pre_filters(child, languages, path_prefixes);
+            }
+        }
+        Query::Or(left, right) => {
+            collect_pre_filters(left, languages, path_prefixes);
+            collect_pre_filters(right, languages, path_prefixes);
+        }
+        Query::Not(inner) => {
+            collect_pre_filters(inner, languages, path_prefixes);
+        }
+        Query::Literal(_) | Query::Phrase(_) | Query::Regex(_) => {}
+    }
+}
+
+/// Check whether a file's metadata passes the pre-filters.
+///
+/// If `languages` is non-empty, the file's language must be in the list.
+/// If `path_prefixes` is non-empty, the file's path must start with at least
+/// one prefix.
+fn passes_pre_filters(
+    meta: &FileMetadata,
+    languages: &[Language],
+    path_prefixes: &[String],
+) -> bool {
+    if !languages.is_empty() && !languages.contains(&meta.language) {
+        return false;
+    }
+    if !path_prefixes.is_empty() && !path_prefixes.iter().any(|p| meta.path.starts_with(p)) {
+        return false;
+    }
+    true
+}
+
+/// Look up candidate file IDs from a segment's trigram index using a `TrigramQuery`.
+///
+/// - `All(trigrams)`: intersect posting lists for all trigrams
+/// - `Any(branches)`: for each branch intersect its trigrams, then union all branches
+/// - `None`: full scan (return all file IDs in the segment)
+fn lookup_trigram_candidates(
+    segment: &Segment,
+    tq: &TrigramQuery,
+) -> Result<Vec<FileId>, IndexError> {
+    match tq {
+        TrigramQuery::All(trigrams) => {
+            let lists: Vec<Vec<FileId>> = trigrams
+                .iter()
+                .map(|t| {
+                    segment
+                        .trigram_reader()
+                        .lookup_file_ids(*t)
+                        .unwrap_or_default()
+                })
+                .collect();
+            Ok(intersect_file_ids(&lists))
+        }
+        TrigramQuery::Any(branches) => {
+            let mut all_candidates: Vec<FileId> = Vec::new();
+            for branch in branches {
+                let lists: Vec<Vec<FileId>> = branch
+                    .iter()
+                    .map(|t| {
+                        segment
+                            .trigram_reader()
+                            .lookup_file_ids(*t)
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                let candidates = intersect_file_ids(&lists);
+                all_candidates.extend(candidates);
+            }
+            all_candidates.sort();
+            all_candidates.dedup();
+            Ok(all_candidates)
+        }
+        TrigramQuery::None => segment.all_file_ids(),
+    }
+}
+
+/// Search across multiple segments using a parsed `Query` AST.
+///
+/// This is the full search pipeline entry point for structured queries:
+///
+/// 1. Extract trigrams from the Query AST for candidate filtering
+/// 2. Extract metadata pre-filters (language, path) from the AST
+/// 3. For each segment (in parallel): look up candidates, apply pre-filters,
+///    verify content with `QueryMatcher`, score results
+/// 4. Deduplicate across segments (newest segment wins per path)
+/// 5. Sort by relevance score and return `SearchResult`
+///
+/// Follows the same parallel search + merge + dedup pattern as
+/// [`search_segments_with_pattern_and_options()`].
+pub fn search_segments_with_query(
+    snapshot: &SegmentList,
+    query: &Query,
+    options: &SearchOptions,
+) -> Result<SearchResult, IndexError> {
+    let start = Instant::now();
+
+    if snapshot.is_empty() {
+        return Ok(SearchResult {
+            total_match_count: 0,
+            total_file_count: 0,
+            files: Vec::new(),
+            duration: start.elapsed(),
+        });
+    }
+
+    let tq = extract_query_trigrams(query);
+    let (languages, path_prefixes) = extract_pre_filters(query);
+
+    // Shared budget for approximate early termination across segments
+    let budget = AtomicUsize::new(options.max_results.unwrap_or(usize::MAX));
+
+    // Search all segments in parallel
+    let per_segment_results: Vec<Result<Vec<(SegmentId, FileMatch)>, IndexError>> = snapshot
+        .par_iter()
+        .map(|segment| {
+            if budget.load(Ordering::Relaxed) == 0 {
+                return Ok(Vec::new());
+            }
+
+            let tombstones = segment.load_tombstones()?;
+            let remaining = budget.load(Ordering::Relaxed);
+            let segment_budget = if options.max_results.is_some() {
+                Some(remaining)
+            } else {
+                None
+            };
+
+            let file_matches = search_single_segment_with_query(
+                segment,
+                query,
+                &tq,
+                &languages,
+                &path_prefixes,
+                &tombstones,
+                options.context_lines,
+                segment_budget,
+            )?;
+
+            let seg_id = segment.segment_id();
+            let tagged: Vec<(SegmentId, FileMatch)> = file_matches
+                .into_iter()
+                .filter_map(|fm| {
+                    if options.max_results.is_some() {
+                        let prev = budget.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
+                            if b > 0 { Some(b - 1) } else { None }
+                        });
+                        if prev.is_err() {
+                            return None;
+                        }
+                    }
+                    Some((seg_id, fm))
+                })
+                .collect();
+
+            Ok(tagged)
+        })
+        .collect();
+
+    // Merge: dedup by path, newest segment wins
+    let mut merged: HashMap<PathBuf, (SegmentId, FileMatch)> = HashMap::new();
+    for result in per_segment_results {
+        for (seg_id, fm) in result? {
+            match merged.get(&fm.path) {
+                Some((existing_seg_id, _)) if *existing_seg_id >= seg_id => {}
+                _ => {
+                    merged.insert(fm.path.clone(), (seg_id, fm));
+                }
+            }
+        }
+    }
+
+    let mut files: Vec<FileMatch> = merged.into_values().map(|(_, fm)| fm).collect();
+    files.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+
+    // Trim to max_results (parallel search may slightly overshoot)
+    if let Some(max) = options.max_results {
+        files.truncate(max);
+    }
+
+    let total_file_count = files.len();
+    let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
+
+    Ok(SearchResult {
+        total_match_count,
+        total_file_count,
+        files,
+        duration: start.elapsed(),
+    })
+}
+
+/// Search a single segment using a Query AST.
+///
+/// Looks up trigram candidates, applies pre-filters, and verifies content
+/// using `QueryMatcher`.
+#[allow(clippy::too_many_arguments)]
+fn search_single_segment_with_query(
+    segment: &Segment,
+    query: &Query,
+    tq: &TrigramQuery,
+    languages: &[Language],
+    path_prefixes: &[String],
+    tombstones: &TombstoneSet,
+    context_lines: usize,
+    max_file_results: Option<usize>,
+) -> Result<Vec<FileMatch>, IndexError> {
+    let candidates = lookup_trigram_candidates(segment, tq)?;
+    let candidates = sort_candidates_by_size(segment, candidates);
+
+    let matcher = QueryMatcher::new(query, context_lines as u32);
+    let budget = AtomicUsize::new(max_file_results.unwrap_or(usize::MAX));
+
+    let verify_candidate = |&file_id: &FileId| -> Option<FileMatch> {
+        if budget.load(Ordering::Relaxed) == 0 {
+            return None;
+        }
+
+        if tombstones.contains(file_id) {
+            return None;
+        }
+
+        let meta = segment.get_metadata(file_id).ok()??;
+
+        if !passes_pre_filters(&meta, languages, path_prefixes) {
+            return None;
+        }
+
+        let content = segment
+            .content_reader()
+            .read_content(meta.content_offset, meta.content_len)
+            .ok()?;
+
+        let line_matches = matcher.matches(&content)?;
+
+        // Decrement budget atomically; if already 0, discard this result
+        if budget
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |b| {
+                if b > 0 { Some(b - 1) } else { None }
+            })
+            .is_err()
+        {
+            return None;
+        }
+
+        let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let input = ScoringInput {
+            path: &meta.path,
+            query: "",
+            match_type: MatchType::Substring,
+            match_count: total_match_ranges.max(1),
+            line_count: meta.line_count,
+            mtime_epoch_secs: meta.mtime_epoch_secs,
+            now_epoch_secs: now,
+        };
+        let config = RankingConfig::default();
+        let score = score_file_match(&input, &config);
+
+        Some(FileMatch {
+            file_id,
+            path: PathBuf::from(&meta.path),
+            language: meta.language,
+            lines: line_matches,
+            score,
+        })
+    };
+
+    let file_matches: Vec<FileMatch> = if candidates.len() < PAR_THRESHOLD {
+        candidates.iter().filter_map(verify_candidate).collect()
+    } else {
+        candidates.par_iter().filter_map(verify_candidate).collect()
+    };
+
+    Ok(file_matches)
 }
 
 #[cfg(test)]
@@ -2248,5 +2571,114 @@ mod tests {
 
         let matches: Vec<FileMatch> = rx.into_iter().collect();
         assert!(matches.is_empty());
+    }
+
+    // ---- Query AST-based search tests ----
+
+    #[test]
+    fn test_search_with_query_literal() {
+        use crate::query::parse_query;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "main.rs".to_string(),
+                    content: b"fn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "lib.rs".to_string(),
+                    content: b"pub fn add(a: i32, b: i32) -> i32 { a + b }\n".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        let query = parse_query("println").unwrap();
+        let options = SearchOptions::default();
+        let result = search_segments_with_query(&snapshot, &query, &options).unwrap();
+
+        assert_eq!(result.total_file_count, 1);
+        assert_eq!(result.files[0].path, PathBuf::from("main.rs"));
+        assert_eq!(result.files[0].lines.len(), 1);
+        assert!(result.files[0].lines[0].content.contains("println"));
+    }
+
+    #[test]
+    fn test_search_with_query_and() {
+        use crate::query::parse_query;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "main.rs".to_string(),
+                    content: b"fn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "lib.rs".to_string(),
+                    content: b"fn helper() {\n    println!(\"world\");\n}\n".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        // Implicit AND: "println main" means files must contain both "println" AND "main"
+        let query = parse_query("println main").unwrap();
+        let options = SearchOptions::default();
+        let result = search_segments_with_query(&snapshot, &query, &options).unwrap();
+
+        // Only main.rs contains both "println" and "main"
+        assert_eq!(result.total_file_count, 1);
+        assert_eq!(result.files[0].path, PathBuf::from("main.rs"));
+    }
+
+    #[test]
+    fn test_search_with_query_language_filter() {
+        use crate::query::parse_query;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let seg = build_segment(
+            &base_dir,
+            SegmentId(0),
+            vec![
+                InputFile {
+                    path: "main.rs".to_string(),
+                    content: b"fn main() {\n    println!(\"hello\");\n}\n".to_vec(),
+                    mtime: 0,
+                },
+                InputFile {
+                    path: "script.py".to_string(),
+                    content: b"def main():\n    println(\"hello\")\n".to_vec(),
+                    mtime: 0,
+                },
+            ],
+        );
+
+        let snapshot: SegmentList = Arc::new(vec![seg]);
+        // "language:rust println" should only match .rs files
+        let query = parse_query("language:rust println").unwrap();
+        let options = SearchOptions::default();
+        let result = search_segments_with_query(&snapshot, &query, &options).unwrap();
+
+        assert_eq!(result.total_file_count, 1);
+        assert_eq!(result.files[0].path, PathBuf::from("main.rs"));
     }
 }
