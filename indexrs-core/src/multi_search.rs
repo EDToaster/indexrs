@@ -1179,10 +1179,10 @@ pub fn search_segments_with_query_streaming(
             }
 
             sent_count += 1;
-            if let Some(max) = options.max_results {
-                if sent_count >= max {
-                    return Ok(());
-                }
+            if let Some(max) = options.max_results
+                && sent_count >= max
+            {
+                return Ok(());
             }
         }
     }

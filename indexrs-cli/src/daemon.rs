@@ -633,8 +633,7 @@ async fn handle_connection(
                 });
 
                 // Bridge: blocking mpsc -> tokio mpsc -> async socket writer
-                let (async_tx, mut async_rx) =
-                    tokio::sync::mpsc::unbounded_channel::<String>();
+                let (async_tx, mut async_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
                 let bridge_handle = tokio::task::spawn_blocking({
                     let async_tx = async_tx.clone();
