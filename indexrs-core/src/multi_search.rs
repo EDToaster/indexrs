@@ -50,6 +50,7 @@ fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> 
 
     // Fold query to lowercase for case-insensitive matching.
     let folded_query: Vec<u8> = query.bytes().map(crate::trigram::ascii_fold_byte).collect();
+    let finder = memchr::memmem::Finder::new(&folded_query);
     let text = String::from_utf8_lossy(content);
     let all_lines: Vec<&str> = text.split('\n').collect();
 
@@ -72,7 +73,7 @@ fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> 
         let mut search_start = 0;
 
         while search_start + folded_query.len() <= folded_line.len() {
-            if let Some(pos) = find_substring(&folded_line[search_start..], &folded_query) {
+            if let Some(pos) = finder.find(&folded_line[search_start..]) {
                 let abs_start = search_start + pos;
                 let abs_end = abs_start + folded_query.len();
                 ranges.push((abs_start, abs_end));
@@ -135,11 +136,6 @@ fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> 
             }
         })
         .collect()
-}
-
-/// Find the first occurrence of `needle` in `haystack`, returning the byte offset.
-fn find_substring(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    memchr::memmem::find(haystack, needle)
 }
 
 /// Search across multiple segments with snapshot isolation.
