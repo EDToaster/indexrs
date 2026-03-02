@@ -20,6 +20,7 @@ use crate::files::{self, FilesFilter};
 use crate::output::{ExitCode, StreamingWriter};
 use crate::paths::PathRewriter;
 use crate::search_cmd;
+use crate::wire;
 
 /// Idle timeout before daemon self-terminates.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
@@ -255,13 +256,13 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
 }
 
 /// Format a FileMatch into vimgrep-style output lines and send each as a
-/// DaemonResponse::Line JSON string through the channel.
+/// TLV binary frame through the channel.
 fn format_and_send_file_match(
     file_match: &indexrs_core::search::FileMatch,
     color: &ColorConfig,
     path_rewriter: &PathRewriter,
     glob_matcher: &Option<globset::GlobMatcher>,
-    tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
 ) -> bool {
     let raw_path = file_match.path.to_string_lossy();
 
@@ -289,8 +290,12 @@ fn format_and_send_file_match(
             &line_match.ranges,
         );
 
-        let resp = serde_json::to_string(&DaemonResponse::Line { content: line }).unwrap();
-        if tx.send(resp).is_err() {
+        let payload = line.as_bytes();
+        let mut frame = Vec::with_capacity(5 + payload.len());
+        frame.push(0x01); // TAG_LINE
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(payload);
+        if tx.send(frame).is_err() {
             return false; // receiver dropped, stop
         }
     }
@@ -399,14 +404,14 @@ async fn handle_connection(
         let request: DaemonRequest = match serde_json::from_str(line.trim()) {
             Ok(req) => req,
             Err(e) => {
-                let resp = DaemonResponse::Error {
-                    message: format!("invalid request: {e}"),
-                };
-                let json = serde_json::to_string(&resp).unwrap();
-                writer
-                    .write_all(format!("{json}\n").as_bytes())
-                    .await
-                    .map_err(IndexError::Io)?;
+                wire::write_response(
+                    &mut writer,
+                    &DaemonResponse::Error {
+                        message: format!("invalid request: {e}"),
+                    },
+                )
+                .await
+                .map_err(IndexError::Io)?;
                 line.clear();
                 continue;
             }
@@ -414,9 +419,7 @@ async fn handle_connection(
 
         match request {
             DaemonRequest::Ping => {
-                let resp = serde_json::to_string(&DaemonResponse::Pong).unwrap();
-                writer
-                    .write_all(format!("{resp}\n").as_bytes())
+                wire::write_response(&mut writer, &DaemonResponse::Pong)
                     .await
                     .map_err(IndexError::Io)?;
             }
@@ -452,14 +455,14 @@ async fn handle_connection(
                 if let MatchPattern::Regex(ref pat) = pattern
                     && let Err(e) = regex::Regex::new(pat)
                 {
-                    let resp = serde_json::to_string(&DaemonResponse::Error {
-                        message: format!("invalid regex: {e}"),
-                    })
-                    .unwrap();
-                    writer
-                        .write_all(format!("{resp}\n").as_bytes())
-                        .await
-                        .map_err(IndexError::Io)?;
+                    wire::write_response(
+                        &mut writer,
+                        &DaemonResponse::Error {
+                            message: format!("invalid regex: {e}"),
+                        },
+                    )
+                    .await
+                    .map_err(IndexError::Io)?;
                     line.clear();
                     continue;
                 }
@@ -467,14 +470,14 @@ async fn handle_connection(
                 let query = match search_cmd::flags_to_query(&pattern, language.as_deref()) {
                     Ok(q) => q,
                     Err(e) => {
-                        let resp = serde_json::to_string(&DaemonResponse::Error {
-                            message: e.to_string(),
-                        })
-                        .unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
-                            .await
-                            .map_err(IndexError::Io)?;
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: e.to_string(),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
                         line.clear();
                         continue;
                     }
@@ -505,7 +508,7 @@ async fn handle_connection(
                 });
 
                 // Bridge: blocking mpsc -> tokio mpsc -> async socket writer.
-                let (async_tx, mut async_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let (async_tx, mut async_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
                 let bridge_handle = tokio::task::spawn_blocking({
                     let async_tx = async_tx.clone();
@@ -529,13 +532,9 @@ async fn handle_connection(
 
                 // Stream responses to the client as they arrive.
                 let mut total: usize = 0;
-                while let Some(resp_json) = async_rx.recv().await {
+                while let Some(frame) = async_rx.recv().await {
                     total += 1;
-                    if writer
-                        .write_all(format!("{resp_json}\n").as_bytes())
-                        .await
-                        .is_err()
-                    {
+                    if writer.write_all(&frame).await.is_err() {
                         break; // client disconnected
                     }
                 }
@@ -548,42 +547,42 @@ async fn handle_connection(
                 match search_result {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
-                        let resp = serde_json::to_string(&DaemonResponse::Error {
-                            message: e.to_string(),
-                        })
-                        .unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
-                            .await
-                            .map_err(IndexError::Io)?;
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: e.to_string(),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
                         line.clear();
                         continue;
                     }
                     Err(e) => {
-                        let resp = serde_json::to_string(&DaemonResponse::Error {
-                            message: format!("search task panicked: {e}"),
-                        })
-                        .unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
-                            .await
-                            .map_err(IndexError::Io)?;
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: format!("search task panicked: {e}"),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
                         line.clear();
                         continue;
                     }
                 }
 
                 let elapsed = start.elapsed();
-                let resp = serde_json::to_string(&DaemonResponse::Done {
-                    total,
-                    duration_ms: elapsed.as_millis() as u64,
-                    stale,
-                })
-                .unwrap();
-                writer
-                    .write_all(format!("{resp}\n").as_bytes())
-                    .await
-                    .map_err(IndexError::Io)?;
+                wire::write_response(
+                    &mut writer,
+                    &DaemonResponse::Done {
+                        total,
+                        duration_ms: elapsed.as_millis() as u64,
+                        stale,
+                    },
+                )
+                .await
+                .map_err(IndexError::Io)?;
             }
             DaemonRequest::QuerySearch {
                 query,
@@ -601,14 +600,14 @@ async fn handle_connection(
                 let parsed_query = match indexrs_core::query::parse_query(&query) {
                     Ok(q) => q,
                     Err(e) => {
-                        let resp = serde_json::to_string(&DaemonResponse::Error {
-                            message: e.to_string(),
-                        })
-                        .unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
-                            .await
-                            .map_err(IndexError::Io)?;
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: e.to_string(),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
                         line.clear();
                         continue;
                     }
@@ -633,7 +632,7 @@ async fn handle_connection(
                 });
 
                 // Bridge: blocking mpsc -> tokio mpsc -> async socket writer
-                let (async_tx, mut async_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let (async_tx, mut async_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
                 let bridge_handle = tokio::task::spawn_blocking({
                     let async_tx = async_tx.clone();
@@ -655,13 +654,9 @@ async fn handle_connection(
                 drop(async_tx);
 
                 let mut total: usize = 0;
-                while let Some(resp_json) = async_rx.recv().await {
+                while let Some(frame) = async_rx.recv().await {
                     total += 1;
-                    if writer
-                        .write_all(format!("{resp_json}\n").as_bytes())
-                        .await
-                        .is_err()
-                    {
+                    if writer.write_all(&frame).await.is_err() {
                         break;
                     }
                 }
@@ -670,16 +665,16 @@ async fn handle_connection(
                 let _ = bridge_handle.await;
 
                 let elapsed = start.elapsed();
-                let resp = serde_json::to_string(&DaemonResponse::Done {
-                    total,
-                    duration_ms: elapsed.as_millis() as u64,
-                    stale,
-                })
-                .unwrap();
-                writer
-                    .write_all(format!("{resp}\n").as_bytes())
-                    .await
-                    .map_err(IndexError::Io)?;
+                wire::write_response(
+                    &mut writer,
+                    &DaemonResponse::Done {
+                        total,
+                        duration_ms: elapsed.as_millis() as u64,
+                        stale,
+                    },
+                )
+                .await
+                .map_err(IndexError::Io)?;
             }
             DaemonRequest::Files {
                 language,
@@ -705,32 +700,29 @@ async fn handle_connection(
                 ) {
                     Ok((lines, elapsed)) => {
                         for line_content in &lines {
-                            let resp = serde_json::to_string(&DaemonResponse::Line {
-                                content: line_content.clone(),
-                            })
-                            .unwrap();
-                            writer
-                                .write_all(format!("{resp}\n").as_bytes())
-                                .await
-                                .map_err(IndexError::Io)?;
-                        }
-
-                        let resp = serde_json::to_string(&DaemonResponse::Done {
-                            total: lines.len(),
-                            duration_ms: elapsed.as_millis() as u64,
-                            stale,
-                        })
-                        .unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
+                            wire::write_response(
+                                &mut writer,
+                                &DaemonResponse::Line {
+                                    content: line_content.clone(),
+                                },
+                            )
                             .await
                             .map_err(IndexError::Io)?;
+                        }
+
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Done {
+                                total: lines.len(),
+                                duration_ms: elapsed.as_millis() as u64,
+                                stale,
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
                     }
                     Err(msg) => {
-                        let resp =
-                            serde_json::to_string(&DaemonResponse::Error { message: msg }).unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
+                        wire::write_response(&mut writer, &DaemonResponse::Error { message: msg })
                             .await
                             .map_err(IndexError::Io)?;
                     }
@@ -752,10 +744,7 @@ async fn handle_connection(
 
                 // Stream progress messages to client.
                 while let Some(msg) = rx.recv().await {
-                    let resp =
-                        serde_json::to_string(&DaemonResponse::Progress { message: msg }).unwrap();
-                    writer
-                        .write_all(format!("{resp}\n").as_bytes())
+                    wire::write_response(&mut writer, &DaemonResponse::Progress { message: msg })
                         .await
                         .map_err(IndexError::Io)?;
                 }
@@ -764,36 +753,36 @@ async fn handle_connection(
                 match handle.await {
                     Ok(Ok(changes)) => {
                         let elapsed = start.elapsed();
-                        let resp = serde_json::to_string(&DaemonResponse::Done {
-                            total: changes.len(),
-                            duration_ms: elapsed.as_millis() as u64,
-                            stale: false,
-                        })
-                        .unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
-                            .await
-                            .map_err(IndexError::Io)?;
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Done {
+                                total: changes.len(),
+                                duration_ms: elapsed.as_millis() as u64,
+                                stale: false,
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
                     }
                     Ok(Err(e)) => {
-                        let resp = serde_json::to_string(&DaemonResponse::Error {
-                            message: e.to_string(),
-                        })
-                        .unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
-                            .await
-                            .map_err(IndexError::Io)?;
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: e.to_string(),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
                     }
                     Err(e) => {
-                        let resp = serde_json::to_string(&DaemonResponse::Error {
-                            message: format!("reindex task panicked: {e}"),
-                        })
-                        .unwrap();
-                        writer
-                            .write_all(format!("{resp}\n").as_bytes())
-                            .await
-                            .map_err(IndexError::Io)?;
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Error {
+                                message: format!("reindex task panicked: {e}"),
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
                     }
                 }
             }
