@@ -1024,6 +1024,10 @@ fn intersect_trigrams_smallest_first(
     segment: &Segment,
     trigrams: &std::collections::HashSet<crate::types::Trigram>,
 ) -> Result<Vec<FileId>, IndexError> {
+    if trigrams.is_empty() {
+        return segment.all_file_ids();
+    }
+
     let reader = segment.trigram_reader();
 
     // Score each trigram by estimated posting list byte size (cheap: O(log n) per trigram)
