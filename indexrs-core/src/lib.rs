@@ -58,7 +58,7 @@ pub use multi_search::{
     search_segments_with_query,
 };
 pub use posting::PostingListBuilder;
-pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, parse_query};
+pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery, match_language, parse_query};
 pub use query_match::QueryMatcher;
 pub use query_plan::{
     PreFilter, QueryInput, QueryPlan, ScoredTrigram, VerifyStep, plan_literal_query, plan_query,

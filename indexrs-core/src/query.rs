@@ -108,7 +108,7 @@ pub fn parse_query(input: &str) -> Result<Query, IndexError> {
 ///
 /// Accepts both full names (case-insensitive) and common file extensions.
 /// Returns `IndexError::QueryParse` for unrecognized language strings.
-fn match_language(s: &str) -> Result<Language, IndexError> {
+pub fn match_language(s: &str) -> Result<Language, IndexError> {
     match s.to_ascii_lowercase().as_str() {
         "rust" | "rs" => Ok(Language::Rust),
         "python" | "py" => Ok(Language::Python),
