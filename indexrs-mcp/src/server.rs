@@ -322,9 +322,20 @@ impl IndexrsServer {
 
         // Dispatch through daemon if available
         if let Some(daemon) = &self.daemon {
+            // Wrap non-glob queries in *query* so the daemon's glob matching
+            // behaves like substring matching, consistent with the direct fallback.
+            let is_glob = params.query.contains('*')
+                || params.query.contains('?')
+                || params.query.contains('[');
+            let path_glob = if is_glob {
+                params.query.clone()
+            } else {
+                format!("*{}*", params.query)
+            };
+
             let req = indexrs_daemon::DaemonRequest::Files {
                 language: language_str,
-                path_glob: Some(params.query.clone()),
+                path_glob: Some(path_glob),
                 sort: "path".to_string(),
                 limit: Some(max_results),
                 color: false,
