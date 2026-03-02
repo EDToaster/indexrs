@@ -182,7 +182,9 @@ impl IndexrsServer {
 #[tool(tool_box)]
 impl IndexrsServer {
     /// Get indexrs server version and basic status.
-    #[tool(description = "Get indexrs server version and basic status. Call this first to verify the server is running.")]
+    #[tool(
+        description = "Get indexrs server version and basic status. Call this first to verify the server is running."
+    )]
     fn ping(&self) -> String {
         format!("indexrs MCP server v{}", env!("CARGO_PKG_VERSION"))
     }

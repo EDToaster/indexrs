@@ -501,6 +501,7 @@ dependencies = [
  "clap",
  "globset",
  "indexrs-core",
+ "indexrs-daemon",
  "libc",
  "nu-ansi-term",
  "rayon",
@@ -535,6 +536,16 @@ dependencies = [
  "tokio",
  "tracing",
  "zstd",
+]
+
+[[package]]
+name = "indexrs-daemon"
+version = "0.1.0"
+dependencies = [
+ "indexrs-core",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
