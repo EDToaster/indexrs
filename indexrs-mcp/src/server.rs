@@ -676,21 +676,11 @@ impl IndexrsServer {
         max_results: usize,
         offset: usize,
     ) -> Result<CallToolResult, rmcp::Error> {
-        // Parse language filter
-        let language_filter = match language {
-            Some(lang_str) => match indexrs_core::match_language(lang_str) {
-                Ok(lang) => Some(lang),
-                Err(_) => {
-                    return Ok(errors::invalid_parameter(
-                        "language",
-                        &format!(
-                            "Unknown language: \"{lang_str}\". Examples: rust, python, typescript."
-                        ),
-                    ));
-                }
-            },
-            None => None,
-        };
+        // Language was already validated by the caller.
+        let language_filter = language.map(|lang_str| {
+            indexrs_core::match_language(lang_str)
+                .expect("language already validated by search_files")
+        });
 
         // Compile glob pattern (if the query looks like a glob)
         let glob_pattern = if query.contains('*') || query.contains('?') || query.contains('[') {
