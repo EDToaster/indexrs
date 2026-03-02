@@ -10,25 +10,22 @@
 //! - **Match highlighting**: `*` in the gutter for matching lines
 //! - **Line numbers always**: enables LLM to reference specific locations
 //! - **Summary first**: one-line summary so LLM can assess pagination needs
-//!
-//! # Example output
-//!
-//! ```text
-//! Found 47 matches across 12 files (showing 1-12)
-//!
-//! ## src/index/builder.rs
-//! L42:   fn build_trigram_index(...)
-//! L43:       let mut index = TrigramIndex::new();
-//! L44:*      for trigram in content.trigrams() {
-//! L45:       index.insert(trigram, self.current_doc_id);
-//! ```
 
 use std::fmt::Write;
 
 use indexrs_core::search::{FileMatch, LineMatch, SearchResult};
 use indexrs_core::types::Language;
 
-/// Options for controlling the format output.
+// ---- Types for file list / file content formatting ----
+
+/// Information about a single file for the file list formatter.
+pub struct FileListEntry {
+    pub path: String,
+    pub language: Language,
+    pub size_bytes: u32,
+}
+
+/// Options for controlling the search results format output.
 #[derive(Debug, Clone)]
 pub struct FormatOptions {
     /// Offset of the first file being shown (0-based). Used in the summary line.
@@ -79,14 +76,86 @@ pub struct IndexStatusInfo {
     pub disk_size_bytes: Option<u64>,
 }
 
+// ---- Search results formatting ----
+
 /// Format search results as plain text for MCP tool responses.
 ///
-/// The output follows the design doc format:
-/// - Summary line: "Found N matches across M files (showing X-Y)"
-/// - File sections with `## path` headers
-/// - `L{n}:*` gutter for matches, `L{n}: ` for context lines
-/// - Large result hint when total_file_count > 100
-pub fn format_search_results(results: &SearchResult, options: &FormatOptions) -> String {
+/// Produces output like:
+/// ```text
+/// Found 47 matches across 12 files (showing 1-12)
+///
+/// ## src/main.rs (Rust, 3 matches)
+/// L42:  fn build_trigram_index(&mut self, content: &str) {
+/// L43:* for trigram in content.trigrams() {
+/// L44:      index.insert(trigram, self.current_doc_id);
+/// ```
+pub fn format_search_results(result: &SearchResult, offset: usize) -> String {
+    let mut out = String::new();
+
+    // Summary line
+    let file_count = result.files.len();
+    let showing_start = offset + 1;
+    let showing_end = offset + file_count;
+
+    if result.total_file_count > file_count || offset > 0 {
+        writeln!(
+            out,
+            "Found {} matches across {} files (showing {}-{}, offset={})",
+            result.total_match_count, result.total_file_count, showing_start, showing_end, offset,
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            out,
+            "Found {} matches across {} files (showing {}-{})",
+            result.total_match_count, result.total_file_count, showing_start, showing_end,
+        )
+        .unwrap();
+    }
+
+    // Tip for very large result sets
+    if result.total_file_count > 100 {
+        writeln!(
+            out,
+            "Tip: Consider narrowing with path:, language:, or a more specific query."
+        )
+        .unwrap();
+    }
+
+    // File sections
+    for file_match in &result.files {
+        writeln!(out).unwrap();
+        writeln!(
+            out,
+            "## {} ({}, {} matches)",
+            file_match.path.display(),
+            file_match.language,
+            file_match.lines.len(),
+        )
+        .unwrap();
+
+        for line_match in &file_match.lines {
+            // Context before
+            for ctx in &line_match.context_before {
+                writeln!(out, "L{}:  {}", ctx.line_number, ctx.content).unwrap();
+            }
+            // Match line (marked with *)
+            format_match_line(&mut out, line_match);
+            // Context after
+            for ctx in &line_match.context_after {
+                writeln!(out, "L{}:  {}", ctx.line_number, ctx.content).unwrap();
+            }
+        }
+    }
+
+    out
+}
+
+/// Format search results using `FormatOptions` (foundation API, used by tests).
+pub fn format_search_results_with_options(
+    results: &SearchResult,
+    options: &FormatOptions,
+) -> String {
     let mut out = String::new();
 
     // Summary line
@@ -151,7 +220,9 @@ pub fn format_staleness_warning(age_secs: u64, pending_changes: usize) -> Option
     ))
 }
 
-/// Format a list of files with language and size metadata.
+// ---- File list formatting (used by search_files tool) ----
+
+/// Format a list of files as plain text.
 ///
 /// Output format:
 /// ```text
@@ -160,7 +231,51 @@ pub fn format_staleness_warning(age_secs: u64, pending_changes: usize) -> Option
 /// src/config.rs                    (Rust, 2.1 KB)
 /// src/config/mod.rs                (Rust, 450 B)
 /// ```
-pub fn format_file_list(files: &[FileInfo], query: &str) -> String {
+pub fn format_file_list(
+    query: &str,
+    total_count: usize,
+    entries: &[FileListEntry],
+    offset: usize,
+) -> String {
+    let mut out = String::new();
+
+    if total_count == 0 {
+        out.push_str(&format!("No files found matching \"{query}\"."));
+        return out;
+    }
+
+    if offset == 0 && entries.len() == total_count {
+        writeln!(out, "Found {total_count} files matching \"{query}\"").unwrap();
+    } else {
+        let start = offset + 1;
+        let end = offset + entries.len();
+        writeln!(
+            out,
+            "Found {total_count} files matching \"{query}\" (showing {start}-{end})"
+        )
+        .unwrap();
+    }
+
+    writeln!(out).unwrap();
+    for entry in entries {
+        let lang_str = if entry.language == Language::Unknown {
+            String::new()
+        } else {
+            format!("{}", entry.language)
+        };
+        let size_str = format_entry_size(entry.size_bytes);
+        if lang_str.is_empty() {
+            writeln!(out, "{}    ({size_str})", entry.path).unwrap();
+        } else {
+            writeln!(out, "{}    ({lang_str}, {size_str})", entry.path).unwrap();
+        }
+    }
+
+    out
+}
+
+/// Format a list of files using `FileInfo` (foundation API, used by tests).
+pub fn format_file_info_list(files: &[FileInfo], query: &str) -> String {
     let mut out = String::new();
 
     writeln!(out, "Found {} files matching \"{query}\"", files.len()).unwrap();
@@ -179,16 +294,73 @@ pub fn format_file_list(files: &[FileInfo], query: &str) -> String {
     out
 }
 
-/// Format file content with line numbers and metadata header.
+// ---- File content formatting (used by get_file tool) ----
+
+/// Format file content with line numbers.
 ///
 /// Output format:
 /// ```text
-/// src/index/trigram.rs (lines 1-85 of 142, Rust, indexed 2m ago)
+/// src/index/trigram.rs (lines 1-85 of 142, Rust)
 ///
 ///   1 | use std::collections::HashMap;
 ///   2 | use roaring::RoaringBitmap;
 /// ```
-pub fn format_file_content(content: &str, path: &str, metadata: &FileFormatMetadata) -> String {
+pub fn format_file_content(
+    path: &str,
+    language: Language,
+    total_lines: usize,
+    start_line: usize,
+    lines: &[&str],
+    truncated: bool,
+) -> String {
+    let mut out = String::new();
+
+    if lines.is_empty() {
+        let lang_str = if language == Language::Unknown {
+            String::new()
+        } else {
+            format!(", {language}")
+        };
+        writeln!(out, "{path} (empty file{lang_str})").unwrap();
+        return out;
+    }
+
+    let end_line = start_line + lines.len() - 1;
+    let lang_str = if language == Language::Unknown {
+        String::new()
+    } else {
+        format!(", {language}")
+    };
+    writeln!(
+        out,
+        "{path} (lines {start_line}-{end_line} of {total_lines}{lang_str})"
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+
+    let width = format!("{}", start_line + lines.len()).len();
+    for (i, line) in lines.iter().enumerate() {
+        let line_num = start_line + i;
+        writeln!(out, "{line_num:>width$} | {line}").unwrap();
+    }
+
+    if truncated {
+        writeln!(
+            out,
+            "\n(truncated at line {end_line} -- use start_line/end_line to read more)"
+        )
+        .unwrap();
+    }
+
+    out
+}
+
+/// Format file content using `FileFormatMetadata` (foundation API).
+pub fn format_file_content_with_metadata(
+    content: &str,
+    path: &str,
+    metadata: &FileFormatMetadata,
+) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let line_count = lines.len();
     let total = metadata.total_lines;
@@ -217,6 +389,8 @@ pub fn format_file_content(content: &str, path: &str, metadata: &FileFormatMetad
 
     out
 }
+
+// ---- Index status formatting ----
 
 /// Format index status information.
 ///
@@ -267,7 +441,7 @@ fn format_match_line(out: &mut String, line_match: &LineMatch) {
     writeln!(out, "L{}:* {}", line_match.line_number, line_match.content).unwrap();
 }
 
-/// Format a byte size as a human-readable string.
+/// Format a byte size as a human-readable string (u64 version).
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
@@ -277,6 +451,17 @@ fn format_size(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     } else {
         format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+/// Format a byte size as a human-readable string (u32 version, for file list entries).
+fn format_entry_size(bytes: u32) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
     }
 }
 
@@ -307,7 +492,115 @@ mod tests {
 
     use super::*;
 
-    // ---- format_search_results ----
+    // ---- format_search_results (search-code agent style) ----
+
+    fn make_result(files: Vec<FileMatch>, total_file_count: usize) -> SearchResult {
+        let total_match_count: usize = files.iter().map(|f| f.lines.len()).sum();
+        SearchResult {
+            total_match_count,
+            total_file_count,
+            files,
+            duration: Duration::from_millis(5),
+        }
+    }
+
+    #[test]
+    fn test_format_empty_results() {
+        let result = make_result(vec![], 0);
+        let text = format_search_results(&result, 0);
+        assert!(text.contains("Found 0 matches across 0 files"));
+    }
+
+    #[test]
+    fn test_format_single_file_single_match() {
+        let result = make_result(
+            vec![FileMatch {
+                file_id: FileId(0),
+                path: PathBuf::from("src/main.rs"),
+                language: Language::Rust,
+                lines: vec![LineMatch {
+                    line_number: 5,
+                    content: "fn main() {".to_string(),
+                    ranges: vec![(0, 7)],
+                    context_before: vec![],
+                    context_after: vec![],
+                }],
+                score: 0.9,
+            }],
+            1,
+        );
+        let text = format_search_results(&result, 0);
+        assert!(text.contains("Found 1 matches across 1 files"));
+        assert!(text.contains("## src/main.rs (Rust, 1 matches)"));
+        assert!(text.contains("L5:* fn main() {"));
+    }
+
+    #[test]
+    fn test_format_with_context_lines() {
+        let result = make_result(
+            vec![FileMatch {
+                file_id: FileId(0),
+                path: PathBuf::from("src/main.rs"),
+                language: Language::Rust,
+                lines: vec![LineMatch {
+                    line_number: 5,
+                    content: "fn main() {".to_string(),
+                    ranges: vec![(0, 7)],
+                    context_before: vec![ContextLine {
+                        line_number: 4,
+                        content: "/// Entry point".to_string(),
+                    }],
+                    context_after: vec![ContextLine {
+                        line_number: 6,
+                        content: "    println!(\"hello\");".to_string(),
+                    }],
+                }],
+                score: 0.9,
+            }],
+            1,
+        );
+        let text = format_search_results(&result, 0);
+        assert!(text.contains("L4:  /// Entry point"));
+        assert!(text.contains("L5:* fn main() {"));
+        assert!(text.contains("L6:  "));
+    }
+
+    #[test]
+    fn test_format_with_pagination_offset() {
+        let result = make_result(
+            vec![FileMatch {
+                file_id: FileId(0),
+                path: PathBuf::from("src/lib.rs"),
+                language: Language::Rust,
+                lines: vec![LineMatch {
+                    line_number: 1,
+                    content: "pub mod foo;".to_string(),
+                    ranges: vec![],
+                    context_before: vec![],
+                    context_after: vec![],
+                }],
+                score: 0.5,
+            }],
+            10,
+        );
+        let text = format_search_results(&result, 5);
+        assert!(text.contains("showing 6-6, offset=5"));
+        assert!(text.contains("10 files"));
+    }
+
+    #[test]
+    fn test_format_large_result_set_tip() {
+        let result = SearchResult {
+            total_match_count: 500,
+            total_file_count: 200,
+            files: vec![],
+            duration: Duration::from_millis(50),
+        };
+        let text = format_search_results(&result, 0);
+        assert!(text.contains("Tip: Consider narrowing"));
+    }
+
+    // ---- format_search_results_with_options (foundation API) ----
 
     #[test]
     fn test_format_search_results_basic() {
@@ -330,7 +623,7 @@ mod tests {
             duration: Duration::from_millis(5),
         };
 
-        let output = format_search_results(&result, &FormatOptions::default());
+        let output = format_search_results_with_options(&result, &FormatOptions::default());
         assert!(output.contains("Found 2 matches across 1 files"));
         assert!(output.contains("## src/main.rs"));
         assert!(output.contains("L5:* fn main() {"));
@@ -360,7 +653,7 @@ mod tests {
             duration: Duration::from_millis(1),
         };
 
-        let output = format_search_results(&result, &FormatOptions::default());
+        let output = format_search_results_with_options(&result, &FormatOptions::default());
         // When all results fit, no "showing X-Y"
         assert!(output.contains("Found 3 matches across 2 files\n"));
         assert!(!output.contains("showing"));
@@ -385,7 +678,7 @@ mod tests {
             offset: 10,
             page_size: 20,
         };
-        let output = format_search_results(&result, &opts);
+        let output = format_search_results_with_options(&result, &opts);
         assert!(output.contains("(showing 11-11)"));
     }
 
@@ -398,7 +691,7 @@ mod tests {
             duration: Duration::from_millis(50),
         };
 
-        let output = format_search_results(&result, &FormatOptions::default());
+        let output = format_search_results_with_options(&result, &FormatOptions::default());
         assert!(output.contains("Tip: Consider narrowing"));
     }
 
@@ -411,7 +704,7 @@ mod tests {
             duration: Duration::from_millis(1),
         };
 
-        let output = format_search_results(&result, &FormatOptions::default());
+        let output = format_search_results_with_options(&result, &FormatOptions::default());
         assert!(!output.contains("Tip:"));
     }
 
@@ -442,7 +735,7 @@ mod tests {
             duration: Duration::from_millis(2),
         };
 
-        let output = format_search_results(&result, &FormatOptions::default());
+        let output = format_search_results_with_options(&result, &FormatOptions::default());
         assert!(output.contains("L9:  // comment"));
         assert!(output.contains("L10:* let x = trigram();"));
         assert!(output.contains("L11:  println!"));
@@ -476,10 +769,65 @@ mod tests {
         assert!(warning.contains("2 hours stale"));
     }
 
-    // ---- format_file_list ----
+    // ---- format_file_list (file-tools agent API) ----
 
     #[test]
-    fn test_format_file_list() {
+    fn test_format_file_list_no_results() {
+        let result = format_file_list("missing", 0, &[], 0);
+        assert_eq!(result, "No files found matching \"missing\".");
+    }
+
+    #[test]
+    fn test_format_file_list_simple() {
+        let entries = vec![
+            FileListEntry {
+                path: "src/main.rs".to_string(),
+                language: Language::Rust,
+                size_bytes: 2150,
+            },
+            FileListEntry {
+                path: "src/lib.rs".to_string(),
+                language: Language::Rust,
+                size_bytes: 450,
+            },
+        ];
+        let result = format_file_list("main", 2, &entries, 0);
+        assert!(result.contains("Found 2 files matching \"main\""));
+        assert!(result.contains("src/main.rs"));
+        assert!(result.contains("(Rust, 2.1 KB)"));
+        assert!(result.contains("src/lib.rs"));
+        assert!(result.contains("(Rust, 450 B)"));
+    }
+
+    #[test]
+    fn test_format_file_list_with_pagination() {
+        let entries = vec![FileListEntry {
+            path: "b.rs".to_string(),
+            language: Language::Rust,
+            size_bytes: 100,
+        }];
+        let result = format_file_list("config", 10, &entries, 5);
+        assert!(result.contains("showing 6-6"));
+    }
+
+    #[test]
+    fn test_format_file_list_unknown_language() {
+        let entries = vec![FileListEntry {
+            path: "Makefile".to_string(),
+            language: Language::Unknown,
+            size_bytes: 200,
+        }];
+        let result = format_file_list("make", 1, &entries, 0);
+        assert!(result.contains("Makefile"));
+        assert!(result.contains("(200 B)"));
+        // Should NOT contain "Unknown"
+        assert!(!result.contains("Unknown"));
+    }
+
+    // ---- format_file_info_list (foundation API) ----
+
+    #[test]
+    fn test_format_file_info_list() {
         let files = vec![
             FileInfo {
                 path: "src/config.rs".into(),
@@ -493,7 +841,7 @@ mod tests {
             },
         ];
 
-        let output = format_file_list(&files, "config");
+        let output = format_file_info_list(&files, "config");
         assert!(output.contains("Found 2 files matching \"config\""));
         assert!(output.contains("src/config.rs"));
         assert!(output.contains("Rust"));
@@ -502,15 +850,53 @@ mod tests {
     }
 
     #[test]
-    fn test_format_file_list_empty() {
-        let output = format_file_list(&[], "nonexistent");
+    fn test_format_file_info_list_empty() {
+        let output = format_file_info_list(&[], "nonexistent");
         assert!(output.contains("Found 0 files matching \"nonexistent\""));
     }
 
-    // ---- format_file_content ----
+    // ---- format_file_content (file-tools agent API) ----
 
     #[test]
-    fn test_format_file_content() {
+    fn test_format_file_content_basic() {
+        let lines = vec!["fn main() {}", "    println!(\"hello\");", "}"];
+        let result = format_file_content("src/main.rs", Language::Rust, 3, 1, &lines, false);
+        assert!(result.contains("src/main.rs (lines 1-3 of 3, Rust)"));
+        assert!(result.contains("1 | fn main() {}"));
+        assert!(result.contains("2 |     println!(\"hello\");"));
+        assert!(result.contains("3 | }"));
+        assert!(!result.contains("truncated"));
+    }
+
+    #[test]
+    fn test_format_file_content_truncated() {
+        let lines = vec!["line1", "line2"];
+        let result = format_file_content("a.rs", Language::Rust, 1000, 499, &lines, true);
+        assert!(result.contains("lines 499-500 of 1000"));
+        assert!(result.contains("truncated at line 500"));
+    }
+
+    #[test]
+    fn test_format_file_content_line_number_width() {
+        let lines: Vec<&str> = vec!["x", "x", "x"];
+        let result = format_file_content("a.rs", Language::Rust, 1000, 998, &lines, false);
+        // Line numbers 998, 999, 1000 -- all should be 4 digits wide
+        assert!(result.contains(" 998 | x"));
+        assert!(result.contains(" 999 | x"));
+        assert!(result.contains("1000 | x"));
+    }
+
+    #[test]
+    fn test_format_file_content_empty() {
+        let lines: Vec<&str> = vec![];
+        let result = format_file_content("empty.rs", Language::Rust, 0, 1, &lines, false);
+        assert!(result.contains("empty.rs (empty file, Rust)"));
+    }
+
+    // ---- format_file_content_with_metadata (foundation API) ----
+
+    #[test]
+    fn test_format_file_content_with_metadata_basic() {
         let content = "use std::io;\n\nfn main() {\n    println!(\"hello\");\n}\n";
         let metadata = FileFormatMetadata {
             total_lines: 5,
@@ -518,14 +904,14 @@ mod tests {
             indexed_ago: Some("2m ago".into()),
         };
 
-        let output = format_file_content(content, "src/main.rs", &metadata);
+        let output = format_file_content_with_metadata(content, "src/main.rs", &metadata);
         assert!(output.contains("src/main.rs (lines 1-5 of 5, Rust, indexed 2m ago)"));
         assert!(output.contains("  1 | use std::io;"));
         assert!(output.contains("  3 | fn main() {"));
     }
 
     #[test]
-    fn test_format_file_content_no_indexed_ago() {
+    fn test_format_file_content_with_metadata_no_indexed_ago() {
         let content = "line1\nline2\n";
         let metadata = FileFormatMetadata {
             total_lines: 2,
@@ -533,7 +919,7 @@ mod tests {
             indexed_ago: None,
         };
 
-        let output = format_file_content(content, "app.py", &metadata);
+        let output = format_file_content_with_metadata(content, "app.py", &metadata);
         assert!(output.contains("app.py (lines 1-2 of 2, Python)"));
         assert!(!output.contains("indexed"));
     }
@@ -592,6 +978,28 @@ mod tests {
     #[test]
     fn test_format_size_gigabytes() {
         assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
+    }
+
+    // ---- format_entry_size helper (u32 version) ----
+
+    #[test]
+    fn test_format_entry_size_bytes() {
+        assert_eq!(format_entry_size(0), "0 B");
+        assert_eq!(format_entry_size(512), "512 B");
+        assert_eq!(format_entry_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn test_format_entry_size_kilobytes() {
+        assert_eq!(format_entry_size(1024), "1.0 KB");
+        assert_eq!(format_entry_size(2150), "2.1 KB");
+        assert_eq!(format_entry_size(1_048_575), "1024.0 KB");
+    }
+
+    #[test]
+    fn test_format_entry_size_megabytes() {
+        assert_eq!(format_entry_size(1_048_576), "1.0 MB");
+        assert_eq!(format_entry_size(10_485_760), "10.0 MB");
     }
 
     // ---- format_duration_approx helper ----

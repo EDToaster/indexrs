@@ -1,5 +1,6 @@
 pub mod errors;
 pub mod formatter;
+pub mod resources;
 pub mod server;
 pub mod tools;
 
