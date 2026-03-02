@@ -341,6 +341,11 @@ fn search_single_segment_with_context(
         );
     }
 
+    let now_epoch_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ranking_config = RankingConfig::default();
     let budget = AtomicUsize::new(max_file_results.unwrap_or(usize::MAX));
 
     let file_matches: Vec<FileMatch> = candidates
@@ -378,10 +383,6 @@ fn search_single_segment_with_context(
             }
 
             let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
             let input = ScoringInput {
                 path: &meta.path,
                 query,
@@ -389,10 +390,9 @@ fn search_single_segment_with_context(
                 match_count: total_match_ranges,
                 line_count: meta.line_count,
                 mtime_epoch_secs: meta.mtime_epoch_secs,
-                now_epoch_secs: now,
+                now_epoch_secs,
             };
-            let config = RankingConfig::default();
-            let score = score_file_match(&input, &config);
+            let score = score_file_match(&input, &ranking_config);
 
             Some(FileMatch {
                 file_id,
@@ -417,6 +417,11 @@ fn search_single_segment_with_context_seq(
     max_file_results: Option<usize>,
     candidates: Vec<FileId>,
 ) -> Result<Vec<FileMatch>, IndexError> {
+    let now_epoch_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ranking_config = RankingConfig::default();
     let mut file_matches = Vec::new();
 
     for file_id in candidates {
@@ -439,10 +444,6 @@ fn search_single_segment_with_context_seq(
         }
 
         let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
         let input = ScoringInput {
             path: &meta.path,
             query,
@@ -450,10 +451,9 @@ fn search_single_segment_with_context_seq(
             match_count: total_match_ranges,
             line_count: meta.line_count,
             mtime_epoch_secs: meta.mtime_epoch_secs,
-            now_epoch_secs: now,
+            now_epoch_secs,
         };
-        let config = RankingConfig::default();
-        let score = score_file_match(&input, &config);
+        let score = score_file_match(&input, &ranking_config);
 
         file_matches.push(FileMatch {
             file_id,
@@ -521,6 +521,8 @@ fn verify_candidate_with_pattern(
     pattern: &MatchPattern,
     verifier: &ContentVerifier,
     context_lines: usize,
+    now_epoch_secs: u64,
+    ranking_config: &RankingConfig,
 ) -> Option<FileMatch> {
     let meta = segment.get_metadata(file_id).ok()??;
 
@@ -565,10 +567,6 @@ fn verify_candidate_with_pattern(
     };
 
     let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
     let match_type = match pattern {
         MatchPattern::Regex(_) => MatchType::Regex,
         _ => MatchType::Substring,
@@ -585,10 +583,9 @@ fn verify_candidate_with_pattern(
         match_count: total_match_ranges,
         line_count: meta.line_count,
         mtime_epoch_secs: meta.mtime_epoch_secs,
-        now_epoch_secs: now,
+        now_epoch_secs,
     };
-    let config = RankingConfig::default();
-    let score = score_file_match(&input, &config);
+    let score = score_file_match(&input, ranking_config);
 
     Some(FileMatch {
         file_id,
@@ -642,6 +639,11 @@ fn search_single_segment_with_pattern(
         );
     }
 
+    let now_epoch_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ranking_config = RankingConfig::default();
     let budget = AtomicUsize::new(max_file_results.unwrap_or(usize::MAX));
 
     let file_matches: Vec<FileMatch> = candidates
@@ -656,7 +658,7 @@ fn search_single_segment_with_pattern(
             }
 
             let file_match =
-                verify_candidate_with_pattern(segment, file_id, pattern, &verifier, context_lines)?;
+                verify_candidate_with_pattern(segment, file_id, pattern, &verifier, context_lines, now_epoch_secs, &ranking_config)?;
 
             // Decrement budget atomically; if already 0, discard this result
             if budget
@@ -686,6 +688,11 @@ fn search_single_segment_with_pattern_seq(
     max_file_results: Option<usize>,
     candidates: Vec<FileId>,
 ) -> Result<Vec<FileMatch>, IndexError> {
+    let now_epoch_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ranking_config = RankingConfig::default();
     let mut file_matches = Vec::new();
 
     for file_id in candidates {
@@ -694,7 +701,7 @@ fn search_single_segment_with_pattern_seq(
         }
 
         if let Some(file_match) =
-            verify_candidate_with_pattern(segment, file_id, pattern, verifier, context_lines)
+            verify_candidate_with_pattern(segment, file_id, pattern, verifier, context_lines, now_epoch_secs, &ranking_config)
         {
             file_matches.push(file_match);
 
@@ -1146,6 +1153,11 @@ fn search_single_segment_with_query(
     let candidates = sort_candidates_by_size(segment, candidates);
 
     let matcher = QueryMatcher::new(query, context_lines as u32);
+    let now_epoch_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ranking_config = RankingConfig::default();
     let budget = AtomicUsize::new(max_file_results.unwrap_or(usize::MAX));
 
     let verify_candidate = |&file_id: &FileId| -> Option<FileMatch> {
@@ -1181,10 +1193,6 @@ fn search_single_segment_with_query(
         }
 
         let total_match_ranges: usize = line_matches.iter().map(|lm| lm.ranges.len()).sum();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
         let input = ScoringInput {
             path: &meta.path,
             query: "",
@@ -1192,10 +1200,9 @@ fn search_single_segment_with_query(
             match_count: total_match_ranges.max(1),
             line_count: meta.line_count,
             mtime_epoch_secs: meta.mtime_epoch_secs,
-            now_epoch_secs: now,
+            now_epoch_secs,
         };
-        let config = RankingConfig::default();
-        let score = score_file_match(&input, &config);
+        let score = score_file_match(&input, &ranking_config);
 
         Some(FileMatch {
             file_id,
