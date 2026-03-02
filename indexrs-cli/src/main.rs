@@ -1,6 +1,7 @@
 mod args;
 mod color;
 mod daemon;
+mod estimate;
 mod files;
 mod init;
 mod output;
@@ -231,9 +232,16 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             }
             Ok(ExitCode::Success)
         }
-        Command::Estimate { .. } => {
-            eprintln!("estimate: not yet implemented");
-            Ok(ExitCode::Error)
+        Command::Estimate {
+            directory,
+            segment_budget_mb,
+        } => {
+            let dir = match directory {
+                Some(d) => d,
+                None => repo::find_repo_root(cli.repo.as_deref())?,
+            };
+            estimate::run_estimate(&dir, segment_budget_mb)?;
+            Ok(ExitCode::Success)
         }
         Command::Init { force } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
