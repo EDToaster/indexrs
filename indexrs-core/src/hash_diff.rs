@@ -44,7 +44,7 @@ pub fn hash_diff(repo_root: &Path, segments: &SegmentList) -> Result<Vec<ChangeE
                 TombstoneSet::read_from(&path)?
             }
         };
-        let reader = segment.metadata_reader()?;
+        let reader = segment.metadata_reader();
         for entry in reader.iter_all() {
             let meta = entry?;
             if tombstones.contains(meta.file_id) {

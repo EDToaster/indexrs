@@ -39,7 +39,7 @@ pub fn collect_files(
 
     for segment in snapshot.iter() {
         let tombstones = segment.load_tombstones()?;
-        let reader = segment.metadata_reader()?;
+        let reader = segment.metadata_reader();
         let seg_id = segment.segment_id();
 
         for entry in reader.iter_all() {

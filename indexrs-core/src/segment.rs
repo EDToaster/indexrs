@@ -147,8 +147,10 @@ impl Segment {
     /// Create a `MetadataReader` for this segment's metadata.
     ///
     /// Useful for iterating all entries (e.g. during compaction).
-    pub fn metadata_reader(&self) -> Result<MetadataReader<'_>, IndexError> {
-        MetadataReader::new(&self.meta_mmap, &self.paths_mmap)
+    /// This skips header re-validation since the header was already
+    /// validated during [`Segment::open()`].
+    pub fn metadata_reader(&self) -> MetadataReader<'_> {
+        MetadataReader::new_unchecked(&self.meta_mmap, &self.paths_mmap, self.entry_count)
     }
 
     /// Look up file metadata by file ID.
@@ -156,7 +158,7 @@ impl Segment {
     /// Creates an ephemeral `MetadataReader` from the stored memory maps.
     /// Returns `Ok(None)` if the file ID does not exist in this segment.
     pub fn get_metadata(&self, file_id: FileId) -> Result<Option<FileMetadata>, IndexError> {
-        let reader = MetadataReader::new(&self.meta_mmap, &self.paths_mmap)?;
+        let reader = MetadataReader::new_unchecked(&self.meta_mmap, &self.paths_mmap, self.entry_count);
         reader.get(file_id)
     }
 
@@ -166,7 +168,7 @@ impl Segment {
     /// avoids deserializing the full entry. Used for candidate ordering
     /// (sort by file size before verification).
     pub fn get_size_bytes(&self, file_id: FileId) -> Result<Option<u32>, IndexError> {
-        let reader = MetadataReader::new(&self.meta_mmap, &self.paths_mmap)?;
+        let reader = MetadataReader::new_unchecked(&self.meta_mmap, &self.paths_mmap, self.entry_count);
         reader.get_size_bytes(file_id)
     }
 
@@ -820,7 +822,7 @@ mod tests {
         let writer = SegmentWriter::new(&base_dir, SegmentId(0));
         let segment = writer.build(files).unwrap();
 
-        let reader = segment.metadata_reader().unwrap();
+        let reader = segment.metadata_reader();
         let all: Vec<_> = reader.iter_all().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].path, "a.rs");

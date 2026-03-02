@@ -178,10 +178,7 @@ impl SegmentManager {
     fn find_file_in_segments(segments: &[Arc<Segment>], path: &str) -> Vec<(usize, FileId)> {
         let mut results = Vec::new();
         for (seg_idx, segment) in segments.iter().enumerate() {
-            let reader = match segment.metadata_reader() {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
+            let reader = segment.metadata_reader();
             let tombstones = segment.load_tombstones().unwrap_or_default();
 
             for entry in reader.iter_all() {
@@ -583,7 +580,7 @@ impl SegmentManager {
         let mut live_entries: Vec<(usize, FileMetadata)> = Vec::new();
         for (seg_idx, segment) in current_segments.iter().enumerate() {
             let tombstones = segment.load_tombstones()?;
-            let reader = segment.metadata_reader()?;
+            let reader = segment.metadata_reader();
             for entry_result in reader.iter_all() {
                 let entry: FileMetadata = entry_result?;
                 if !tombstones.contains(entry.file_id) {
@@ -1064,7 +1061,7 @@ mod tests {
         assert_eq!(snap_after[0].entry_count(), 3);
 
         // Verify all files are accessible
-        let reader = snap_after[0].metadata_reader().unwrap();
+        let reader = snap_after[0].metadata_reader();
         let all: Vec<_> = reader.iter_all().collect::<Result<Vec<_>, _>>().unwrap();
         let paths: Vec<&str> = all.iter().map(|m| m.path.as_str()).collect();
         assert!(paths.contains(&"file_0.rs"));
@@ -1301,7 +1298,7 @@ mod tests {
         // All files should still be findable
         let mut all_paths: Vec<String> = Vec::new();
         for seg in snap.iter() {
-            let reader = seg.metadata_reader().unwrap();
+            let reader = seg.metadata_reader();
             for entry in reader.iter_all() {
                 all_paths.push(entry.unwrap().path);
             }
@@ -1421,7 +1418,7 @@ mod tests {
         let snap = manager.snapshot();
         let mut all_paths: Vec<String> = Vec::new();
         for seg in snap.iter() {
-            let reader = seg.metadata_reader().unwrap();
+            let reader = seg.metadata_reader();
             for entry in reader.iter_all() {
                 all_paths.push(entry.unwrap().path);
             }

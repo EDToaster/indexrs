@@ -194,7 +194,7 @@ fn print_stats(
 
     for seg in snap.iter() {
         let tombstones = seg.load_tombstones().unwrap_or_default();
-        let reader = seg.metadata_reader()?;
+        let reader = seg.metadata_reader();
         for entry in reader.iter_all() {
             let entry = entry?;
             if tombstones.contains(entry.file_id) {
