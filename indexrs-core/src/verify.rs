@@ -21,12 +21,7 @@ struct LineIndex {
 impl LineIndex {
     /// Build a line index from file content.
     fn new(content: &[u8]) -> Self {
-        let newline_offsets: Vec<usize> = content
-            .iter()
-            .enumerate()
-            .filter(|&(_, &b)| b == b'\n')
-            .map(|(i, _)| i)
-            .collect();
+        let newline_offsets: Vec<usize> = memchr_iter(b'\n', content).collect();
         LineIndex {
             newline_offsets,
             content_len: content.len(),
@@ -91,6 +86,7 @@ impl LineIndex {
     }
 }
 
+use memchr::memchr_iter;
 use regex::{Regex, RegexBuilder};
 
 use crate::search::{ContextBlock, ContextLine, LineMatch, MatchPattern};
@@ -658,6 +654,35 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].before.len(), 1); // only line 1
         assert_eq!(blocks[0].after.len(), 1); // only line 3
+    }
+
+    #[test]
+    fn test_line_index_memchr_parity() {
+        // Verify LineIndex produces the same results for varied content
+        let cases: &[&[u8]] = &[
+            b"",
+            b"no newlines",
+            b"\n",
+            b"\n\n\n",
+            b"line1\nline2\nline3\n",
+            b"line1\nline2\nline3",
+            b"\nleading\ntrailing\n",
+        ];
+        for content in cases {
+            let idx = LineIndex::new(content);
+            // Manually compute expected offsets
+            let expected: Vec<usize> = content
+                .iter()
+                .enumerate()
+                .filter(|&(_, &b)| b == b'\n')
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(
+                idx.newline_offsets, expected,
+                "mismatch for content: {:?}",
+                String::from_utf8_lossy(content)
+            );
+        }
     }
 
     #[test]
