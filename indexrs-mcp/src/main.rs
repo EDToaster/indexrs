@@ -4,12 +4,46 @@ pub mod resources;
 pub mod server;
 pub mod tools;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use clap::Parser;
 use rmcp::ServiceExt;
 use rmcp::transport::io::stdio;
 
 use server::IndexrsServer;
+
+#[derive(Parser)]
+#[command(name = "indexrs-mcp", about = "indexrs MCP server")]
+struct Cli {
+    /// Path to the repository root. Walks up from cwd looking for .indexrs/ or .git/ if omitted.
+    #[arg(long)]
+    repo: Option<PathBuf>,
+}
+
+/// Find the repository root directory.
+///
+/// If `repo_arg` is provided, canonicalizes it.
+/// Otherwise walks up from cwd looking for `.indexrs/` or `.git/`.
+fn find_repo_root(repo_arg: Option<&PathBuf>) -> Result<PathBuf, String> {
+    if let Some(repo) = repo_arg {
+        return std::fs::canonicalize(repo)
+            .map_err(|e| format!("invalid --repo path '{}': {e}", repo.display()));
+    }
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot read cwd: {e}"))?;
+    let mut dir = cwd.clone();
+    loop {
+        if dir.join(".indexrs").is_dir() || dir.join(".git").exists() {
+            return Ok(dir);
+        }
+        if !dir.pop() {
+            return Err(format!(
+                "not inside a git repository or indexrs project (searched from {})",
+                cwd.display()
+            ));
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -22,8 +56,38 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
 
+    let cli = Cli::parse();
+
+    let repo_root = match find_repo_root(cli.repo.as_ref()) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let segments_dir = repo_root.join(".indexrs").join("segments");
     let index_state = Arc::new(indexrs_core::IndexState::new());
-    let server = IndexrsServer::new(index_state, None);
+
+    match indexrs_core::recover_segments(&segments_dir) {
+        Ok(segments) => {
+            if !segments.is_empty() {
+                let count = segments.len();
+                let arcs: Vec<Arc<indexrs_core::Segment>> =
+                    segments.into_iter().map(Arc::new).collect();
+                index_state.publish(arcs);
+                eprintln!("loaded {count} segment(s) from {}", segments_dir.display());
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: failed to recover segments from {}: {e}",
+                segments_dir.display()
+            );
+        }
+    }
+
+    let server = IndexrsServer::new(index_state, Some(repo_root));
 
     let service = server
         .serve(stdio())

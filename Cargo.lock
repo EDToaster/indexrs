@@ -541,6 +541,7 @@ dependencies = [
 name = "indexrs-mcp"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "glob",
  "indexrs-core",
  "rmcp",
