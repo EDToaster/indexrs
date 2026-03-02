@@ -139,12 +139,7 @@ fn verify_content_matches(content: &[u8], query: &str, context_lines: usize) -> 
 
 /// Find the first occurrence of `needle` in `haystack`, returning the byte offset.
 fn find_substring(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+    memchr::memmem::find(haystack, needle)
 }
 
 /// Search across multiple segments with snapshot isolation.

@@ -86,7 +86,7 @@ impl LineIndex {
     }
 }
 
-use memchr::memchr_iter;
+use memchr::{memchr_iter, memmem};
 use regex::{Regex, RegexBuilder};
 
 use crate::search::{ContextBlock, ContextLine, LineMatch, MatchPattern};
@@ -330,12 +330,7 @@ impl ContentVerifier {
 
 /// Find the first occurrence of `needle` in `haystack`, returning the byte offset.
 fn find_substring(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
+    memmem::find(haystack, needle)
 }
 
 /// Compute the byte offset of the start of a 1-based line number.
