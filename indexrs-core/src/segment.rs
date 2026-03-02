@@ -1077,4 +1077,53 @@ mod tests {
 
         assert_eq!(count, 3, "callback should fire once per file");
     }
+
+    #[test]
+    fn test_load_tombstones_missing_file_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![InputFile {
+            path: "a.rs".to_string(),
+            content: b"fn a() {}".to_vec(),
+            mtime: 0,
+        }];
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        // Remove tombstones.bin to simulate it never being written
+        let tombstone_path = segment.dir_path().join("tombstones.bin");
+        fs::remove_file(&tombstone_path).unwrap();
+
+        // Should return empty rather than an I/O error
+        let ts = segment.load_tombstones().unwrap();
+        assert!(ts.is_empty());
+    }
+
+    #[test]
+    fn test_load_tombstones_after_directory_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs/segments");
+        fs::create_dir_all(&base_dir).unwrap();
+
+        let files = vec![InputFile {
+            path: "a.rs".to_string(),
+            content: b"fn a() {}".to_vec(),
+            mtime: 0,
+        }];
+
+        let writer = SegmentWriter::new(&base_dir, SegmentId(0));
+        let segment = writer.build(files).unwrap();
+
+        // Simulate compaction deleting the entire segment directory while
+        // a reader still holds an Arc<Segment> with an empty tombstone cache.
+        let seg_dir = segment.dir_path().to_path_buf();
+        fs::remove_dir_all(&seg_dir).unwrap();
+
+        // load_tombstones should return empty, not an I/O error
+        let ts = segment.load_tombstones().unwrap();
+        assert!(ts.is_empty());
+    }
 }
