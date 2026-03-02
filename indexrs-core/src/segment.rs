@@ -235,7 +235,13 @@ impl Segment {
     /// Read tombstones from disk without caching.
     fn load_tombstones_from_disk(&self) -> Result<TombstoneSet, IndexError> {
         let path = self.dir_path.join("tombstones.bin");
-        let data = std::fs::read(&path)?;
+        let data = match std::fs::read(&path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(TombstoneSet::new());
+            }
+            Err(e) => return Err(e.into()),
+        };
         if data.is_empty() {
             return Ok(TombstoneSet::new());
         }
