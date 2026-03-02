@@ -354,7 +354,7 @@ impl IndexrsServer {
     /// Read the contents of an indexed file.
     #[tool(
         name = "get_file",
-        description = "Read file contents from the index. Returns the file with line numbers. Supports reading a range of lines (start_line/max_lines) to avoid large payloads. Note: contents reflect the last index time, so prefer cat/head/tail for reading files directly when freshness matters."
+        description = "Read file contents from the index. Returns the file with line numbers. Supports reading a range of lines (start_line/end_line) to avoid large payloads. Max 500 lines per request. Note: contents reflect the last index time, so prefer cat/head/tail for reading files directly when freshness matters."
     )]
     async fn get_file(
         &self,
