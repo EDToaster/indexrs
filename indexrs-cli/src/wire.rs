@@ -16,7 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::daemon::DaemonResponse;
 
-const TAG_LINE: u8 = 0x01;
+pub(crate) const TAG_LINE: u8 = 0x01;
 const TAG_DONE: u8 = 0x02;
 const TAG_ERROR: u8 = 0x03;
 const TAG_PONG: u8 = 0x04;

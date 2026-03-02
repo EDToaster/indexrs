@@ -67,9 +67,8 @@ pub enum DaemonRequest {
     Reindex,
 }
 
-/// Response from daemon to CLI client, one JSON line per message.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+/// Response from daemon to CLI client, sent as TLV binary frames.
+#[derive(Debug, PartialEq)]
 pub enum DaemonResponse {
     /// A single output line (file path or search match).
     Line { content: String },
@@ -292,7 +291,7 @@ fn format_and_send_file_match(
 
         let payload = line.as_bytes();
         let mut frame = Vec::with_capacity(5 + payload.len());
-        frame.push(0x01); // TAG_LINE
+        frame.push(crate::wire::TAG_LINE);
         frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         frame.extend_from_slice(payload);
         if tx.send(frame).is_err() {
@@ -388,7 +387,7 @@ fn handle_files_request(
 /// Handle a single client connection.
 ///
 /// Reads newline-delimited JSON requests from the client and writes
-/// newline-delimited JSON responses back.
+/// TLV binary-framed responses back.
 async fn handle_connection(
     stream: UnixStream,
     manager: &std::sync::Arc<SegmentManager>,
