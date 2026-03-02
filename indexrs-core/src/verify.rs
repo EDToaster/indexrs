@@ -134,19 +134,26 @@ impl ContentVerifier {
     ///
     /// Returns an empty vector if the content is empty or no matches are found.
     pub fn verify(&self, content: &[u8]) -> Vec<LineMatch> {
+        self.verify_inner(content).0
+    }
+
+    /// Inner verify that returns both matches and the LineIndex for reuse.
+    fn verify_inner(&self, content: &[u8]) -> (Vec<LineMatch>, LineIndex) {
         if content.is_empty() {
-            return Vec::new();
+            return (Vec::new(), LineIndex::new(content));
         }
 
         let line_index = LineIndex::new(content);
         let text = String::from_utf8_lossy(content);
 
-        match &self.pattern {
+        let matches = match &self.pattern {
             MatchPattern::Literal(lit) => self.verify_literal(&text, &line_index, lit.as_bytes()),
             MatchPattern::Regex(_) | MatchPattern::LiteralCaseInsensitive(_) => {
                 self.verify_regex(&text, &line_index)
             }
-        }
+        };
+
+        (matches, line_index)
     }
 
     /// Literal substring verification (byte-level matching).
@@ -247,12 +254,11 @@ impl ContentVerifier {
     ///
     /// Returns an empty vector if no matches are found.
     pub fn verify_with_context(&self, content: &[u8]) -> Vec<ContextBlock> {
-        let line_matches = self.verify(content);
+        let (line_matches, line_index) = self.verify_inner(content);
         if line_matches.is_empty() {
             return Vec::new();
         }
 
-        let line_index = LineIndex::new(content);
         let total_lines = line_index.line_count() as u32;
 
         if self.context_lines == 0 {
