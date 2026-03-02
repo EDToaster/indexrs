@@ -973,16 +973,6 @@ mod tests {
     }
 
     #[test]
-    fn test_response_roundtrip() {
-        let resp = DaemonResponse::Line {
-            content: "src/main.rs:10:5:hello".to_string(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, DaemonResponse::Line { .. }));
-    }
-
-    #[test]
     fn test_socket_path() {
         let root = PathBuf::from("/tmp/test-repo");
         let path = socket_path(&root);
@@ -1011,79 +1001,6 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, DaemonRequest::Shutdown));
-    }
-
-    #[test]
-    fn test_response_roundtrip_done() {
-        let resp = DaemonResponse::Done {
-            total: 42,
-            duration_ms: 123,
-            stale: false,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
-        match parsed {
-            DaemonResponse::Done {
-                total,
-                duration_ms,
-                stale,
-            } => {
-                assert_eq!(total, 42);
-                assert_eq!(duration_ms, 123);
-                assert!(!stale);
-            }
-            _ => panic!("expected Done variant"),
-        }
-    }
-
-    #[test]
-    fn test_response_roundtrip_done_stale() {
-        let resp = DaemonResponse::Done {
-            total: 10,
-            duration_ms: 50,
-            stale: true,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
-        match parsed {
-            DaemonResponse::Done { stale, .. } => assert!(stale),
-            _ => panic!("expected Done variant"),
-        }
-    }
-
-    #[test]
-    fn test_response_roundtrip_error() {
-        let resp = DaemonResponse::Error {
-            message: "something went wrong".to_string(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
-        match parsed {
-            DaemonResponse::Error { message } => {
-                assert_eq!(message, "something went wrong");
-            }
-            _ => panic!("expected Error variant"),
-        }
-    }
-
-    #[test]
-    fn test_response_roundtrip_pong() {
-        let resp = DaemonResponse::Pong;
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, DaemonResponse::Pong));
-    }
-
-    #[test]
-    fn test_response_roundtrip_progress() {
-        let resp = DaemonResponse::Progress {
-            message: "Detecting changes...".to_string(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let parsed: DaemonResponse = serde_json::from_str(&json).unwrap();
-        assert!(
-            matches!(parsed, DaemonResponse::Progress { message } if message == "Detecting changes...")
-        );
     }
 
     #[tokio::test]
@@ -1121,9 +1038,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut response_line = String::new();
-        reader.read_line(&mut response_line).await.unwrap();
-        let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+        let resp = crate::wire::read_response(&mut reader).await.unwrap();
         assert!(matches!(resp, DaemonResponse::Pong));
 
         // Send Shutdown to clean up.
@@ -1197,9 +1112,7 @@ mod tests {
 
         let mut lines = Vec::new();
         loop {
-            let mut response_line = String::new();
-            reader.read_line(&mut response_line).await.unwrap();
-            let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+            let resp = crate::wire::read_response(&mut reader).await.unwrap();
             match resp {
                 DaemonResponse::Line { content } => {
                     lines.push(content);
@@ -1274,9 +1187,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut response_line = String::new();
-        reader.read_line(&mut response_line).await.unwrap();
-        let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+        let resp = crate::wire::read_response(&mut reader).await.unwrap();
         assert!(
             matches!(resp, DaemonResponse::Error { .. }),
             "invalid regex should return Error, got {resp:?}"
@@ -1353,9 +1264,7 @@ mod tests {
         // Read responses: expect at least one Line, then Done.
         let mut lines = Vec::new();
         loop {
-            let mut response_line = String::new();
-            reader.read_line(&mut response_line).await.unwrap();
-            let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+            let resp = crate::wire::read_response(&mut reader).await.unwrap();
             match resp {
                 DaemonResponse::Line { content } => {
                     lines.push(content);
@@ -1516,9 +1425,7 @@ mod tests {
 
         let mut lines = Vec::new();
         loop {
-            let mut response_line = String::new();
-            reader.read_line(&mut response_line).await.unwrap();
-            let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+            let resp = crate::wire::read_response(&mut reader).await.unwrap();
             match resp {
                 DaemonResponse::Line { content } => lines.push(content),
                 DaemonResponse::Done { .. } => break,
@@ -1701,9 +1608,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut response_line = String::new();
-        reader.read_line(&mut response_line).await.unwrap();
-        let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+        let resp = crate::wire::read_response(&mut reader).await.unwrap();
         assert!(matches!(resp, DaemonResponse::Pong));
 
         // Shutdown.
@@ -1786,9 +1691,7 @@ mod tests {
         let mut lines = Vec::new();
         let mut got_done = false;
         loop {
-            let mut response_line = String::new();
-            reader.read_line(&mut response_line).await.unwrap();
-            let resp: DaemonResponse = serde_json::from_str(response_line.trim()).unwrap();
+            let resp = crate::wire::read_response(&mut reader).await.unwrap();
             match resp {
                 DaemonResponse::Line { content } => {
                     assert!(!got_done, "should not receive Line after Done");
