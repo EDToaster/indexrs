@@ -67,7 +67,7 @@ pub enum DaemonRequest {
 }
 
 /// Response from daemon to CLI client, one JSON line per message.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonResponse {
     /// A single output line (file path or search match).

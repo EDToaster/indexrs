@@ -8,6 +8,8 @@ mod paths;
 mod preview;
 mod repo;
 mod search_cmd;
+#[allow(dead_code)]
+mod wire;
 
 use std::io::IsTerminal;
 
