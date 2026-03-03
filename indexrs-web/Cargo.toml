@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-askama = { version = "0.15.4", features = ["full"] }
+askama = "0.15.4"
+askama_web = { version = "0.15.1", features = ["axum-0.8"] }
 axum = "0.8"
 indexrs-core = { path = "../indexrs-core" }
 indexrs-daemon = { path = "../indexrs-daemon" }

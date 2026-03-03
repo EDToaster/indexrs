@@ -111,7 +111,6 @@ dependencies = [
  "basic-toml",
  "memchr",
  "proc-macro2",
- "pulldown-cmark",
  "quote",
  "rustc-hash",
  "serde",
@@ -139,6 +138,30 @@ dependencies = [
  "serde_derive",
  "unicode-ident",
  "winnow",
+]
+
+[[package]]
+name = "askama_web"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5911a65ac3916ef133167a855d52978f9fbf54680a093e0ef29e20b7e94a4523"
+dependencies = [
+ "askama",
+ "askama_web_derive",
+ "axum-core",
+ "bytes",
+ "http",
+]
+
+[[package]]
+name = "askama_web_derive"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9767c17d33a63daf6da5872ffaf2ab0c289cd73ce7ed4f41d5ddf9149c004873"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -922,6 +945,7 @@ name = "indexrs-web"
 version = "0.1.0"
 dependencies = [
  "askama",
+ "askama_web",
  "axum",
  "indexrs-core",
  "indexrs-daemon",
@@ -1243,17 +1267,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "pulldown-cmark"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e8bbe1a966bd2f362681a44f6edce3c2310ac21e4d5067a6e7ec396297a6ea0"
-dependencies = [
- "bitflags 2.11.0",
- "memchr",
- "unicase",
 ]
 
 [[package]]
