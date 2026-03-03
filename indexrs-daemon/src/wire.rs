@@ -9,6 +9,7 @@
 //! | 0x03 | Error    | Raw UTF-8 string                                     |
 //! | 0x04 | Pong     | Empty (len=0)                                        |
 //! | 0x05 | Progress | Raw UTF-8 string                                     |
+//! | 0x06 | Json     | Raw UTF-8 JSON string                                |
 
 use std::io;
 
@@ -21,6 +22,7 @@ const TAG_DONE: u8 = 0x02;
 const TAG_ERROR: u8 = 0x03;
 const TAG_PONG: u8 = 0x04;
 const TAG_PROGRESS: u8 = 0x05;
+const TAG_JSON: u8 = 0x06;
 
 const DONE_PAYLOAD_LEN: u32 = 17;
 
@@ -104,6 +106,7 @@ pub async fn write_response<W: AsyncWriteExt + Unpin>(
         DaemonResponse::Progress { message } => {
             write_string_frame(writer, TAG_PROGRESS, message).await
         }
+        DaemonResponse::Json { payload } => write_string_frame(writer, TAG_JSON, payload).await,
     }
 }
 
@@ -149,6 +152,10 @@ pub async fn read_response<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Resul
         TAG_PROGRESS => {
             let message = read_utf8(reader, len).await?;
             Ok(DaemonResponse::Progress { message })
+        }
+        TAG_JSON => {
+            let payload = read_utf8(reader, len).await?;
+            Ok(DaemonResponse::Json { payload })
         }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -340,6 +347,24 @@ mod tests {
         // tag=0x04, len=0, total 5 bytes
         assert_eq!(buf, vec![0x04, 0x00, 0x00, 0x00, 0x00]);
         assert_eq!(buf.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_roundtrip_json() {
+        let resp = DaemonResponse::Json {
+            payload: r#"{"type":"result","file":{"path":"src/main.rs"}}"#.to_string(),
+        };
+        assert_eq!(roundtrip(&resp).await, resp);
+    }
+
+    #[tokio::test]
+    async fn test_json_frame_binary_layout() {
+        let resp = DaemonResponse::Json {
+            payload: "{}".to_string(),
+        };
+        let mut buf = Vec::new();
+        write_response(&mut buf, &resp).await.unwrap();
+        assert_eq!(buf, vec![0x06, 0x02, 0x00, 0x00, 0x00, b'{', b'}']);
     }
 
     #[test]

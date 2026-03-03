@@ -785,6 +785,12 @@ pub async fn run_via_daemon<W: std::io::Write>(
                 eprintln!("{message}");
             }
             DaemonResponse::Pong => {}
+            DaemonResponse::Json { payload } => {
+                if writer.write_line(&payload).is_err() {
+                    let _ = writer.finish();
+                    return Ok(ExitCode::Success);
+                }
+            }
         }
     }
 }

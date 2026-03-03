@@ -53,4 +53,6 @@ pub enum DaemonResponse {
     Pong,
     /// Progress update (e.g. during reindex).
     Progress { message: String },
+    /// JSON-serialized structured data (e.g., FileMatch, SearchStats).
+    Json { payload: String },
 }

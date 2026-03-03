@@ -136,6 +136,9 @@ impl DaemonClient {
                         duration_ms: 0,
                     });
                 }
+                DaemonResponse::Json { payload } => {
+                    lines.push(payload);
+                }
             }
         }
     }
