@@ -2153,6 +2153,31 @@ mod tests {
             "expected segments > 0, got {}",
             status.segments
         );
+        assert!(
+            status.index_bytes > 0,
+            "expected index_bytes > 0, got {}",
+            status.index_bytes
+        );
+        assert!(
+            status.last_indexed_ts > 0,
+            "expected last_indexed_ts > 0, got {}",
+            status.last_indexed_ts
+        );
+        assert!(
+            !status.languages.is_empty(),
+            "expected non-empty languages breakdown"
+        );
+        assert!(
+            status.languages.iter().any(|(lang, _)| lang == "Rust"),
+            "expected Rust in languages, got: {:?}",
+            status.languages
+        );
+        assert!(status.path_valid, "expected path_valid to be true");
+        assert!(
+            status.tombstone_ratio >= 0.0 && status.tombstone_ratio <= 1.0,
+            "expected tombstone_ratio in [0, 1], got {}",
+            status.tombstone_ratio
+        );
 
         // Shutdown.
         let req = serde_json::to_string(&DaemonRequest::Shutdown).unwrap();
