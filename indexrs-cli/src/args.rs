@@ -180,6 +180,12 @@ pub enum Command {
         segment_budget_mb: u64,
     },
 
+    /// Manage registered repositories
+    Repos {
+        #[command(subcommand)]
+        action: ReposAction,
+    },
+
     /// Internal: run as daemon process (hidden from help)
     #[command(name = "daemon-start", hide = true)]
     DaemonStart,
@@ -187,4 +193,23 @@ pub enum Command {
     /// Run as an MCP (Model Context Protocol) server over stdio
     #[cfg(feature = "mcp")]
     Mcp,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ReposAction {
+    /// List registered repositories
+    List,
+    /// Register a repository
+    Add {
+        /// Path to the repository root
+        path: PathBuf,
+        /// Override the auto-derived name
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Unregister a repository (does not delete index data)
+    Remove {
+        /// Repository name to unregister
+        name: String,
+    },
 }

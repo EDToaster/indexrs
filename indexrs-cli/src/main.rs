@@ -10,13 +10,14 @@ mod output;
 mod paths;
 mod preview;
 mod repo;
+mod repos;
 mod search_cmd;
 mod status;
 mod wire;
 
 use std::io::IsTerminal;
 
-use args::{Cli, ColorMode, Command};
+use args::{Cli, ColorMode, Command, ReposAction};
 use clap::Parser;
 use color::ColorConfig;
 use output::{ExitCode, StreamingWriter};
@@ -248,6 +249,14 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
         Command::Init { force } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
             init::run_init(&repo_root, force)?;
+            Ok(ExitCode::Success)
+        }
+        Command::Repos { action } => {
+            match action {
+                ReposAction::List => repos::run_list()?,
+                ReposAction::Add { path, name } => repos::run_add(&path, name.as_deref())?,
+                ReposAction::Remove { name } => repos::run_remove(&name)?,
+            }
             Ok(ExitCode::Success)
         }
         Command::DaemonStart => {
