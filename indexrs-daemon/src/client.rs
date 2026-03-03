@@ -2,7 +2,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use indexrs_core::error::IndexError;
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+
+use crate::types::{DaemonRequest, DaemonResponse};
+use crate::wire;
 
 /// Maximum time to wait for a spawned daemon to become ready.
 const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -61,6 +65,69 @@ pub async fn ensure_daemon(daemon_bin: &Path, repo_root: &Path) -> Result<UnixSt
                 std::io::ErrorKind::TimedOut,
                 "daemon did not start within timeout",
             )));
+        }
+    }
+}
+
+/// Result of a JSON protocol request collected from TLV response frames.
+#[derive(Debug)]
+pub struct JsonResult {
+    /// The JSON payloads from `DaemonResponse::Json` frames.
+    pub payloads: Vec<String>,
+    /// Total count from the `Done` frame.
+    pub total: usize,
+    /// Duration from the `Done` frame.
+    pub duration_ms: u64,
+    /// Whether the index was stale.
+    pub stale: bool,
+}
+
+/// Send a `DaemonRequest` over a connected `UnixStream` and collect all
+/// `DaemonResponse::Json` frames until `Done` is received.
+///
+/// This consumes the stream. Use [`try_connect`] or [`ensure_daemon`] to
+/// obtain a new stream.
+///
+/// Returns an error if the daemon sends an `Error` frame or if the
+/// connection drops unexpectedly.
+pub async fn send_json_request(
+    stream: UnixStream,
+    request: &DaemonRequest,
+) -> Result<JsonResult, IndexError> {
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+
+    let json =
+        serde_json::to_string(request).map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
+    writer
+        .write_all(format!("{json}\n").as_bytes())
+        .await
+        .map_err(IndexError::Io)?;
+
+    let mut payloads = Vec::new();
+    loop {
+        let resp = wire::read_response(&mut reader)
+            .await
+            .map_err(IndexError::Io)?;
+        match resp {
+            DaemonResponse::Json { payload } => payloads.push(payload),
+            DaemonResponse::Done {
+                total,
+                duration_ms,
+                stale,
+            } => {
+                return Ok(JsonResult {
+                    payloads,
+                    total,
+                    duration_ms,
+                    stale,
+                });
+            }
+            DaemonResponse::Error { message } => {
+                return Err(IndexError::Io(std::io::Error::other(message)));
+            }
+            // Skip non-JSON frame types (Line, Progress, Pong).
+            _ => {}
         }
     }
 }
