@@ -732,3 +732,149 @@ mark {
     color: var(--danger);
     font-weight: 500;
 }
+
+/* Clickable stat (segments toggle) */
+.repo-stat--clickable {
+    cursor: pointer;
+    padding: 0.15rem 0.35rem;
+    margin: -0.15rem 0;
+    border-radius: var(--radius);
+    transition: background var(--transition);
+}
+
+.repo-stat--clickable:hover {
+    background: var(--bg-elevated);
+}
+
+.repo-stat--clickable .repo-stat-label::after {
+    content: " \25BE"; /* down triangle */
+    font-size: 0.6rem;
+}
+
+/* Warning value (tombstone count) */
+.repo-stat-value--warning {
+    color: var(--danger);
+}
+
+/* Index breakdown bar */
+.repo-card-breakdown {
+    padding: 0.45rem 0.85rem;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.breakdown-bar {
+    display: flex;
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--bg-secondary);
+}
+
+.breakdown-bar-seg {
+    min-width: 2px;
+    transition: width var(--transition);
+}
+
+.breakdown-bar--content {
+    background: var(--accent);
+}
+
+.breakdown-bar--trigrams {
+    background: #f59e0b;
+}
+
+.breakdown-bar--meta {
+    background: #8b5cf6;
+}
+
+[data-theme="dark"] .breakdown-bar--trigrams {
+    background: #fbbf24;
+}
+
+[data-theme="dark"] .breakdown-bar--meta {
+    background: #a78bfa;
+}
+
+.breakdown-legend {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 0.3rem;
+    font-size: 0.68rem;
+    color: var(--fg-dim);
+}
+
+.breakdown-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.breakdown-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.breakdown-dot--content {
+    background: var(--accent);
+}
+
+.breakdown-dot--trigrams {
+    background: #f59e0b;
+}
+
+.breakdown-dot--meta {
+    background: #8b5cf6;
+}
+
+[data-theme="dark"] .breakdown-dot--trigrams {
+    background: #fbbf24;
+}
+
+[data-theme="dark"] .breakdown-dot--meta {
+    background: #a78bfa;
+}
+
+/* Segments detail table */
+.segments-table-wrap {
+    border-top: 1px solid var(--border-subtle);
+    overflow-x: auto;
+}
+
+.segments-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.segments-table thead th {
+    text-transform: uppercase;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-secondary);
+}
+
+.segments-table tbody td {
+    padding: 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--fg-dim);
+}
+
+.segments-table .seg-name {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--fg);
+}
+
+.seg-row--has-tombstones td:nth-child(3) {
+    color: var(--danger);
+    font-weight: 600;
+}

@@ -48,7 +48,7 @@
                     <span class="repo-stat-value">{{ repo.files_indexed }}</span>
                     <span class="repo-stat-label">files</span>
                 </span>
-                <span class="repo-stat">
+                <span class="repo-stat repo-stat--clickable" data-toggle="segments-{{ repo.name }}">
                     <span class="repo-stat-value">{{ repo.segments }}</span>
                     <span class="repo-stat-label">segments</span>
                 </span>
@@ -60,7 +60,57 @@
                     <span class="repo-stat-value">{{ repo.last_indexed }}</span>
                     <span class="repo-stat-label">indexed</span>
                 </span>
+                {% if repo.tombstoned_count > 0 %}
+                <span class="repo-stat">
+                    <span class="repo-stat-value repo-stat-value--warning">{{ repo.tombstoned_count }}</span>
+                    <span class="repo-stat-label">tombstoned</span>
+                </span>
+                {% endif %}
             </div>
+            {% if repo.has_breakdown %}
+            <div class="repo-card-breakdown">
+                <div class="breakdown-bar">
+                    <div class="breakdown-bar-seg breakdown-bar--content" style="width: {{ repo.content_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--trigrams" style="width: {{ repo.trigrams_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--meta" style="width: {{ repo.meta_pct }}%"></div>
+                </div>
+                <div class="breakdown-legend">
+                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--content"></span> Content {{ repo.content_bytes }}</span>
+                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--trigrams"></span> Trigrams {{ repo.trigrams_bytes }}</span>
+                    <span class="breakdown-legend-item"><span class="breakdown-dot breakdown-dot--meta"></span> Meta {{ repo.meta_paths_bytes }}</span>
+                </div>
+            </div>
+            {% endif %}
+            {% if !repo.segment_details.is_empty() %}
+            <div class="segments-table-wrap" id="segments-{{ repo.name }}" style="display: none">
+                <table class="segments-table">
+                    <thead>
+                        <tr>
+                            <th>Segment</th>
+                            <th>Files</th>
+                            <th>Tombstoned</th>
+                            <th>Size</th>
+                            <th>Content</th>
+                            <th>Trigrams</th>
+                            <th>Meta</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for seg in &repo.segment_details %}
+                        <tr{% if seg.tombstoned_count > 0 %} class="seg-row--has-tombstones"{% endif %}>
+                            <td class="seg-name">{{ seg.name }}</td>
+                            <td>{{ seg.entry_count }}</td>
+                            <td>{{ seg.tombstoned_count }}</td>
+                            <td>{{ seg.total_size }}</td>
+                            <td>{{ seg.content_bytes }}</td>
+                            <td>{{ seg.trigrams_bytes }}</td>
+                            <td>{{ seg.meta_paths_bytes }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
             {% if !repo.languages.is_empty() %}
             <div class="repo-card-langs">
                 {% for lang in &repo.languages %}

@@ -66,6 +66,17 @@ impl SearchResultsTemplate {
     }
 }
 
+/// Per-segment detail for the repos overview template.
+pub struct SegmentDetailItem {
+    pub name: String,
+    pub entry_count: u32,
+    pub tombstoned_count: u32,
+    pub total_size: String,
+    pub trigrams_bytes: String,
+    pub content_bytes: String,
+    pub meta_paths_bytes: String,
+}
+
 /// A repo entry for the repos overview page.
 pub struct RepoOverviewItem {
     pub name: String,
@@ -81,6 +92,15 @@ pub struct RepoOverviewItem {
     pub tombstone_pct: String,
     pub needs_compaction: bool,
     pub path_valid: bool,
+    pub tombstoned_count: u32,
+    pub content_bytes: String,
+    pub trigrams_bytes: String,
+    pub meta_paths_bytes: String,
+    pub content_pct: String,
+    pub trigrams_pct: String,
+    pub meta_pct: String,
+    pub has_breakdown: bool,
+    pub segment_details: Vec<SegmentDetailItem>,
 }
 
 #[derive(Template)]
@@ -453,40 +473,82 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
     let mut repos = Vec::with_capacity(repo_names.len());
     for name in &repo_names {
         let path = repos_map[name].clone();
+        let sr_opt = proxy_status_raw(state.daemon_bin(), &path).await.ok();
+        let online = sr_opt.is_some();
         let (
             status,
             files_indexed,
             segments,
-            online,
             index_bytes,
             last_indexed_ts,
             languages,
             tombstone_ratio,
             path_valid,
-        ) = match proxy_status_raw(state.daemon_bin(), &path).await {
-            Ok(sr) => (
+            tombstoned_count,
+            content_bytes_raw,
+            trigrams_bytes_raw,
+            meta_paths_bytes_raw,
+            segment_details_raw,
+        ) = match sr_opt {
+            Some(sr) => (
                 sr.status.clone(),
                 sr.files_indexed,
                 sr.segments,
-                true,
                 sr.index_bytes,
                 sr.last_indexed_ts,
                 sr.languages.clone(),
                 sr.tombstone_ratio,
                 sr.path_valid,
+                sr.tombstoned_count,
+                sr.content_bytes,
+                sr.trigrams_bytes,
+                sr.meta_paths_bytes,
+                sr.segment_details,
             ),
-            Err(_) => (
+            None => (
                 "offline".to_string(),
                 0,
                 0,
-                false,
                 0,
                 0,
                 vec![],
                 0.0,
                 path.is_dir(),
+                0,
+                0,
+                0,
+                0,
+                vec![],
             ),
         };
+
+        let total_breakdown = content_bytes_raw + trigrams_bytes_raw + meta_paths_bytes_raw;
+        let (content_pct, trigrams_pct, meta_pct) = if total_breakdown > 0 {
+            let c = content_bytes_raw as f64 / total_breakdown as f64 * 100.0;
+            let t = trigrams_bytes_raw as f64 / total_breakdown as f64 * 100.0;
+            let m = 100.0 - c - t; // ensure they sum to 100
+            (format!("{c:.1}"), format!("{t:.1}"), format!("{m:.1}"))
+        } else {
+            ("0".to_string(), "0".to_string(), "0".to_string())
+        };
+
+        let segment_details: Vec<SegmentDetailItem> = segment_details_raw
+            .into_iter()
+            .map(|s| {
+                let total =
+                    s.trigrams_bytes + s.meta_paths_bytes + s.content_bytes + s.tombstones_bytes;
+                SegmentDetailItem {
+                    name: format!("seg_{:04}", s.id),
+                    entry_count: s.entry_count,
+                    tombstoned_count: s.tombstoned_count,
+                    total_size: format_bytes(total),
+                    trigrams_bytes: format_bytes(s.trigrams_bytes),
+                    content_bytes: format_bytes(s.content_bytes),
+                    meta_paths_bytes: format_bytes(s.meta_paths_bytes),
+                }
+            })
+            .collect();
+
         let tombstone_pct = format!("{:.1}%", tombstone_ratio * 100.0);
         let needs_compaction = tombstone_ratio > 0.3;
         repos.push(RepoOverviewItem {
@@ -503,6 +565,15 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             tombstone_pct,
             needs_compaction,
             path_valid,
+            tombstoned_count,
+            content_bytes: format_bytes(content_bytes_raw),
+            trigrams_bytes: format_bytes(trigrams_bytes_raw),
+            meta_paths_bytes: format_bytes(meta_paths_bytes_raw),
+            content_pct,
+            trigrams_pct,
+            meta_pct,
+            has_breakdown: total_breakdown > 0,
+            segment_details,
         });
     }
 

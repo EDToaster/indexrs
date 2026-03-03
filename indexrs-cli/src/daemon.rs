@@ -890,6 +890,10 @@ async fn handle_connection(
                 }
             }
             DaemonRequest::Status => {
+                fn file_size(path: &std::path::Path) -> u64 {
+                    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+                }
+
                 let snapshot = manager.snapshot();
                 let mut files_indexed: usize = 0;
                 let mut total_entries: u32 = 0;
@@ -898,11 +902,17 @@ async fn handle_connection(
                 let mut lang_counts: std::collections::HashMap<String, usize> =
                     std::collections::HashMap::new();
 
+                let mut agg_content_bytes: u64 = 0;
+                let mut agg_trigrams_bytes: u64 = 0;
+                let mut agg_meta_paths_bytes: u64 = 0;
+                let mut segment_details = Vec::with_capacity(snapshot.len());
+
                 for seg in snapshot.iter() {
                     let tombstones = seg.load_tombstones()?;
                     let count = seg.entry_count();
                     total_entries += count;
-                    total_tombstoned += tombstones.len();
+                    let seg_tombstoned = tombstones.len();
+                    total_tombstoned += seg_tombstoned;
 
                     let reader = seg.metadata_reader();
                     for entry_result in reader.iter_all() {
@@ -916,7 +926,31 @@ async fn handle_connection(
                         }
                         *lang_counts.entry(entry.language.to_string()).or_insert(0) += 1;
                     }
+
+                    // Per-segment file sizes
+                    let seg_dir = seg.dir_path();
+                    let trigrams_b = file_size(&seg_dir.join("trigrams.bin"));
+                    let meta_b = file_size(&seg_dir.join("meta.bin"));
+                    let paths_b = file_size(&seg_dir.join("paths.bin"));
+                    let content_b = file_size(&seg_dir.join("content.zst"));
+                    let tombstones_b = file_size(&seg_dir.join("tombstones.bin"));
+
+                    agg_trigrams_bytes += trigrams_b;
+                    agg_meta_paths_bytes += meta_b + paths_b;
+                    agg_content_bytes += content_b;
+
+                    segment_details.push(indexrs_daemon::SegmentInfo {
+                        id: seg.segment_id().0,
+                        entry_count: count,
+                        tombstoned_count: seg_tombstoned,
+                        trigrams_bytes: trigrams_b,
+                        meta_paths_bytes: meta_b + paths_b,
+                        content_bytes: content_b,
+                        tombstones_bytes: tombstones_b,
+                    });
                 }
+
+                segment_details.sort_by_key(|s| s.id);
 
                 // Sort languages by count descending, take top 10.
                 let mut languages: Vec<(String, usize)> = lang_counts.into_iter().collect();
@@ -948,6 +982,11 @@ async fn handle_connection(
                     languages,
                     tombstone_ratio,
                     path_valid,
+                    tombstoned_count: total_tombstoned,
+                    content_bytes: agg_content_bytes,
+                    trigrams_bytes: agg_trigrams_bytes,
+                    meta_paths_bytes: agg_meta_paths_bytes,
+                    segment_details,
                 };
                 let payload = serde_json::to_string(&resp)
                     .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;

@@ -33,6 +33,18 @@ pub struct FileResponse {
     pub lines: Vec<String>,
 }
 
+/// Per-segment size breakdown.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SegmentInfo {
+    pub id: u32,
+    pub entry_count: u32,
+    pub tombstoned_count: u32,
+    pub trigrams_bytes: u64,
+    pub meta_paths_bytes: u64,
+    pub content_bytes: u64,
+    pub tombstones_bytes: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub status: String,
@@ -53,6 +65,21 @@ pub struct StatusResponse {
     /// Whether the registered repo path exists on disk.
     #[serde(default = "default_true")]
     pub path_valid: bool,
+    /// Absolute count of tombstoned entries across all segments.
+    #[serde(default)]
+    pub tombstoned_count: u32,
+    /// Aggregate content.zst size in bytes.
+    #[serde(default)]
+    pub content_bytes: u64,
+    /// Aggregate trigrams.bin size in bytes.
+    #[serde(default)]
+    pub trigrams_bytes: u64,
+    /// Aggregate meta.bin + paths.bin size in bytes.
+    #[serde(default)]
+    pub meta_paths_bytes: u64,
+    /// Per-segment breakdown.
+    #[serde(default)]
+    pub segment_details: Vec<SegmentInfo>,
 }
 
 fn default_true() -> bool {
@@ -166,6 +193,11 @@ mod tests {
             languages: vec![("Rust".to_string(), 100), ("Python".to_string(), 50)],
             tombstone_ratio: 0.05,
             path_valid: true,
+            tombstoned_count: 10,
+            content_bytes: 3000,
+            trigrams_bytes: 1500,
+            meta_paths_bytes: 500,
+            segment_details: vec![],
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains(r#""status":"ready"#));
@@ -180,6 +212,27 @@ mod tests {
         assert_eq!(deserialized.last_indexed_ts, 1700000000);
         assert_eq!(deserialized.languages.len(), 2);
         assert!(deserialized.path_valid);
+    }
+
+    #[test]
+    fn test_status_response_backward_compat() {
+        // Old JSON without the new fields should deserialize with defaults.
+        let old_json = r#"{
+            "status": "ready",
+            "files_indexed": 42,
+            "segments": 2,
+            "index_bytes": 1000,
+            "last_indexed_ts": 1700000000,
+            "languages": [],
+            "tombstone_ratio": 0.0,
+            "path_valid": true
+        }"#;
+        let resp: StatusResponse = serde_json::from_str(old_json).unwrap();
+        assert_eq!(resp.tombstoned_count, 0);
+        assert_eq!(resp.content_bytes, 0);
+        assert_eq!(resp.trigrams_bytes, 0);
+        assert_eq!(resp.meta_paths_bytes, 0);
+        assert!(resp.segment_details.is_empty());
     }
 
     #[test]

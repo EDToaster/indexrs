@@ -160,6 +160,14 @@
         });
     }
 
+    // Toggle collapsible sections (e.g. segment detail table)
+    document.addEventListener("click", function(e) {
+        var toggle = e.target.closest("[data-toggle]");
+        if (!toggle) return;
+        var target = document.getElementById(toggle.getAttribute("data-toggle"));
+        if (target) target.style.display = target.style.display === "none" ? "" : "none";
+    });
+
     // Auto-focus search on page load
     document.addEventListener("DOMContentLoaded", function() {
         focusSearch();
