@@ -5,9 +5,9 @@ use std::time::Instant;
 use indexrs_core::checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
 use indexrs_core::error::IndexError;
 use indexrs_core::git_diff::GitChangeDetector;
+use indexrs_core::registry::{add_repo, config_file_path, load_config, save_config};
 use indexrs_core::segment::InputFile;
 use indexrs_core::walker::DirectoryWalkerBuilder;
-use indexrs_core::registry::{add_repo, config_file_path, load_config, save_config};
 use indexrs_core::{DEFAULT_MAX_FILE_SIZE, SegmentManager, should_index_file};
 
 /// Format a number with comma separators (e.g. 1234567 -> "1,234,567").

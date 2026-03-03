@@ -10,9 +10,9 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
     pub color: ColorMode,
 
-    /// Repository root path (default: auto-detect from cwd)
-    #[arg(short = 'r', long, value_name = "PATH", global = true)]
-    pub repo: Option<PathBuf>,
+    /// Repository root path or registered name (default: auto-detect from cwd)
+    #[arg(short = 'r', long, value_name = "REPO", global = true)]
+    pub repo: Option<String>,
 
     /// Increase verbosity (can repeat: -vv for debug)
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
