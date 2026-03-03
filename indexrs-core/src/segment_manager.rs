@@ -418,14 +418,15 @@ impl SegmentManager {
             }
         }
 
-        // Collect files that need new entries
-        let mut new_files: Vec<InputFile> = Vec::new();
+        // Collect changes that need new entries, then read files in parallel
+        let new_file_changes: Vec<&ChangeEvent> = changes
+            .iter()
+            .filter(|c| tombstone::needs_new_entry(&c.kind))
+            .collect();
 
-        for change in changes {
-            // Read new content if needed
-            if tombstone::needs_new_entry(&change.kind) {
-                let path_str = change.path.to_string_lossy().to_string();
-
+        let new_files: Vec<InputFile> = new_file_changes
+            .par_iter()
+            .filter_map(|change| {
                 let has_dotdot = change
                     .path
                     .components()
@@ -433,36 +434,44 @@ impl SegmentManager {
                 if has_dotdot || change.path.is_absolute() {
                     tracing::warn!(
                         path = %change.path.display(),
-                        "skipping change with potentially unsafe path (contains '..' or is absolute)"
+                        "skipping change with potentially unsafe path"
                     );
-                    continue;
+                    return None;
                 }
 
+                let path_str = change.path.to_string_lossy().to_string();
                 let full_path = repo_dir.join(&change.path);
-                if full_path.is_file() {
-                    let content = fs::read(&full_path)?;
-
-                    if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
-                        continue;
-                    }
-
-                    let mtime = full_path
-                        .metadata()
-                        .and_then(|m| m.modified())
-                        .map(|t| {
-                            t.duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs()
-                        })
-                        .unwrap_or(0);
-                    new_files.push(InputFile {
-                        path: path_str,
-                        content,
-                        mtime,
-                    });
+                if !full_path.is_file() {
+                    return None;
                 }
-            }
-        }
+                let content = match fs::read(&full_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(path = %full_path.display(), error = %e, "skipping file: read error");
+                        return None;
+                    }
+                };
+
+                if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
+                    return None;
+                }
+
+                let mtime = full_path
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })
+                    .unwrap_or(0);
+                Some(InputFile {
+                    path: path_str,
+                    content,
+                    mtime,
+                })
+            })
+            .collect();
 
         // Build new segment BEFORE writing tombstones to avoid data loss
         // on crash: if we tombstone first and crash before building the
@@ -556,14 +565,18 @@ impl SegmentManager {
             }
         }
 
-        // Collect files that need new entries
-        let mut new_files: Vec<InputFile> = Vec::new();
-        let total_changes = changes.len();
+        // Collect changes that need new entries, then read files in parallel
+        let new_file_changes: Vec<&ChangeEvent> = changes
+            .iter()
+            .filter(|c| tombstone::needs_new_entry(&c.kind))
+            .collect();
 
-        for (i, change) in changes.iter().enumerate() {
-            if tombstone::needs_new_entry(&change.kind) {
-                let path_str = change.path.to_string_lossy().to_string();
+        let total_to_read = new_file_changes.len();
+        let files_read = AtomicUsize::new(0);
 
+        let new_files: Vec<InputFile> = new_file_changes
+            .par_iter()
+            .filter_map(|change| {
                 let has_dotdot = change
                     .path
                     .components()
@@ -571,41 +584,51 @@ impl SegmentManager {
                 if has_dotdot || change.path.is_absolute() {
                     tracing::warn!(
                         path = %change.path.display(),
-                        "skipping change with potentially unsafe path (contains '..' or is absolute)"
+                        "skipping change with potentially unsafe path"
                     );
-                    continue;
+                    return None;
                 }
 
+                let path_str = change.path.to_string_lossy().to_string();
                 let full_path = repo_dir.join(&change.path);
-                if full_path.is_file() {
-                    let content = fs::read(&full_path)?;
-
-                    if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
-                        continue;
-                    }
-
-                    let mtime = full_path
-                        .metadata()
-                        .and_then(|m| m.modified())
-                        .map(|t| {
-                            t.duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs()
-                        })
-                        .unwrap_or(0);
-                    new_files.push(InputFile {
-                        path: path_str,
-                        content,
-                        mtime,
-                    });
+                if !full_path.is_file() {
+                    return None;
                 }
-            }
+                let content = match fs::read(&full_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(path = %full_path.display(), error = %e, "skipping file: read error");
+                        return None;
+                    }
+                };
 
-            on_progress(ReindexProgress::PreparingFiles {
-                current: i + 1,
-                total: total_changes,
-            });
-        }
+                if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
+                    return None;
+                }
+
+                let mtime = full_path
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })
+                    .unwrap_or(0);
+
+                let current = files_read.fetch_add(1, Ordering::Relaxed) + 1;
+                on_progress(ReindexProgress::PreparingFiles {
+                    current,
+                    total: total_to_read,
+                });
+
+                Some(InputFile {
+                    path: path_str,
+                    content,
+                    mtime,
+                })
+            })
+            .collect();
 
         // Build new segment BEFORE writing tombstones
         let mut updated_segments = current_segments.clone();
@@ -1907,5 +1930,93 @@ mod tests {
         let c_locs = &result["c.rs"];
         assert_eq!(c_locs.len(), 1);
         assert_eq!(c_locs[0].0, 1); // segment index 1
+    }
+
+    #[test]
+    fn test_apply_changes_bulk_creates() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Create 50 files on disk and corresponding change events
+        let mut changes = Vec::new();
+        for i in 0..50 {
+            let name = format!("file_{i:03}.rs");
+            fs::write(repo_dir.join(&name), format!("fn func_{i}() {{}}")).unwrap();
+            changes.push(ChangeEvent {
+                path: PathBuf::from(name),
+                kind: ChangeKind::Created,
+            });
+        }
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 50);
+    }
+
+    #[test]
+    fn test_apply_changes_bulk_mixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Pre-index 20 files
+        let mut initial_files = Vec::new();
+        for i in 0..20 {
+            let name = format!("existing_{i:03}.rs");
+            let content = format!("fn existing_{i}() {{}}");
+            fs::write(repo_dir.join(&name), &content).unwrap();
+            initial_files.push(InputFile {
+                path: name,
+                content: content.into_bytes(),
+                mtime: 100,
+            });
+        }
+        manager.index_files(initial_files).unwrap();
+
+        // Now: modify 10, delete 5, create 15
+        let mut changes = Vec::new();
+        for i in 0..10 {
+            let name = format!("existing_{i:03}.rs");
+            fs::write(repo_dir.join(&name), format!("fn updated_{i}() {{}}")).unwrap();
+            changes.push(ChangeEvent {
+                path: PathBuf::from(name),
+                kind: ChangeKind::Modified,
+            });
+        }
+        for i in 10..15 {
+            changes.push(ChangeEvent {
+                path: PathBuf::from(format!("existing_{i:03}.rs")),
+                kind: ChangeKind::Deleted,
+            });
+        }
+        for i in 0..15 {
+            let name = format!("new_{i:03}.rs");
+            fs::write(repo_dir.join(&name), format!("fn new_{i}() {{}}")).unwrap();
+            changes.push(ChangeEvent {
+                path: PathBuf::from(name),
+                kind: ChangeKind::Created,
+            });
+        }
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 2); // original + new
+
+        // 15 tombstoned in original segment (10 modified + 5 deleted)
+        let ts = snap[0].load_tombstones().unwrap();
+        assert_eq!(ts.len(), 15);
+
+        // New segment: 10 modified + 15 created = 25 files
+        assert_eq!(snap[1].entry_count(), 25);
     }
 }
