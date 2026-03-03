@@ -892,15 +892,46 @@ async fn handle_connection(
             DaemonRequest::Status => {
                 let snapshot = manager.snapshot();
                 let mut files_indexed: usize = 0;
+                let mut total_entries: u32 = 0;
+                let mut total_tombstoned: u32 = 0;
+                let mut last_mtime: u64 = 0;
+                let mut lang_counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+
                 for seg in snapshot.iter() {
                     let tombstones = seg.load_tombstones()?;
                     let count = seg.entry_count();
-                    for i in 0..count {
-                        if !tombstones.contains(FileId(i)) {
-                            files_indexed += 1;
+                    total_entries += count;
+                    total_tombstoned += tombstones.len();
+
+                    let reader = seg.metadata_reader();
+                    for entry_result in reader.iter_all() {
+                        let entry = entry_result?;
+                        if tombstones.contains(entry.file_id) {
+                            continue;
                         }
+                        files_indexed += 1;
+                        if entry.mtime_epoch_secs > last_mtime {
+                            last_mtime = entry.mtime_epoch_secs;
+                        }
+                        *lang_counts.entry(entry.language.to_string()).or_insert(0) += 1;
                     }
                 }
+
+                // Sort languages by count descending, take top 10.
+                let mut languages: Vec<(String, usize)> = lang_counts.into_iter().collect();
+                languages.sort_by(|a, b| b.1.cmp(&a.1));
+                languages.truncate(10);
+
+                let tombstone_ratio = if total_entries == 0 {
+                    0.0
+                } else {
+                    total_tombstoned as f32 / total_entries as f32
+                };
+
+                let segments_dir = indexrs_dir.join("segments");
+                let index_bytes = indexrs_core::dir_size(&segments_dir);
+                let path_valid = repo_root.is_dir();
 
                 let status = if caught_up.load(Ordering::Relaxed) {
                     "ready"
@@ -912,6 +943,11 @@ async fn handle_connection(
                     status: status.to_string(),
                     files_indexed,
                     segments: snapshot.len(),
+                    index_bytes,
+                    last_indexed_ts: last_mtime,
+                    languages,
+                    tombstone_ratio,
+                    path_valid,
                 };
                 let payload = serde_json::to_string(&resp)
                     .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;

@@ -38,6 +38,25 @@ pub struct StatusResponse {
     pub status: String,
     pub files_indexed: usize,
     pub segments: usize,
+    /// Total bytes on disk for the index directory (.indexrs/segments/).
+    #[serde(default)]
+    pub index_bytes: u64,
+    /// Unix epoch seconds of the most recently modified file in the index.
+    #[serde(default)]
+    pub last_indexed_ts: u64,
+    /// Top languages by file count: vec of (language_name, file_count).
+    #[serde(default)]
+    pub languages: Vec<(String, usize)>,
+    /// Fraction of entries that are tombstoned (0.0 to 1.0).
+    #[serde(default)]
+    pub tombstone_ratio: f32,
+    /// Whether the registered repo path exists on disk.
+    #[serde(default = "default_true")]
+    pub path_valid: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -142,6 +161,11 @@ mod tests {
             status: "ready".to_string(),
             files_indexed: 1234,
             segments: 3,
+            index_bytes: 5000,
+            last_indexed_ts: 1700000000,
+            languages: vec![("Rust".to_string(), 100), ("Python".to_string(), 50)],
+            tombstone_ratio: 0.05,
+            path_valid: true,
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains(r#""status":"ready"#));
@@ -152,6 +176,10 @@ mod tests {
         assert_eq!(deserialized.status, "ready");
         assert_eq!(deserialized.files_indexed, 1234);
         assert_eq!(deserialized.segments, 3);
+        assert_eq!(deserialized.index_bytes, 5000);
+        assert_eq!(deserialized.last_indexed_ts, 1700000000);
+        assert_eq!(deserialized.languages.len(), 2);
+        assert!(deserialized.path_valid);
     }
 
     #[test]
