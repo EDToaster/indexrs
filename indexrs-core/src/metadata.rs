@@ -349,6 +349,35 @@ impl<'a> MetadataReader<'a> {
         Ok(None)
     }
 
+    /// Find the `FileId` for a given path by scanning entries.
+    ///
+    /// Compares path bytes directly against the paths pool without allocating
+    /// a `String`, making it faster than `iter_all()` + filter for single lookups.
+    /// Returns `None` if no entry matches.
+    pub fn find_file_id_by_path(&self, path: &str) -> Option<FileId> {
+        let needle = path.as_bytes();
+        for i in 0..self.entry_count {
+            let offset = HEADER_SIZE + (i as usize) * ENTRY_SIZE;
+            let entry_data = &self.data[offset..offset + ENTRY_SIZE];
+
+            let path_offset = u32::from_le_bytes(entry_data[4..8].try_into().unwrap()) as usize;
+            let path_len = u32::from_le_bytes(entry_data[8..12].try_into().unwrap()) as usize;
+
+            if path_len != needle.len() {
+                continue;
+            }
+            let path_end = path_offset + path_len;
+            if path_end > self.paths.len() {
+                continue;
+            }
+            if &self.paths[path_offset..path_end] == needle {
+                let file_id = u32::from_le_bytes(entry_data[0..4].try_into().unwrap());
+                return Some(FileId(file_id));
+            }
+        }
+        None
+    }
+
     /// Iterate over all file metadata entries in order of index position.
     ///
     /// Returns an iterator yielding `Result<FileMetadata, IndexError>` for
@@ -833,6 +862,31 @@ mod tests {
         assert_eq!(entry.content_offset, u64::MAX);
         assert_eq!(entry.content_len, u32::MAX);
         assert_eq!(entry.content_hash, [0xFF; 16]);
+    }
+
+    /// Helper to write a builder to in-memory buffers for testing.
+    fn write_to_buffers(builder: &MetadataBuilder) -> (Vec<u8>, Vec<u8>) {
+        let mut meta_buf = Vec::new();
+        let mut paths_buf = Vec::new();
+        builder.write_to(&mut meta_buf, &mut paths_buf).unwrap();
+        (meta_buf, paths_buf)
+    }
+
+    #[test]
+    fn test_reader_find_file_id_by_path() {
+        let mut builder = MetadataBuilder::new();
+        builder.add_file(make_entry(0, "src/main.rs", Language::Rust));
+        builder.add_file(make_entry(1, "src/lib.rs", Language::Rust));
+        builder.add_file(make_entry(2, "README.md", Language::Markdown));
+
+        let (meta_buf, paths_buf) = write_to_buffers(&builder);
+        let reader = MetadataReader::new(&meta_buf, &paths_buf).unwrap();
+
+        assert_eq!(reader.find_file_id_by_path("src/main.rs"), Some(FileId(0)));
+        assert_eq!(reader.find_file_id_by_path("src/lib.rs"), Some(FileId(1)));
+        assert_eq!(reader.find_file_id_by_path("README.md"), Some(FileId(2)));
+        assert_eq!(reader.find_file_id_by_path("nonexistent.rs"), None);
+        assert_eq!(reader.find_file_id_by_path(""), None);
     }
 
     #[test]
