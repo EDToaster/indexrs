@@ -29,6 +29,81 @@ Estimate index disk space and peak RAM for a directory:
 cargo run -p indexrs-core --example bench_space --release -- <directory> [segment-budget-mb]
 ```
 
+Start the web interface (requires at least one registered repo):
+```bash
+cargo run -p indexrs-cli -- web                # default port 4040
+cargo run -p indexrs-cli -- web --port 8080    # custom port
+```
+
+## Web Interface E2E Testing
+
+The web interface (`indexrs web`) can be tested end-to-end using Playwright MCP tools. This requires a running server with at least one indexed repo.
+
+### Setup
+
+```bash
+# 1. Initialize and register a test repo
+cargo run -p indexrs-cli -- init
+cargo run -p indexrs-cli -- repos add . --name test-repo
+
+# 2. Start the web server (runs in foreground, use background for automated tests)
+cargo run -p indexrs-cli -- web --port 4040
+```
+
+### Playwright MCP test workflow
+
+Use the Playwright MCP tools (`browser_install`, `browser_navigate`, `browser_snapshot`, `browser_evaluate`, `browser_type`, `browser_click`, `browser_press_key`, `browser_close`) to interact with the running server.
+
+**API tests** — navigate to JSON endpoints and verify response structure:
+- `GET /api/v1/health` → `{"status":"ok","version":"...","uptime_seconds":...}`
+- `GET /api/v1/repos` → `{"repos":[...]}`
+- `GET /api/v1/repos/{name}/search?q=fn+main` → `{"stats":...,"results":[...],"pagination":...}`
+- `GET /api/v1/repos/{name}/files/{path}` → `{"path":"...","language":"...","lines":[...]}`
+- `GET /api/v1/repos/{name}/status` → `{"status":"ready","files_indexed":...,"segments":...}`
+
+**UI tests** — navigate to `http://localhost:4040` and interact:
+- Verify page loads: `browser_snapshot` should show search input, repo selector, header
+- Search-as-you-type: `browser_type` into `.search-input` (slowly, to trigger htmx debounce), then `browser_snapshot` to check results
+- File preview: `browser_click` a file link, verify line numbers and code render
+- Keyboard shortcuts: `browser_press_key` with `Escape` (blur), `/` (focus search), `?` (help overlay), `j`/`k` (navigate results)
+
+**SSE tests** — use `browser_evaluate` to test streaming endpoints:
+```javascript
+// Status stream
+() => new Promise((resolve) => {
+  const es = new EventSource('/api/v1/repos/test-repo/status/stream');
+  es.addEventListener('status', (e) => { es.close(); resolve(JSON.parse(e.data)); });
+  setTimeout(() => { es.close(); resolve(null); }, 5000);
+})
+
+// Search stream
+() => new Promise((resolve) => {
+  const es = new EventSource('/api/v1/repos/test-repo/search/stream?q=fn+main');
+  const events = [];
+  es.addEventListener('result', (e) => events.push('result'));
+  es.addEventListener('stats', (e) => events.push('stats'));
+  es.addEventListener('done', () => { es.close(); resolve(events); });
+  setTimeout(() => { es.close(); resolve(events); }, 5000);
+})
+```
+
+### Web server architecture
+
+The web server is a stateless proxy — it does **not** own `SegmentManager` instances. All search/file/status operations are proxied to per-repo daemons over Unix sockets:
+
+```
+Browser → HTTP → Web Server (axum) → Unix Socket → Daemon → SegmentManager
+```
+
+Key modules in `indexrs-web/src/`:
+- `lib.rs` — `AppState`, `build_router()`, `start_server()`, route wiring
+- `api.rs` — JSON API handlers (search, files, status, repos CRUD, refresh)
+- `proxy.rs` — daemon proxy helpers (`search()`, `get_file()`, `status()`, `daemon_health()`)
+- `error.rs` — `ApiError` type with JSON error serialization
+- `ui.rs` — HTML handlers (`/`, `/search-results`, `/file/{repo}/{*path}`) using askama templates
+- `static_files.rs` — embedded static file serving via `rust-embed`
+- `sse.rs` — SSE streaming endpoints (`search/stream`, `status/stream`)
+
 ## Architecture
 
 indexrs is a local code indexing service for fast substring search, inspired by zoekt/codesearch. It uses **trigram indexing**: every 3-byte sequence in source files maps to posting lists of file IDs and byte offsets. Search works by extracting trigrams from the query, intersecting posting lists to find candidate files, then verifying matches against actual content.
@@ -36,7 +111,9 @@ indexrs is a local code indexing service for fast substring search, inspired by 
 ### Workspace Crates
 
 - **`indexrs-core`** — Library with all indexing/search logic (28 modules). No binary targets.
-- **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: search, files, symbols, preview, status, reindex, mcp. The `mcp` subcommand runs the MCP server over stdio (gated behind the `mcp` cargo feature, enabled by default).
+- **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: search, files, symbols, preview, status, reindex, mcp, web. The `mcp` subcommand runs the MCP server over stdio (gated behind the `mcp` cargo feature, enabled by default). The `web` subcommand starts the web interface.
+- **`indexrs-daemon`** — Daemon protocol library. TLV wire format, Unix socket client helpers (`ensure_daemon`, `send_json_request`), structured JSON response types (`JsonSearchFrame`, `FileResponse`, `StatusResponse`, `HealthResponse`).
+- **`indexrs-web`** — Web interface library (`axum` + `htmx` + `askama`). Proxies all operations to per-repo daemons over Unix sockets. JSON API at `/api/v1/`, server-rendered HTML UI at `/`, SSE streaming for live search and status.
 
 ### Core Data Pipeline (indexrs-core)
 
@@ -142,6 +219,7 @@ Linear project name: indexrs (team: HHC). Design docs live in `docs/design/`, im
 - **M2** (complete) — Directory walker, language detection, binary detection, file watcher, git-based change detection, hybrid change detector
 - **M3** (complete) — Segment storage, tombstone bitmap, multi-segment query with snapshot isolation, segment manager with compaction, crash recovery
 - **M4** (complete) — Query parser, query planner, trigram extraction from AST, content verifier, composite relevance ranking (5 weighted signals), `SearchOptions` with context lines
+- **Web** (complete) — axum web server, JSON REST API, htmx frontend with search-as-you-type, file preview, SSE streaming, CLI `web` subcommand
 
 ## Conventions
 
