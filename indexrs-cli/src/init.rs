@@ -1,4 +1,3 @@
-use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::time::Instant;
 
@@ -9,6 +8,7 @@ use indexrs_core::registry::{add_repo, config_file_path, load_config, save_confi
 use indexrs_core::segment::InputFile;
 use indexrs_core::walker::DirectoryWalkerBuilder;
 use indexrs_core::{DEFAULT_MAX_FILE_SIZE, SegmentManager, should_index_file};
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// Format a number with comma separators (e.g. 1234567 -> "1,234,567").
 fn fmt_count(n: usize) -> String {
@@ -39,55 +39,20 @@ fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
-/// In-place progress line on stderr (uses `\r` when stderr is a terminal).
-struct ProgressLine {
-    pub is_tty: bool,
-    last_len: usize,
-}
-
-impl ProgressLine {
-    fn new() -> Self {
-        Self {
-            is_tty: std::io::stderr().is_terminal(),
-            last_len: 0,
-        }
-    }
-
-    /// Print a progress message, overwriting the previous line if on a TTY.
-    fn update(&mut self, msg: &str) {
-        let stderr = std::io::stderr();
-        let mut handle = stderr.lock();
-        if self.is_tty {
-            // Pad with spaces to clear any leftover characters from previous line.
-            let padding = if msg.len() < self.last_len {
-                self.last_len - msg.len()
-            } else {
-                0
-            };
-            let _ = write!(handle, "\r{msg}{:padding$}", "");
-            let _ = handle.flush();
-            self.last_len = msg.len();
-        } else {
-            let _ = writeln!(handle, "{msg}");
-        }
-    }
-
-    /// Finish the current line (prints a newline on TTY).
-    fn finish(&mut self, msg: &str) {
-        let stderr = std::io::stderr();
-        let mut handle = stderr.lock();
-        if self.is_tty {
-            let padding = if msg.len() < self.last_len {
-                self.last_len - msg.len()
-            } else {
-                0
-            };
-            let _ = writeln!(handle, "\r{msg}{:padding$}", "");
-            self.last_len = 0;
-        } else {
-            let _ = writeln!(handle, "{msg}");
-        }
-    }
+/// Create a new spinner with the given initial message.
+fn new_spinner(msg: &str) -> ProgressBar {
+    let sp = ProgressBar::new_spinner();
+    sp.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} {msg}")
+            .unwrap()
+            .tick_strings(&[
+                "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}",
+                "\u{2827}", "\u{2807}", "\u{280f}",
+            ]),
+    );
+    sp.set_message(msg.to_string());
+    sp.enable_steady_tick(std::time::Duration::from_millis(80));
+    sp
 }
 
 /// Run the `indexrs init` command.
@@ -125,31 +90,28 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     }
 
     let start = Instant::now();
-    let mut progress = ProgressLine::new();
-    let step = if progress.is_tty { 100 } else { 5_000 };
 
     // ── Phase 1: Walk the file tree ──────────────────────────────────
     let walk_start = Instant::now();
-    progress.update("Walking file tree...");
+    let spinner = new_spinner("Walking file tree...");
 
     let walker = DirectoryWalkerBuilder::new(repo_root).build();
-    let progress = std::sync::Mutex::new(progress);
     let walked = walker.run_parallel_with_progress(|count| {
-        if count % step == 0 {
-            progress.lock().unwrap().update(&format!(
+        if count.is_multiple_of(100) {
+            spinner.set_message(format!(
                 "Walking file tree... {} files found",
                 fmt_count(count)
             ));
         }
     })?;
-    let mut progress = progress.into_inner().unwrap();
 
+    spinner.finish_and_clear();
     let walk_elapsed = walk_start.elapsed();
-    progress.finish(&format!(
+    eprintln!(
         "Walking file tree... {} files found ({:.1}s)",
         fmt_count(walked.len()),
         walk_elapsed.as_secs_f64()
-    ));
+    );
 
     // ── Phase 2: Filter and load file contents ───────────────────────
     use rayon::prelude::*;
@@ -164,18 +126,18 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     let total_content_bytes = AtomicU64::new(0);
     let filter_done = AtomicUsize::new(0);
 
-    let progress = std::sync::Mutex::new(progress);
+    let filter_bar = ProgressBar::new(total_walked as u64);
+    filter_bar.set_style(
+        ProgressStyle::with_template("Filtering [{bar:30.green/dim}] {pos}/{len} files  {msg}")
+            .unwrap()
+            .progress_chars("##-"),
+    );
     let files: Vec<InputFile> = walked
         .par_iter()
         .filter_map(|wf| {
             let current = filter_done.fetch_add(1, Ordering::Relaxed) + 1;
-            if current.is_multiple_of(step) || current == total_walked {
-                let pct = (current as f64 / total_walked as f64 * 100.0) as u32;
-                progress.lock().unwrap().update(&format!(
-                    "Filtering files... {}/{} ({pct}%)",
-                    fmt_count(current),
-                    fmt_count(total_walked),
-                ));
+            if current.is_multiple_of(100) || current == total_walked {
+                filter_bar.set_position(current as u64);
             }
 
             // Pre-filter by size and extension before reading content.
@@ -220,7 +182,6 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
             })
         })
         .collect();
-    let mut progress = progress.into_inner().unwrap();
 
     let skipped_size = skipped_size.load(Ordering::Relaxed);
     let skipped_binary = skipped_binary.load(Ordering::Relaxed);
@@ -228,14 +189,15 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     let skipped_read_err = skipped_read_err.load(Ordering::Relaxed);
     let total_content_bytes = total_content_bytes.load(Ordering::Relaxed);
 
+    filter_bar.finish_and_clear();
     let filter_elapsed = filter_start.elapsed();
     let total_skipped = skipped_size + skipped_binary + skipped_content + skipped_read_err;
-    progress.finish(&format!(
+    eprintln!(
         "Filtering files... {} indexable, {} skipped ({:.1}s)",
         fmt_count(files.len()),
         fmt_count(total_skipped),
         filter_elapsed.as_secs_f64()
-    ));
+    );
 
     // Print skip breakdown if anything was skipped.
     if total_skipped > 0 {
@@ -265,33 +227,35 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     // ── Phase 3: Build the index ─────────────────────────────────────
     let index_start = Instant::now();
     let total_files = files.len();
-    progress.update(&format!(
-        "Building index... 0/{} (0%) — {}",
-        fmt_count(total_files),
-        fmt_bytes(total_content_bytes),
-    ));
+
+    let index_bar = ProgressBar::new(total_files as u64);
+    index_bar.set_style(
+        ProgressStyle::with_template("Indexing  [{bar:30.green/dim}] {pos}/{len} files  ({msg})")
+            .unwrap()
+            .progress_chars("##-"),
+    );
+    index_bar.set_message(fmt_bytes(total_content_bytes));
 
     let manager = SegmentManager::new(&indexrs_dir)?;
-    let progress = std::sync::Mutex::new(progress);
     manager.index_files_with_progress(files, |done, total| {
-        if done % step == 0 || done == total {
-            let pct = (done as f64 / total as f64 * 100.0) as u32;
-            progress.lock().unwrap().update(&format!(
-                "Building index... {}/{} ({pct}%)",
-                fmt_count(done),
-                fmt_count(total),
+        if done.is_multiple_of(100) || done == total {
+            index_bar.set_position(done as u64);
+            index_bar.set_message(format!(
+                "{}/{}",
+                fmt_bytes((done as f64 / total as f64 * total_content_bytes as f64) as u64),
+                fmt_bytes(total_content_bytes),
             ));
         }
     })?;
-    let mut progress = progress.into_inner().unwrap();
 
+    index_bar.finish_and_clear();
     let index_elapsed = index_start.elapsed();
-    progress.finish(&format!(
+    eprintln!(
         "Building index... {}/{} (100%) ({:.1}s)",
         fmt_count(total_files),
         fmt_count(total_files),
         index_elapsed.as_secs_f64()
-    ));
+    );
 
     // ── Phase 4: Write checkpoint ────────────────────────────────────
     eprintln!("Writing checkpoint...");
