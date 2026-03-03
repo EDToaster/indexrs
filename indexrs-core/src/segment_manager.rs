@@ -360,6 +360,65 @@ impl SegmentManager {
         Ok(())
     }
 
+    /// Split files into budget-sized batches and build segments in parallel.
+    ///
+    /// A `max_segment_bytes` of 0 means no limit (single segment).
+    fn build_segments_with_budget(
+        &self,
+        files: Vec<InputFile>,
+        max_segment_bytes: usize,
+    ) -> Result<Vec<Arc<Segment>>, IndexError> {
+        let new_file_count = files.len();
+
+        // Split files into budget-sized batches
+        let mut batches: Vec<Vec<InputFile>> = Vec::new();
+        let mut batch: Vec<InputFile> = Vec::new();
+        let mut batch_bytes: usize = 0;
+
+        for file in files {
+            let content_len = file.content.len();
+            batch.push(file);
+            batch_bytes += content_len;
+            if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
+                batches.push(std::mem::take(&mut batch));
+                batch_bytes = 0;
+            }
+        }
+        if !batch.is_empty() {
+            batches.push(batch);
+        }
+
+        if batches.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Pre-allocate segment IDs
+        let id_batches: Vec<(SegmentId, Vec<InputFile>)> = batches
+            .into_iter()
+            .map(|b| self.next_segment_id().map(|id| (id, b)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let batch_count = id_batches.len();
+        tracing::debug!(
+            new_file_count,
+            batch_count,
+            max_segment_bytes,
+            "building replacement segments"
+        );
+
+        // Build segments in parallel
+        let segments_dir = &self.segments_dir;
+        let results: Vec<Result<Arc<Segment>, IndexError>> = id_batches
+            .into_par_iter()
+            .map(|(seg_id, files)| {
+                let writer = SegmentWriter::new(segments_dir, seg_id);
+                writer.build(files).map(Arc::new)
+            })
+            .collect();
+
+        results.into_iter().collect::<Result<Vec<_>, _>>()
+    }
+
     /// Apply a batch of file change events to the index.
     ///
     /// For each change:
@@ -370,20 +429,21 @@ impl SegmentManager {
     ///
     /// If any files need new entries, a new segment is built and published.
     /// Tombstones are written to the affected segments' `tombstones.bin` files.
-    ///
-    /// # Arguments
-    ///
-    /// * `repo_dir` - The repository root directory for reading file contents.
-    /// * `changes` - The list of change events to process.
-    ///
-    /// # Errors
-    ///
-    /// Returns `IndexError` if reading files, building segments, or writing
-    /// tombstones fails.
     pub fn apply_changes(
         &self,
         repo_dir: &Path,
         changes: &[ChangeEvent],
+    ) -> Result<(), IndexError> {
+        self.apply_changes_with_budget(repo_dir, changes, DEFAULT_COMPACTION_BUDGET)
+    }
+
+    /// Like [`apply_changes`](Self::apply_changes) but with a custom per-segment
+    /// size budget. A `max_segment_bytes` of 0 means no limit (single segment).
+    pub fn apply_changes_with_budget(
+        &self,
+        repo_dir: &Path,
+        changes: &[ChangeEvent],
+        max_segment_bytes: usize,
     ) -> Result<(), IndexError> {
         if changes.is_empty() {
             return Ok(());
@@ -473,21 +533,14 @@ impl SegmentManager {
             })
             .collect();
 
-        // Build new segment BEFORE writing tombstones to avoid data loss
+        // Build new segments BEFORE writing tombstones to avoid data loss
         // on crash: if we tombstone first and crash before building the
         // replacement segment, those files would be permanently lost.
         let mut updated_segments = current_segments.clone();
         let new_file_count = new_files.len();
         if !new_files.is_empty() {
-            let seg_id = self.next_segment_id()?;
-            tracing::debug!(
-                segment_id = seg_id.0,
-                new_file_count,
-                "building replacement segment"
-            );
-            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-            let segment = writer.build(new_files)?;
-            updated_segments.push(Arc::new(segment));
+            let built = self.build_segments_with_budget(new_files, max_segment_bytes)?;
+            updated_segments.extend(built);
         }
 
         // Write tombstones to affected segments (safe now — replacement exists on disk)
@@ -630,28 +683,60 @@ impl SegmentManager {
             })
             .collect();
 
-        // Build new segment BEFORE writing tombstones
+        // Build new segments BEFORE writing tombstones
         let mut updated_segments = current_segments.clone();
         let new_file_count = new_files.len();
         if !new_files.is_empty() {
-            let seg_id = self.next_segment_id()?;
-            tracing::debug!(
-                segment_id = seg_id.0,
-                new_file_count,
-                "building replacement segment"
-            );
-            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-            let files_total = new_files.len();
-            let files_done = std::sync::atomic::AtomicUsize::new(0);
-            let segment = writer.build_with_progress(new_files, || {
-                let done = files_done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                on_progress(ReindexProgress::BuildingSegment {
-                    segment_id: seg_id.0,
-                    files_done: done,
-                    files_total,
-                });
-            })?;
-            updated_segments.push(Arc::new(segment));
+            // Split into budget-sized batches
+            let mut batches: Vec<Vec<InputFile>> = Vec::new();
+            let mut batch: Vec<InputFile> = Vec::new();
+            let mut batch_bytes: usize = 0;
+
+            for file in new_files {
+                let content_len = file.content.len();
+                batch.push(file);
+                batch_bytes += content_len;
+                if batch_bytes > DEFAULT_COMPACTION_BUDGET {
+                    batches.push(std::mem::take(&mut batch));
+                    batch_bytes = 0;
+                }
+            }
+            if !batch.is_empty() {
+                batches.push(batch);
+            }
+
+            // Pre-allocate segment IDs
+            let id_batches: Vec<(SegmentId, Vec<InputFile>)> = batches
+                .into_iter()
+                .map(|b| self.next_segment_id().map(|id| (id, b)))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            // Build segments in parallel with progress
+            let files_done = AtomicUsize::new(0);
+            let files_total = new_file_count;
+            let segments_dir = &self.segments_dir;
+
+            let results: Vec<Result<Arc<Segment>, IndexError>> = id_batches
+                .into_par_iter()
+                .map(|(seg_id, files)| {
+                    let writer = SegmentWriter::new(segments_dir, seg_id);
+                    writer
+                        .build_with_progress(files, || {
+                            let done =
+                                files_done.fetch_add(1, Ordering::Relaxed) + 1;
+                            on_progress(ReindexProgress::BuildingSegment {
+                                segment_id: seg_id.0,
+                                files_done: done,
+                                files_total,
+                            });
+                        })
+                        .map(Arc::new)
+                })
+                .collect();
+
+            let new_segments: Vec<Arc<Segment>> =
+                results.into_iter().collect::<Result<Vec<_>, _>>()?;
+            updated_segments.extend(new_segments);
         }
 
         // Write tombstones
@@ -2018,5 +2103,54 @@ mod tests {
 
         // New segment: 10 modified + 15 created = 25 files
         assert_eq!(snap[1].entry_count(), 25);
+    }
+
+    #[test]
+    fn test_apply_changes_large_batch_creates_multiple_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Pre-index one file so we have an existing segment
+        manager
+            .index_files(vec![InputFile {
+                path: "old.rs".to_string(),
+                content: b"fn old() {}".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+
+        // Create many files with enough content to exceed a 1KB budget
+        let mut changes = Vec::new();
+        for i in 0..20 {
+            let name = format!("big_{i:03}.rs");
+            // ~100 bytes each, 20 files = ~2KB total
+            let content = format!("fn big_{i}() {{ let x = \"{}\"; }}", "a".repeat(80));
+            fs::write(repo_dir.join(&name), &content).unwrap();
+            changes.push(ChangeEvent {
+                path: PathBuf::from(name),
+                kind: ChangeKind::Created,
+            });
+        }
+
+        // Use apply_changes_with_budget with a tiny budget to force multi-segment
+        manager
+            .apply_changes_with_budget(&repo_dir, &changes, 500)
+            .unwrap();
+
+        let snap = manager.snapshot();
+        // Should have more than 2 segments (1 original + multiple new)
+        assert!(
+            snap.len() > 2,
+            "expected >2 segments with 500B budget, got {}",
+            snap.len()
+        );
+
+        // Total entry count across new segments should be 20
+        let total_new_entries: u32 = snap[1..].iter().map(|s| s.entry_count()).sum();
+        assert_eq!(total_new_entries, 20);
     }
 }
