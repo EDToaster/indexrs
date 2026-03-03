@@ -186,6 +186,13 @@ pub enum Command {
         action: ReposAction,
     },
 
+    /// Start the web interface
+    Web {
+        /// Port to listen on
+        #[arg(short, long, default_value_t = 4040)]
+        port: u16,
+    },
+
     /// Internal: run as daemon process (hidden from help)
     #[command(name = "daemon-start", hide = true)]
     DaemonStart,

@@ -13,6 +13,7 @@ mod repo;
 mod repos;
 mod search_cmd;
 mod status;
+mod web;
 mod wire;
 
 use std::io::IsTerminal;
@@ -257,6 +258,10 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
                 ReposAction::Add { path, name } => repos::run_add(&path, name.as_deref())?,
                 ReposAction::Remove { name } => repos::run_remove(&name)?,
             }
+            Ok(ExitCode::Success)
+        }
+        Command::Web { port } => {
+            web::run_web(port).await?;
             Ok(ExitCode::Success)
         }
         Command::DaemonStart => {
