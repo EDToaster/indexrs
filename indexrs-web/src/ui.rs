@@ -74,6 +74,13 @@ pub struct RepoOverviewItem {
     pub files_indexed: usize,
     pub segments: usize,
     pub online: bool,
+    pub index_bytes: String,
+    pub last_indexed: String,
+    pub languages: Vec<(String, usize)>,
+    pub tombstone_ratio: f32,
+    pub tombstone_pct: String,
+    pub needs_compaction: bool,
+    pub path_valid: bool,
 }
 
 #[derive(Template)]
@@ -90,6 +97,44 @@ struct FilePreviewTemplate {
     language: String,
     total_lines: usize,
     lines: Vec<(usize, String)>,
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_relative_time(epoch_secs: u64) -> String {
+    if epoch_secs == 0 {
+        return "never".to_string();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if epoch_secs > now {
+        return "just now".to_string();
+    }
+    let delta = now - epoch_secs;
+    if delta < 60 {
+        format!("{delta}s ago")
+    } else if delta < 3600 {
+        format!("{}m ago", delta / 60)
+    } else if delta < 86400 {
+        format!("{}h ago", delta / 3600)
+    } else {
+        format!("{}d ago", delta / 86400)
+    }
 }
 
 fn html_escape(s: &str) -> String {
@@ -408,11 +453,42 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
     let mut repos = Vec::with_capacity(repo_names.len());
     for name in &repo_names {
         let path = repos_map[name].clone();
-        let (status, files_indexed, segments, online) =
-            match proxy_status_raw(state.daemon_bin(), &path).await {
-                Ok(sr) => (sr.status.clone(), sr.files_indexed, sr.segments, true),
-                Err(_) => ("offline".to_string(), 0, 0, false),
-            };
+        let (
+            status,
+            files_indexed,
+            segments,
+            online,
+            index_bytes,
+            last_indexed_ts,
+            languages,
+            tombstone_ratio,
+            path_valid,
+        ) = match proxy_status_raw(state.daemon_bin(), &path).await {
+            Ok(sr) => (
+                sr.status.clone(),
+                sr.files_indexed,
+                sr.segments,
+                true,
+                sr.index_bytes,
+                sr.last_indexed_ts,
+                sr.languages.clone(),
+                sr.tombstone_ratio,
+                sr.path_valid,
+            ),
+            Err(_) => (
+                "offline".to_string(),
+                0,
+                0,
+                false,
+                0,
+                0,
+                vec![],
+                0.0,
+                path.is_dir(),
+            ),
+        };
+        let tombstone_pct = format!("{:.1}%", tombstone_ratio * 100.0);
+        let needs_compaction = tombstone_ratio > 0.3;
         repos.push(RepoOverviewItem {
             name: name.clone(),
             path: path.display().to_string(),
@@ -420,6 +496,13 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             files_indexed,
             segments,
             online,
+            index_bytes: format_bytes(index_bytes),
+            last_indexed: format_relative_time(last_indexed_ts),
+            languages,
+            tombstone_ratio,
+            tombstone_pct,
+            needs_compaction,
+            path_valid,
         });
     }
 

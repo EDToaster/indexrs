@@ -31,13 +31,18 @@
         </div>
         {% else %}
         {% for repo in &repos %}
-        <div class="repo-card{% if !repo.online %} repo-card--offline{% endif %}">
+        <div class="repo-card{% if !repo.online %} repo-card--offline{% endif %}{% if !repo.path_valid %} repo-card--invalid{% endif %}">
             <div class="repo-card-header">
                 <span class="status-dot{% if !repo.online %} status-dot--offline{% endif %}" title="{{ repo.status }}"></span>
                 <span class="repo-card-name">{{ repo.name }}</span>
                 <span class="repo-card-status badge{% if repo.online %} badge--ok{% else %} badge--error{% endif %}">{{ repo.status }}</span>
             </div>
-            <div class="repo-card-path">{{ repo.path }}</div>
+            <div class="repo-card-path">
+                {{ repo.path }}
+                {% if !repo.path_valid %}
+                <span class="path-warning">path not found</span>
+                {% endif %}
+            </div>
             <div class="repo-card-stats">
                 <span class="repo-stat">
                     <span class="repo-stat-value">{{ repo.files_indexed }}</span>
@@ -47,7 +52,27 @@
                     <span class="repo-stat-value">{{ repo.segments }}</span>
                     <span class="repo-stat-label">segments</span>
                 </span>
+                <span class="repo-stat">
+                    <span class="repo-stat-value">{{ repo.index_bytes }}</span>
+                    <span class="repo-stat-label">on disk</span>
+                </span>
+                <span class="repo-stat">
+                    <span class="repo-stat-value">{{ repo.last_indexed }}</span>
+                    <span class="repo-stat-label">indexed</span>
+                </span>
             </div>
+            {% if !repo.languages.is_empty() %}
+            <div class="repo-card-langs">
+                {% for lang in &repo.languages %}
+                <span class="lang-chip">{{ lang.0 }} <span class="lang-chip-count">{{ lang.1 }}</span></span>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if repo.needs_compaction %}
+            <div class="repo-card-warning">
+                <span class="tombstone-warning">{{ repo.tombstone_pct }} tombstoned — compaction recommended</span>
+            </div>
+            {% endif %}
         </div>
         {% endfor %}
         {% endif %}

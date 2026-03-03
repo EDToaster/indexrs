@@ -680,3 +680,55 @@ mark {
     color: var(--fg-muted);
     letter-spacing: 0.02em;
 }
+
+.repo-card--invalid {
+    border-left-color: var(--fg-muted);
+    opacity: 0.6;
+}
+
+.path-warning {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--danger);
+    margin-left: 0.4rem;
+}
+
+.repo-card-langs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    padding: 0.45rem 0.85rem;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.lang-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    font-size: 0.68rem;
+    font-weight: 500;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg-dim);
+    letter-spacing: 0.02em;
+}
+
+.lang-chip-count {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    color: var(--fg);
+}
+
+.repo-card-warning {
+    padding: 0.4rem 0.85rem;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.tombstone-warning {
+    font-size: 0.7rem;
+    color: var(--danger);
+    font-weight: 500;
+}
