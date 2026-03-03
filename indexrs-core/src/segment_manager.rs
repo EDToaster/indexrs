@@ -469,7 +469,7 @@ impl SegmentManager {
         // Build tombstone updates from batch results
         let mut tombstone_updates: std::collections::HashMap<usize, TombstoneSet> =
             std::collections::HashMap::new();
-        for (_path, locations) in &tombstone_locations {
+        for locations in tombstone_locations.values() {
             for &(seg_idx, file_id) in locations {
                 tombstone_updates
                     .entry(seg_idx)
@@ -609,7 +609,7 @@ impl SegmentManager {
         // Build tombstone updates from batch results
         let mut tombstone_updates: std::collections::HashMap<usize, TombstoneSet> =
             std::collections::HashMap::new();
-        for (_path, locations) in &tombstone_locations {
+        for locations in tombstone_locations.values() {
             for &(seg_idx, file_id) in locations {
                 tombstone_updates
                     .entry(seg_idx)
@@ -2152,5 +2152,185 @@ mod tests {
         // Total entry count across new segments should be 20
         let total_new_entries: u32 = snap[1..].iter().map(|s| s.entry_count()).sum();
         assert_eq!(total_new_entries, 20);
+    }
+
+    #[test]
+    fn test_apply_changes_skips_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(repo_dir.join("subdir")).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // A change pointing to a directory should be skipped, not error
+        let changes = vec![
+            ChangeEvent {
+                path: PathBuf::from("subdir"),
+                kind: ChangeKind::Modified,
+            },
+            ChangeEvent {
+                path: PathBuf::from("subdir"),
+                kind: ChangeKind::Created,
+            },
+        ];
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        // No segments should be created — directory was skipped
+        assert_eq!(snap.len(), 0);
+    }
+
+    #[test]
+    fn test_apply_changes_skips_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // A Created change for a file that doesn't exist on disk
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("ghost.rs"),
+            kind: ChangeKind::Created,
+        }];
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 0);
+    }
+
+    #[test]
+    fn test_apply_changes_file_in_multiple_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Index the same file in two segments (simulates modify without compaction)
+        manager
+            .index_files(vec![InputFile {
+                path: "shared.rs".to_string(),
+                content: b"fn v1() {}".to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+        // Tombstone v1, add v2
+        fs::write(repo_dir.join("shared.rs"), b"fn v2() {}").unwrap();
+        manager
+            .apply_changes(
+                &repo_dir,
+                &[ChangeEvent {
+                    path: PathBuf::from("shared.rs"),
+                    kind: ChangeKind::Modified,
+                }],
+            )
+            .unwrap();
+
+        // Now modify again — should tombstone the entry in segment 1 (v2)
+        fs::write(repo_dir.join("shared.rs"), b"fn v3() {}").unwrap();
+        manager
+            .apply_changes(
+                &repo_dir,
+                &[ChangeEvent {
+                    path: PathBuf::from("shared.rs"),
+                    kind: ChangeKind::Modified,
+                }],
+            )
+            .unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 3);
+
+        // Segment 0: v1 tombstoned
+        assert!(snap[0].load_tombstones().unwrap().contains(FileId(0)));
+        // Segment 1: v2 tombstoned
+        assert!(snap[1].load_tombstones().unwrap().contains(FileId(0)));
+        // Segment 2: v3 alive
+        let ts2 = snap[2].load_tombstones().unwrap();
+        assert!(!ts2.contains(FileId(0)));
+    }
+
+    #[test]
+    fn test_apply_changes_with_progress_skips_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_dir = dir.path();
+        let indexrs_dir = repo_dir.join(".indexrs");
+        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+        fs::create_dir_all(repo_dir.join("a_dir")).unwrap();
+
+        let manager = SegmentManager::new(&indexrs_dir).unwrap();
+
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("a_dir"),
+            kind: ChangeKind::Created,
+        }];
+
+        let events = std::sync::Mutex::new(Vec::new());
+        manager
+            .apply_changes_with_progress(repo_dir, &changes, |ev| {
+                events.lock().unwrap().push(ev);
+            })
+            .unwrap();
+
+        // Should not have created any segments
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 0);
+    }
+
+    #[test]
+    fn test_apply_changes_empty_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        manager.apply_changes(&repo_dir, &[]).unwrap();
+        assert_eq!(manager.snapshot().len(), 0);
+    }
+
+    #[test]
+    fn test_apply_changes_skips_binary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        // Write a binary file (contains null bytes)
+        fs::write(
+            repo_dir.join("image.png"),
+            b"\x89PNG\r\n\x1a\n\x00\x00",
+        )
+        .unwrap();
+        // Write a normal text file
+        fs::write(repo_dir.join("code.rs"), b"fn main() {}").unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+        let changes = vec![
+            ChangeEvent {
+                path: PathBuf::from("image.png"),
+                kind: ChangeKind::Created,
+            },
+            ChangeEvent {
+                path: PathBuf::from("code.rs"),
+                kind: ChangeKind::Created,
+            },
+        ];
+
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        // Only code.rs should be indexed
+        assert_eq!(snap[0].entry_count(), 1);
+        let meta = snap[0].get_metadata(FileId(0)).unwrap().unwrap();
+        assert_eq!(meta.path, "code.rs");
     }
 }
