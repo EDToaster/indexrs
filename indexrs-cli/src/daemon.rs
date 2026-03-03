@@ -996,8 +996,9 @@ async fn handle_connection(
                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
                 let handle = tokio::task::spawn_blocking(move || {
-                    indexrs_core::run_catchup_with_progress(&repo, &idir, &mgr, |msg| {
-                        let _ = tx.send(msg.to_string());
+                    indexrs_core::run_catchup_with_progress(&repo, &idir, &mgr, |ev| {
+                        let _ = tx
+                            .send(serde_json::to_string(&ev).unwrap_or_else(|_| format!("{ev:?}")));
                     })
                 });
 

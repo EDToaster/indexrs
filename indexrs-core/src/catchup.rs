@@ -7,11 +7,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::changes::ChangeEvent;
+use crate::changes::{ChangeEvent, ChangeKind};
 use crate::checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
 use crate::error::Result;
 use crate::git_diff::GitChangeDetector;
 use crate::hash_diff::hash_diff;
+use crate::reindex_progress::ReindexProgress;
 use crate::segment_manager::SegmentManager;
 
 /// Run catch-up: detect changes since last checkpoint and apply them.
@@ -33,17 +34,17 @@ pub fn run_catchup(
     run_catchup_with_progress(repo_root, indexrs_dir, manager, |_| {})
 }
 
-/// Like [`run_catchup`], but calls `on_progress` with a human-readable
-/// message at each phase so callers can stream status to a UI.
-pub fn run_catchup_with_progress<F: FnMut(&str)>(
+/// Like [`run_catchup`], but calls `on_progress` with structured
+/// [`ReindexProgress`] events at each phase so callers can stream status to a UI.
+pub fn run_catchup_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
     repo_root: &Path,
     indexrs_dir: &Path,
     manager: &Arc<SegmentManager>,
-    mut on_progress: F,
+    on_progress: F,
 ) -> Result<Vec<ChangeEvent>> {
     let checkpoint = read_checkpoint(indexrs_dir)?;
 
-    on_progress("Detecting changes...");
+    on_progress(ReindexProgress::DetectingChanges);
 
     // Try git fast path.
     let changes = match try_git_catchup(repo_root, &checkpoint) {
@@ -53,37 +54,51 @@ pub fn run_catchup_with_progress<F: FnMut(&str)>(
         }
         Some(Err(e)) => {
             tracing::warn!(error = %e, "git catch-up failed, falling back to hash diff");
-            on_progress("Scanning files (hash fallback)...");
+            on_progress(ReindexProgress::ScanningFallback);
             run_hash_fallback(repo_root, manager)?
         }
         None => {
             tracing::info!("no git checkpoint, using hash diff fallback");
-            on_progress("Scanning files (hash fallback)...");
+            on_progress(ReindexProgress::ScanningFallback);
             run_hash_fallback(repo_root, manager)?
         }
     };
 
     if changes.is_empty() {
-        on_progress("No changes detected.");
+        on_progress(ReindexProgress::NoChanges);
     } else {
-        on_progress(&format!(
-            "Found {} changed file{}, applying...",
-            changes.len(),
-            if changes.len() == 1 { "" } else { "s" }
-        ));
-        manager.apply_changes(repo_root, &changes)?;
+        // Count change types.
+        let mut created = 0usize;
+        let mut modified = 0usize;
+        let mut deleted = 0usize;
+        for c in &changes {
+            match c.kind {
+                ChangeKind::Created => created += 1,
+                ChangeKind::Modified => modified += 1,
+                ChangeKind::Deleted => deleted += 1,
+                ChangeKind::Renamed => modified += 1,
+            }
+        }
+        on_progress(ReindexProgress::ChangesDetected {
+            created,
+            modified,
+            deleted,
+        });
+
+        manager.apply_changes_with_progress(repo_root, &changes, &on_progress)?;
 
         if manager.should_compact() {
             tracing::info!("compaction recommended after catch-up");
-            on_progress("Compacting segments...");
+            let snap = manager.snapshot();
+            on_progress(ReindexProgress::CompactingSegments {
+                input_segments: snap.len(),
+            });
             drop(manager.compact_background());
         }
 
-        on_progress(&format!(
-            "Reindex complete: {} change{} applied.",
-            changes.len(),
-            if changes.len() == 1 { "" } else { "s" }
-        ));
+        on_progress(ReindexProgress::Complete {
+            changes_applied: changes.len(),
+        });
     }
 
     // Write updated checkpoint.
@@ -218,7 +233,9 @@ mod tests {
     }
 
     #[test]
-    fn test_catchup_with_progress_reports_phases() {
+    fn test_catchup_with_progress_reports_structured_events() {
+        use crate::reindex_progress::ReindexProgress;
+
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
         init_git_repo(repo);
@@ -236,25 +253,38 @@ mod tests {
         // Create an untracked file so there's something to detect.
         fs::write(repo.join("progress.rs"), "fn progress() { let x = 1; }").unwrap();
 
-        let mut messages = Vec::new();
-        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, |msg| {
-            messages.push(msg.to_string());
+        let events = std::sync::Mutex::new(Vec::new());
+        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, |ev| {
+            events.lock().unwrap().push(ev);
         })
         .unwrap();
 
+        let events = events.into_inner().unwrap();
         assert!(!changes.is_empty());
         assert!(
-            messages.iter().any(|m| m.contains("Detecting")),
-            "expected 'Detecting' message, got: {messages:?}"
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::DetectingChanges)),
+            "expected DetectingChanges, got: {events:?}"
         );
         assert!(
-            messages.iter().any(|m| m.contains("complete")),
-            "expected 'complete' message, got: {messages:?}"
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::ChangesDetected { .. })),
+            "expected ChangesDetected, got: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::Complete { .. })),
+            "expected Complete, got: {events:?}"
         );
     }
 
     #[test]
-    fn test_catchup_with_progress_no_changes() {
+    fn test_catchup_with_progress_no_changes_structured() {
+        use crate::reindex_progress::ReindexProgress;
+
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
         init_git_repo(repo);
@@ -268,16 +298,19 @@ mod tests {
         let cp = Checkpoint::new(Some(head), 0);
         write_checkpoint(&indexrs_dir, &cp).unwrap();
 
-        let mut messages = Vec::new();
-        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, |msg| {
-            messages.push(msg.to_string());
+        let events = std::sync::Mutex::new(Vec::new());
+        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, |ev| {
+            events.lock().unwrap().push(ev);
         })
         .unwrap();
 
+        let events = events.into_inner().unwrap();
         assert!(changes.is_empty());
         assert!(
-            messages.iter().any(|m| m.contains("No changes")),
-            "expected 'No changes' message, got: {messages:?}"
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::NoChanges)),
+            "expected NoChanges, got: {events:?}"
         );
     }
 
