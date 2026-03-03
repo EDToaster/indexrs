@@ -153,18 +153,18 @@ pub async fn status_stream(
                         Ok(result) => {
                             // The first JSON payload is the StatusResponse.
                             result.payloads.into_iter().next().unwrap_or_else(|| {
-                                r#"{"status":"unknown","files_indexed":0,"segments":0}"#.to_string()
+                                r#"{"status":"unknown","files_indexed":0,"segments":0,"index_bytes":0,"last_indexed_ts":0,"languages":[],"tombstone_ratio":0.0,"path_valid":true}"#.to_string()
                             })
                         }
                         Err(e) => {
                             tracing::warn!("status request failed: {e}");
-                            r#"{"status":"offline","files_indexed":0,"segments":0}"#.to_string()
+                            r#"{"status":"offline","files_indexed":0,"segments":0,"index_bytes":0,"last_indexed_ts":0,"languages":[],"tombstone_ratio":0.0,"path_valid":true}"#.to_string()
                         }
                     }
                 }
                 Err(e) => {
                     tracing::debug!("daemon connect failed for status: {e}");
-                    r#"{"status":"offline","files_indexed":0,"segments":0}"#.to_string()
+                    r#"{"status":"offline","files_indexed":0,"segments":0,"index_bytes":0,"last_indexed_ts":0,"languages":[],"tombstone_ratio":0.0,"path_valid":true}"#.to_string()
                 }
             };
 
