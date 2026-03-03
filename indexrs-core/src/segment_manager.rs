@@ -722,8 +722,7 @@ impl SegmentManager {
                     let writer = SegmentWriter::new(segments_dir, seg_id);
                     writer
                         .build_with_progress(files, || {
-                            let done =
-                                files_done.fetch_add(1, Ordering::Relaxed) + 1;
+                            let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
                             on_progress(ReindexProgress::BuildingSegment {
                                 segment_id: seg_id.0,
                                 files_done: done,
@@ -2304,11 +2303,7 @@ mod tests {
         fs::create_dir_all(&repo_dir).unwrap();
 
         // Write a binary file (contains null bytes)
-        fs::write(
-            repo_dir.join("image.png"),
-            b"\x89PNG\r\n\x1a\n\x00\x00",
-        )
-        .unwrap();
+        fs::write(repo_dir.join("image.png"), b"\x89PNG\r\n\x1a\n\x00\x00").unwrap();
         // Write a normal text file
         fs::write(repo_dir.join("code.rs"), b"fn main() {}").unwrap();
 
