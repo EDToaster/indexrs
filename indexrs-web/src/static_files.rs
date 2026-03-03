@@ -15,7 +15,7 @@ pub async fn static_handler(axum::extract::Path(path): axum::extract::Path<Strin
                     (header::CONTENT_TYPE, mime.as_ref().to_string()),
                     (
                         header::CACHE_CONTROL,
-                        "public, max-age=31536000, immutable".to_string(),
+                        "public, max-age=3600, must-revalidate".to_string(),
                     ),
                 ],
                 file.data.to_vec(),

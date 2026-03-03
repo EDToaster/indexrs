@@ -94,6 +94,12 @@ pub struct SearchParams {
     page: Option<usize>,
 }
 
+#[derive(Deserialize)]
+pub struct RepoStatusParams {
+    #[serde(rename = "repo-select")]
+    repo_select: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Daemon proxy helpers (minimal, avoids depending on Agent A's proxy.rs)
 // ---------------------------------------------------------------------------
@@ -248,6 +254,25 @@ pub async fn index(State(state): State<AppState>) -> Response {
         status,
         repo_count,
     })
+}
+
+/// GET /repo-status?repo-select=... — returns status badge text for the selected repo
+pub async fn repo_status(
+    State(state): State<AppState>,
+    Query(params): Query<RepoStatusParams>,
+) -> Response {
+    let repo = params.repo_select.unwrap_or_default();
+    let repos_map = state.repos().await;
+
+    let status = if let Some(path) = repos_map.get(&repo) {
+        proxy_status(state.daemon_bin(), path)
+            .await
+            .unwrap_or_else(|_| "offline".to_string())
+    } else {
+        "unknown".to_string()
+    };
+
+    Html(status).into_response()
 }
 
 /// GET /search-results?q=...&repo-select=...&page=1

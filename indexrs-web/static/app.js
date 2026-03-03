@@ -138,6 +138,18 @@
         clearSelection();
     });
 
+    // Update status badge when repo changes
+    var repoSelect = document.getElementById("repo-select");
+    if (repoSelect) {
+        repoSelect.addEventListener("change", function() {
+            var badge = document.getElementById("repo-status");
+            if (!badge) return;
+            fetch("/repo-status?repo-select=" + encodeURIComponent(repoSelect.value))
+                .then(function(r) { return r.text(); })
+                .then(function(text) { badge.textContent = text; });
+        });
+    }
+
     // Auto-focus search on page load
     document.addEventListener("DOMContentLoaded", function() {
         focusSearch();
