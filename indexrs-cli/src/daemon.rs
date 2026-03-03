@@ -656,6 +656,26 @@ async fn handle_connection(
                     }
                 }
             }
+            req @ (DaemonRequest::JsonSearch { .. }
+            | DaemonRequest::GetFile { .. }
+            | DaemonRequest::Status
+            | DaemonRequest::Health) => {
+                let type_name = match req {
+                    DaemonRequest::JsonSearch { .. } => "JsonSearch",
+                    DaemonRequest::GetFile { .. } => "GetFile",
+                    DaemonRequest::Status => "Status",
+                    DaemonRequest::Health => "Health",
+                    _ => unreachable!(),
+                };
+                wire::write_response(
+                    &mut writer,
+                    &DaemonResponse::Error {
+                        message: format!("{type_name} not yet implemented"),
+                    },
+                )
+                .await
+                .map_err(IndexError::Io)?;
+            }
             DaemonRequest::Reindex => {
                 let start = Instant::now();
                 let repo = repo_root.to_path_buf();

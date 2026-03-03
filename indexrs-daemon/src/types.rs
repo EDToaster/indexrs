@@ -31,9 +31,112 @@ pub enum DaemonRequest {
         color: bool,
         cwd: Option<String>,
     },
+    /// Structured search returning JSON-serializable FileMatch objects.
+    JsonSearch {
+        query: String,
+        /// 1-indexed page number.
+        page: usize,
+        /// Results per page (max 100).
+        per_page: usize,
+        /// Lines of context above/below each match.
+        context_lines: usize,
+        /// Optional language filter.
+        language: Option<String>,
+        /// Optional path glob filter.
+        path_glob: Option<String>,
+    },
+    /// Retrieve file contents with metadata.
+    GetFile {
+        /// Relative path from repo root.
+        path: String,
+        /// First line to return (1-indexed, default 1).
+        line_start: Option<usize>,
+        /// Last line to return (default: EOF).
+        line_end: Option<usize>,
+    },
+    /// Structured index status.
+    Status,
+    /// Health check with metadata.
+    Health,
     Ping,
     Shutdown,
     Reindex,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_json_search_roundtrip() {
+        let req = DaemonRequest::JsonSearch {
+            query: "fn main".to_string(),
+            page: 1,
+            per_page: 20,
+            context_lines: 2,
+            language: Some("rust".to_string()),
+            path_glob: Some("src/**".to_string()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: DaemonRequest = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            DaemonRequest::JsonSearch {
+                query,
+                page,
+                per_page,
+                context_lines,
+                language,
+                path_glob,
+            } => {
+                assert_eq!(query, "fn main");
+                assert_eq!(page, 1);
+                assert_eq!(per_page, 20);
+                assert_eq!(context_lines, 2);
+                assert_eq!(language, Some("rust".to_string()));
+                assert_eq!(path_glob, Some("src/**".to_string()));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_get_file_roundtrip() {
+        let req = DaemonRequest::GetFile {
+            path: "src/main.rs".to_string(),
+            line_start: Some(10),
+            line_end: Some(20),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: DaemonRequest = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            DaemonRequest::GetFile {
+                path,
+                line_start,
+                line_end,
+            } => {
+                assert_eq!(path, "src/main.rs");
+                assert_eq!(line_start, Some(10));
+                assert_eq!(line_end, Some(20));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_status_roundtrip() {
+        let req = DaemonRequest::Status;
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: DaemonRequest = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, DaemonRequest::Status));
+    }
+
+    #[test]
+    fn test_health_roundtrip() {
+        let req = DaemonRequest::Health;
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: DaemonRequest = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, DaemonRequest::Health));
+    }
 }
 
 /// Response from daemon to CLI client, sent as TLV binary frames.
