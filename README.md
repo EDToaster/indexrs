@@ -160,8 +160,7 @@ cargo fmt --all -- --check                # Format check
 | Crate | Description |
 |---|---|
 | `indexrs-core` | Library with all indexing, search, query parsing, and change detection logic |
-| `indexrs-cli` | CLI binary with daemon-backed search, file listing, and index management |
-| `indexrs-mcp` | MCP server for IDE integration (stub) |
+| `indexrs-cli` | CLI binary with daemon-backed search, file listing, index management, and MCP server (`indexrs mcp`) |
 
 ## Architecture
 

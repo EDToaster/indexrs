@@ -20,7 +20,7 @@ use rmcp::model::{CallToolResult, Content};
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use indexrs_mcp::errors::repo_not_found;
 ///
 /// let result = repo_not_found("foo", &["indexrs".into(), "myproject".into()]);

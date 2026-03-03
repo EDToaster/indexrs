@@ -183,4 +183,8 @@ pub enum Command {
     /// Internal: run as daemon process (hidden from help)
     #[command(name = "daemon-start", hide = true)]
     DaemonStart,
+
+    /// Run as an MCP (Model Context Protocol) server over stdio
+    #[cfg(feature = "mcp")]
+    Mcp,
 }

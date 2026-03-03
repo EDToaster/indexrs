@@ -32,10 +32,10 @@ use indexrs_core::metadata::FileMetadata;
 use indexrs_core::query::parse_query;
 use indexrs_core::search::SearchOptions;
 
-use crate::daemon_client::DaemonClient;
-use crate::errors;
-use crate::formatter::{self, FileListEntry};
-use crate::resources;
+use super::daemon_client::DaemonClient;
+use super::errors;
+use super::formatter::{self, FileListEntry};
+use super::resources;
 
 /// Maximum number of lines that can be returned from `get_file`.
 const MAX_LINE_RANGE: usize = 500;

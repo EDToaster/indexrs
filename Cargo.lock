@@ -539,6 +539,7 @@ name = "indexrs-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "glob",
  "globset",
  "indexrs-core",
  "indexrs-daemon",
@@ -546,6 +547,8 @@ dependencies = [
  "nu-ansi-term",
  "rayon",
  "regex",
+ "rmcp",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -586,24 +589,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "indexrs-mcp"
-version = "0.1.0"
-dependencies = [
- "clap",
- "glob",
- "indexrs-core",
- "indexrs-daemon",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

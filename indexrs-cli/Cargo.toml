@@ -7,6 +7,10 @@ edition = "2024"
 name = "indexrs"
 path = "src/main.rs"
 
+[features]
+default = ["mcp"]
+mcp = ["dep:rmcp", "dep:schemars", "dep:glob"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
@@ -22,6 +26,9 @@ serde_json = "1"
 indexrs-core = { path = "../indexrs-core" }
 indexrs-daemon = { path = "../indexrs-daemon" }
 zstd = "0.13"
+rmcp = { version = "0.17", features = ["server", "transport-io", "macros"], optional = true }
+schemars = { version = "1", optional = true }
+glob = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

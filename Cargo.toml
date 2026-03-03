@@ -4,5 +4,4 @@ members = [
     "indexrs-core",
     "indexrs-cli",
     "indexrs-daemon",
-    "indexrs-mcp",
 ]

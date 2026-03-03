@@ -4,6 +4,8 @@ mod daemon;
 mod estimate;
 mod files;
 mod init;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod output;
 mod paths;
 mod preview;
@@ -251,6 +253,14 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
         Command::DaemonStart => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
             daemon::start_daemon(&repo_root).await?;
+            Ok(ExitCode::Success)
+        }
+        #[cfg(feature = "mcp")]
+        Command::Mcp => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            mcp::run_mcp(repo_root)
+                .await
+                .map_err(|e| indexrs_core::IndexError::Io(std::io::Error::other(e)))?;
             Ok(ExitCode::Success)
         }
     }

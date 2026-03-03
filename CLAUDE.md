@@ -36,8 +36,7 @@ indexrs is a local code indexing service for fast substring search, inspired by 
 ### Workspace Crates
 
 - **`indexrs-core`** — Library with all indexing/search logic (28 modules). No binary targets.
-- **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: search, files, symbols, preview, status, reindex. Currently stubs that delegate to core.
-- **`indexrs-mcp`** — MCP server binary (`rmcp` + `tokio`). Currently a stub.
+- **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: search, files, symbols, preview, status, reindex, mcp. The `mcp` subcommand runs the MCP server over stdio (gated behind the `mcp` cargo feature, enabled by default).
 
 ### Core Data Pipeline (indexrs-core)
 

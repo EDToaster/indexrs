@@ -17,7 +17,7 @@ use rmcp::model::{
 
 use indexrs_core::{IndexState, Language, Segment};
 
-use crate::formatter::format_size;
+use super::formatter::format_size;
 
 /// Return the list of static resources.
 pub fn list_resources() -> ListResourcesResult {

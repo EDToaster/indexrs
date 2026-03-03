@@ -11,9 +11,9 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
+use indexrs_daemon::ensure_daemon;
 use indexrs_daemon::types::{DaemonRequest, DaemonResponse};
 use indexrs_daemon::wire::read_response;
-use indexrs_daemon::{ensure_daemon, find_daemon_binary};
 
 /// Result of a successful daemon request.
 #[derive(Debug)]
@@ -73,8 +73,8 @@ impl DaemonClient {
 
         // Lazily establish connection.
         if guard.is_none() {
-            let daemon_bin =
-                find_daemon_binary().map_err(|e| format!("cannot find daemon binary: {e}"))?;
+            let daemon_bin = std::env::current_exe()
+                .map_err(|e| format!("cannot determine current executable: {e}"))?;
             let stream = ensure_daemon(&daemon_bin, &self.repo_root)
                 .await
                 .map_err(|e| format!("failed to connect to daemon: {e}"))?;
