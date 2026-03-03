@@ -307,6 +307,29 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
         fmt_bytes(total_content_bytes),
         elapsed.as_secs_f64()
     );
+
+    // ── Phase 5: Auto-register in repo registry ──────────────────────
+    use indexrs_core::registry::{add_repo, config_file_path, load_config, save_config};
+
+    match load_config() {
+        Ok(mut config) => {
+            if add_repo(&mut config, repo_root.to_path_buf(), None) {
+                if let Err(e) = save_config(&config) {
+                    eprintln!("Warning: could not save registry: {e}");
+                } else {
+                    let name = config.repo.last().unwrap().effective_name();
+                    eprintln!(
+                        "Registered repo \"{name}\" in {}",
+                        config_file_path().display()
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Warning: could not load registry: {e}");
+        }
+    }
+
     Ok(())
 }
 
