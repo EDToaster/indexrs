@@ -33,34 +33,32 @@
     --transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --bg: #0c0a09;
-        --bg-secondary: #1c1917;
-        --bg-elevated: #1c1917;
-        --fg: #e7e5e4;
-        --fg-dim: #a8a29e;
-        --fg-muted: #78716c;
-        --match-bg: #0c2d48;
-        --match-fg: #7dd3fc;
-        --match-border: #1e5a8a;
-        --border: #292524;
-        --border-subtle: #1c1917;
-        --accent: #2dd4bf;
-        --accent-hover: #5eead4;
-        --accent-glow: rgba(45, 212, 191, 0.1);
-        --danger: #f87171;
-        --success: #34d399;
-        --code-bg: #0c0a09;
-        --line-number-fg: #57534e;
-        --line-number-bg: #151311;
-        --selection-bg: rgba(45, 212, 191, 0.08);
-        --selection-border: var(--accent);
-        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-        --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-        --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.4);
-    }
+/* Dark mode — applied via data-theme attribute or system preference */
+[data-theme="dark"] {
+    --bg: #0c0a09;
+    --bg-secondary: #1c1917;
+    --bg-elevated: #1c1917;
+    --fg: #e7e5e4;
+    --fg-dim: #a8a29e;
+    --fg-muted: #78716c;
+    --match-bg: #0c2d48;
+    --match-fg: #7dd3fc;
+    --match-border: #1e5a8a;
+    --border: #292524;
+    --border-subtle: #1c1917;
+    --accent: #2dd4bf;
+    --accent-hover: #5eead4;
+    --accent-glow: rgba(45, 212, 191, 0.1);
+    --danger: #f87171;
+    --success: #34d399;
+    --code-bg: #0c0a09;
+    --line-number-fg: #57534e;
+    --line-number-bg: #151311;
+    --selection-bg: rgba(45, 212, 191, 0.08);
+    --selection-border: var(--accent);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
 /* Reset & base */
@@ -362,15 +360,13 @@ mark {
     border: 1px solid rgba(220, 38, 38, 0.2);
 }
 
-@media (prefers-color-scheme: dark) {
-    .badge--ok {
-        background: rgba(52, 211, 153, 0.1);
-        border-color: rgba(52, 211, 153, 0.2);
-    }
-    .badge--error {
-        background: rgba(248, 113, 113, 0.1);
-        border-color: rgba(248, 113, 113, 0.2);
-    }
+[data-theme="dark"] .badge--ok {
+    background: rgba(52, 211, 153, 0.1);
+    border-color: rgba(52, 211, 153, 0.2);
+}
+[data-theme="dark"] .badge--error {
+    background: rgba(248, 113, 113, 0.1);
+    border-color: rgba(248, 113, 113, 0.2);
 }
 
 /* Back link */
@@ -509,3 +505,29 @@ mark {
     color: var(--fg-dim);
     margin-top: 0.15rem;
 }
+
+/* Theme toggle */
+.theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--fg-dim);
+    font-size: 1.15rem;
+    line-height: 1;
+    transition: color var(--transition);
+}
+
+.theme-toggle:hover {
+    color: var(--fg);
+}
+
+/* Icon visibility: sun in light mode, moon in dark mode */
+.theme-icon-sun { display: inline; }
+.theme-icon-moon { display: none; }
+
+[data-theme="dark"] .theme-icon-sun { display: none; }
+[data-theme="dark"] .theme-icon-moon { display: inline; }

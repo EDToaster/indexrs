@@ -150,6 +150,16 @@
         });
     }
 
+    // Theme toggle (light <-> dark)
+    var themeToggle = document.getElementById("theme-toggle");
+    if (themeToggle) {
+        themeToggle.addEventListener("click", function() {
+            var next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+            document.documentElement.setAttribute("data-theme", next);
+            localStorage.setItem("theme", next);
+        });
+    }
+
     // Auto-focus search on page load
     document.addEventListener("DOMContentLoaded", function() {
         focusSearch();

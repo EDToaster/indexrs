@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>indexrs</title>
     <link rel="stylesheet" href="/static/style.css">
+    <script>
+        (function(){var t=localStorage.getItem("theme")||(matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",t)})();
+    </script>
 </head>
 <body>
     <header class="header">
@@ -19,6 +22,10 @@
         </select>
         {% endif %}
         <div class="header-spacer"></div>
+        <button class="theme-toggle" id="theme-toggle" type="button" title="Toggle theme">
+            <span class="theme-icon-sun" aria-hidden="true">&#9788;</span>
+            <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
+        </button>
         <span class="badge badge--ok" id="repo-status">{{ status }}</span>
         <span class="badge">{{ repo_count }} repo{% if repo_count != 1 %}s{% endif %}</span>
     </header>
