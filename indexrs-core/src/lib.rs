@@ -4,6 +4,7 @@ pub mod changes;
 pub mod checkpoint;
 pub mod codec;
 pub mod content;
+pub mod disk;
 pub mod error;
 pub mod git_diff;
 pub mod hash_diff;
@@ -44,6 +45,7 @@ pub use codec::{
     encode_positional_postings,
 };
 pub use content::{ContentStoreReader, ContentStoreWriter};
+pub use disk::dir_size;
 pub use error::{IndexError, Result};
 pub use git_diff::GitChangeDetector;
 pub use hash_diff::hash_diff;

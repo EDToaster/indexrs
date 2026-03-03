@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use indexrs_core::{Language, SegmentManager, search_segments};
+use indexrs_core::{Language, SegmentManager, dir_size, search_segments};
 
 use crate::output::human_bytes;
 
@@ -175,25 +175,6 @@ fn print_search_sanity(
 
     println!();
     Ok(())
-}
-
-/// Recursively compute the total size of all files under `path`.
-fn dir_size(path: &Path) -> u64 {
-    let mut total: u64 = 0;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let ft = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
-            if ft.is_dir() {
-                total += dir_size(&entry.path());
-            } else if ft.is_file() {
-                total += entry.metadata().map(|m| m.len()).unwrap_or(0);
-            }
-        }
-    }
-    total
 }
 
 #[cfg(test)]
