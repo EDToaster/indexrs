@@ -166,7 +166,6 @@ fn parse_with_cached_parser(
             let _ = p.set_language(ts_lang);
             p
         });
-        let _ = parser.set_language(ts_lang);
         parser.parse(content, None)
     })
 }

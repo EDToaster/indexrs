@@ -550,7 +550,10 @@ pub fn search_symbols(
         })
         .collect();
 
-    // Phase 2: Sequential merge with dedup (newest-first order preserved)
+    // Phase 2: Sequential merge with dedup.
+    // IMPORTANT: per_segment_results is in newest-first order (from the sort above),
+    // and rayon's collect() preserves source order. The HashSet first-insert-wins
+    // semantics therefore give "newest segment wins" dedup.
     let mut all_matches: Vec<SymbolMatch> = Vec::new();
     let mut seen: std::collections::HashSet<(String, String, u32)> =
         std::collections::HashSet::new();
