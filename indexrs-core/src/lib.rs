@@ -29,6 +29,8 @@ pub mod reindex_progress;
 pub mod search;
 pub mod segment;
 pub mod segment_manager;
+#[cfg(feature = "symbols")]
+pub mod symbol_extractor;
 pub mod tombstone;
 pub mod trigram;
 pub mod types;
