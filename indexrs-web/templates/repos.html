@@ -60,30 +60,30 @@
             {% if repo.has_breakdown %}
             <div class="repo-card-breakdown">
                 <div class="breakdown-bar">
-                    <div class="breakdown-bar-seg breakdown-bar--content" style="width: {{ repo.content_pct }}%"></div>
-                    <div class="breakdown-bar-seg breakdown-bar--trigrams" style="width: {{ repo.trigrams_pct }}%"></div>
-                    <div class="breakdown-bar-seg breakdown-bar--meta" style="width: {{ repo.meta_pct }}%"></div>
-                    <div class="breakdown-bar-seg breakdown-bar--tombstones" style="width: {{ repo.tombstones_pct }}%"></div>
-                    <div class="breakdown-bar-seg breakdown-bar--symbols" style="width: {{ repo.symbols_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--content" data-category="content" style="width: {{ repo.content_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--trigrams" data-category="trigrams" style="width: {{ repo.trigrams_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--meta" data-category="meta" style="width: {{ repo.meta_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--tombstones" data-category="tombstones" style="width: {{ repo.tombstones_pct }}%"></div>
+                    <div class="breakdown-bar-seg breakdown-bar--symbols" data-category="symbols" style="width: {{ repo.symbols_pct }}%"></div>
                 </div>
                 <div class="breakdown-legend">
-                    <span class="breakdown-legend-item">
+                    <span class="breakdown-legend-item" data-category="content">
                         <span class="breakdown-dot breakdown-dot--content"></span> Content {{ repo.content_bytes }}
                         <span class="breakdown-tip">Zstd-compressed source file contents (content.zst)</span>
                     </span>
-                    <span class="breakdown-legend-item">
+                    <span class="breakdown-legend-item" data-category="trigrams">
                         <span class="breakdown-dot breakdown-dot--trigrams"></span> Trigrams {{ repo.trigrams_bytes }}
                         <span class="breakdown-tip">Trigram posting lists for substring search (trigrams.bin)</span>
                     </span>
-                    <span class="breakdown-legend-item">
+                    <span class="breakdown-legend-item" data-category="meta">
                         <span class="breakdown-dot breakdown-dot--meta"></span> Meta {{ repo.meta_paths_bytes }}
                         <span class="breakdown-tip">File metadata and path strings (meta.bin + paths.bin)</span>
                     </span>
-                    <span class="breakdown-legend-item">
+                    <span class="breakdown-legend-item" data-category="tombstones">
                         <span class="breakdown-dot breakdown-dot--tombstones"></span> Tombstones {{ repo.tombstones_bytes }}
                         <span class="breakdown-tip">Bitmaps tracking deleted files pending compaction (tombstones.bin)</span>
                     </span>
-                    <span class="breakdown-legend-item">
+                    <span class="breakdown-legend-item" data-category="symbols">
                         <span class="breakdown-dot breakdown-dot--symbols"></span> Symbols {{ repo.symbols_bytes }}
                         <span class="breakdown-tip">Symbol index for function/type/variable lookup (symbols.bin + sym_trigrams.bin)</span>
                     </span>

@@ -918,8 +918,8 @@ mark {
 
 .breakdown-bar {
     display: flex;
-    height: 6px;
-    border-radius: 3px;
+    height: 12px;
+    border-radius: 6px;
     overflow: hidden;
     background: var(--bg-secondary);
 }
@@ -930,39 +930,115 @@ mark {
 }
 
 .breakdown-bar--content {
-    background: var(--accent);
+    background:
+        repeating-linear-gradient(
+            -45deg,
+            transparent,
+            transparent 3px,
+            rgba(255,255,255,0.18) 3px,
+            rgba(255,255,255,0.18) 5px
+        ),
+        var(--accent);
 }
 
 .breakdown-bar--trigrams {
-    background: #f59e0b;
+    background:
+        repeating-linear-gradient(
+            90deg,
+            transparent,
+            transparent 3px,
+            rgba(255,255,255,0.18) 3px,
+            rgba(255,255,255,0.18) 5px
+        ),
+        #f59e0b;
 }
 
 .breakdown-bar--meta {
-    background: #8b5cf6;
+    background:
+        radial-gradient(circle, rgba(255,255,255,0.22) 1px, transparent 1px),
+        #8b5cf6;
+    background-size: 5px 5px, auto;
 }
 
 .breakdown-bar--tombstones {
-    background: #ef4444;
+    background:
+        repeating-linear-gradient(
+            45deg,
+            transparent,
+            transparent 3px,
+            rgba(255,255,255,0.18) 3px,
+            rgba(255,255,255,0.18) 5px
+        ),
+        repeating-linear-gradient(
+            -45deg,
+            transparent,
+            transparent 3px,
+            rgba(255,255,255,0.18) 3px,
+            rgba(255,255,255,0.18) 5px
+        ),
+        #ef4444;
 }
 
 .breakdown-bar--symbols {
-    background: #06b6d4;
+    background:
+        repeating-linear-gradient(
+            0deg,
+            transparent,
+            transparent 3px,
+            rgba(255,255,255,0.18) 3px,
+            rgba(255,255,255,0.18) 5px
+        ),
+        #06b6d4;
 }
 
 [data-theme="dark"] .breakdown-bar--trigrams {
-    background: #fbbf24;
+    background:
+        repeating-linear-gradient(
+            90deg,
+            transparent,
+            transparent 3px,
+            rgba(0,0,0,0.15) 3px,
+            rgba(0,0,0,0.15) 5px
+        ),
+        #fbbf24;
 }
 
 [data-theme="dark"] .breakdown-bar--meta {
-    background: #a78bfa;
+    background:
+        radial-gradient(circle, rgba(0,0,0,0.15) 1px, transparent 1px),
+        #a78bfa;
+    background-size: 5px 5px, auto;
 }
 
 [data-theme="dark"] .breakdown-bar--tombstones {
-    background: #f87171;
+    background:
+        repeating-linear-gradient(
+            45deg,
+            transparent,
+            transparent 3px,
+            rgba(0,0,0,0.15) 3px,
+            rgba(0,0,0,0.15) 5px
+        ),
+        repeating-linear-gradient(
+            -45deg,
+            transparent,
+            transparent 3px,
+            rgba(0,0,0,0.15) 3px,
+            rgba(0,0,0,0.15) 5px
+        ),
+        #f87171;
 }
 
 [data-theme="dark"] .breakdown-bar--symbols {
-    background: #22d3ee;
+    background:
+        repeating-linear-gradient(
+            0deg,
+            transparent,
+            transparent 3px,
+            rgba(0,0,0,0.15) 3px,
+            rgba(0,0,0,0.15) 5px
+        ),
+        #22d3ee;
 }
 
 .breakdown-legend {
@@ -984,9 +1060,9 @@ mark {
 .breakdown-tip {
     display: block;
     position: absolute;
-    bottom: calc(100% + 6px);
+    top: calc(100% + 6px);
     left: 50%;
-    transform: translateX(-50%) translateY(4px);
+    transform: translateX(-50%) translateY(-4px);
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -1006,25 +1082,43 @@ mark {
     transform: translateX(-50%) translateY(0);
 }
 
+/* Arrow pointing up from tooltip */
 .breakdown-tip::after {
     content: "";
     position: absolute;
-    top: 100%;
+    bottom: 100%;
     left: 50%;
     margin-left: -4px;
     border: 4px solid transparent;
-    border-top-color: var(--border);
+    border-bottom-color: var(--border);
 }
 
 .breakdown-tip::before {
     content: "";
     position: absolute;
-    top: 100%;
+    bottom: 100%;
     left: 50%;
     margin-left: -3px;
     border: 3px solid transparent;
-    border-top-color: var(--bg-elevated);
+    border-bottom-color: var(--bg-elevated);
     z-index: 1;
+}
+
+/* Bar segment highlight on legend hover */
+.breakdown-bar-seg {
+    transition: opacity 150ms ease;
+}
+
+.repo-card-breakdown:has(.breakdown-legend-item:hover) .breakdown-bar-seg {
+    opacity: 0.25;
+}
+
+.repo-card-breakdown:has(.breakdown-legend-item[data-category="content"]:hover) .breakdown-bar-seg[data-category="content"],
+.repo-card-breakdown:has(.breakdown-legend-item[data-category="trigrams"]:hover) .breakdown-bar-seg[data-category="trigrams"],
+.repo-card-breakdown:has(.breakdown-legend-item[data-category="meta"]:hover) .breakdown-bar-seg[data-category="meta"],
+.repo-card-breakdown:has(.breakdown-legend-item[data-category="tombstones"]:hover) .breakdown-bar-seg[data-category="tombstones"],
+.repo-card-breakdown:has(.breakdown-legend-item[data-category="symbols"]:hover) .breakdown-bar-seg[data-category="symbols"] {
+    opacity: 1;
 }
 
 .breakdown-dot {
