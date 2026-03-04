@@ -14,6 +14,7 @@ mod repo;
 mod repos;
 mod search_cmd;
 mod status;
+mod symbols;
 mod web;
 mod wire;
 
@@ -207,9 +208,31 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             preview::run_preview(&opts)?;
             Ok(ExitCode::Success)
         }
-        Command::Symbols { .. } => {
-            eprintln!("symbols: not yet implemented (post-v0.2)");
-            Ok(ExitCode::Error)
+        Command::Symbols {
+            query,
+            kind,
+            language,
+            limit,
+        } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+
+            if !repo_root.join(".indexrs").join("segments").exists() {
+                eprintln!("error: no index found. Run 'indexrs init' first.");
+                return Ok(ExitCode::Error);
+            }
+
+            let request = daemon::DaemonRequest::Symbols {
+                query,
+                kind,
+                language,
+                limit,
+                color: color.enabled,
+                cwd: cwd.clone(),
+            };
+
+            let stdout = std::io::stdout();
+            let mut writer = StreamingWriter::new(stdout.lock());
+            daemon::run_via_daemon(&repo_root, request, &mut writer).await
         }
         Command::Status => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;

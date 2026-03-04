@@ -355,6 +355,43 @@ pub fn format_index_status(status: &IndexStatusInfo) -> String {
     out
 }
 
+// ---- Symbol results formatting (used by search_symbols tool) ----
+
+/// Format symbol search results as plain text for MCP tool responses.
+///
+/// Output format:
+/// ```text
+/// Found 5 symbols matching "main"
+///
+/// ## fn main
+///    src/main.rs:42
+///
+/// ## struct Config
+///    src/config.rs:10
+/// ```
+#[cfg(feature = "symbols")]
+pub fn format_symbol_results(
+    query: &str,
+    matches: &[indexrs_core::symbol_index::SymbolMatch],
+) -> String {
+    let mut out = String::new();
+
+    if matches.is_empty() {
+        out.push_str(&format!("No symbols found matching \"{query}\"."));
+        return out;
+    }
+
+    writeln!(out, "Found {} symbols matching \"{query}\"", matches.len()).unwrap();
+
+    for m in matches {
+        writeln!(out).unwrap();
+        writeln!(out, "## {} {}", m.kind.short_label(), m.name).unwrap();
+        writeln!(out, "   {}:{}", m.path, m.line + 1).unwrap();
+    }
+
+    out
+}
+
 // ---- Internal helpers ----
 
 /// Format a single file match section with `## path` header and line output.

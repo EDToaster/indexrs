@@ -68,6 +68,15 @@ pub enum DaemonRequest {
     Status,
     /// Health check with metadata.
     Health,
+    /// Symbol search request.
+    Symbols {
+        query: Option<String>,
+        kind: Option<String>,
+        language: Option<String>,
+        limit: Option<usize>,
+        color: bool,
+        cwd: Option<String>,
+    },
     Ping,
     Shutdown,
     Reindex,
@@ -146,6 +155,38 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: DaemonRequest = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized, DaemonRequest::Health));
+    }
+
+    #[test]
+    fn test_symbols_roundtrip() {
+        let req = DaemonRequest::Symbols {
+            query: Some("process".to_string()),
+            kind: Some("fn".to_string()),
+            language: Some("rust".to_string()),
+            limit: Some(50),
+            color: true,
+            cwd: Some("/repo/src".to_string()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: DaemonRequest = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            DaemonRequest::Symbols {
+                query,
+                kind,
+                language,
+                limit,
+                color,
+                cwd,
+            } => {
+                assert_eq!(query, Some("process".to_string()));
+                assert_eq!(kind, Some("fn".to_string()));
+                assert_eq!(language, Some("rust".to_string()));
+                assert_eq!(limit, Some(50));
+                assert!(color);
+                assert_eq!(cwd, Some("/repo/src".to_string()));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
     }
 }
 

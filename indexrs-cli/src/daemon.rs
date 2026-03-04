@@ -323,6 +323,81 @@ fn handle_files_request(
     Ok((lines, start.elapsed()))
 }
 
+/// Execute a Symbols request against the loaded index.
+#[cfg(feature = "symbols")]
+fn handle_symbols_request(
+    manager: &SegmentManager,
+    query: Option<String>,
+    kind: Option<String>,
+    language: Option<String>,
+    limit: Option<usize>,
+    color: bool,
+    path_rewriter: &PathRewriter,
+) -> Result<(Vec<String>, Duration), String> {
+    use crate::symbols::format_symbol_line;
+    use indexrs_core::symbol_index::{SymbolSearchOptions, search_symbols};
+    use indexrs_core::types::SymbolKind;
+
+    let start = Instant::now();
+
+    let query_str = query.unwrap_or_default();
+    if query_str.is_empty() {
+        return Err("symbol search query must not be empty".to_string());
+    }
+
+    let kind_filter = match kind {
+        Some(ref k) => match SymbolKind::from_str_loose(k) {
+            Some(sk) => Some(sk),
+            None => return Err(format!("unknown symbol kind: \"{k}\"")),
+        },
+        None => None,
+    };
+
+    let language_filter = match language {
+        Some(ref lang_str) => match indexrs_core::match_language(lang_str) {
+            Ok(lang) => Some(lang),
+            Err(_) => return Err(format!("unknown language: \"{lang_str}\"")),
+        },
+        None => None,
+    };
+
+    let options = SymbolSearchOptions {
+        kind: kind_filter,
+        language: language_filter,
+        path_filter: None,
+        max_results: limit.unwrap_or(500), // CLI default for fzf output
+        offset: 0,
+    };
+
+    let snapshot = manager.snapshot();
+    let color = ColorConfig::new(color);
+    let matches = search_symbols(&snapshot, &query_str, &options).map_err(|e| e.to_string())?;
+
+    let lines: Vec<String> = matches
+        .iter()
+        .map(|m| format_symbol_line(m, &color, path_rewriter))
+        .collect();
+
+    Ok((lines, start.elapsed()))
+}
+
+/// Fallback when the `symbols` feature is not enabled.
+#[cfg(not(feature = "symbols"))]
+fn handle_symbols_request(
+    _manager: &SegmentManager,
+    _query: Option<String>,
+    _kind: Option<String>,
+    _language: Option<String>,
+    _limit: Option<usize>,
+    _color: bool,
+    _path_rewriter: &PathRewriter,
+) -> Result<(Vec<String>, Duration), String> {
+    Err(
+        "symbol search requires the 'symbols' feature (rebuild with --features symbols)"
+            .to_string(),
+    )
+}
+
 /// Handle a single client connection.
 ///
 /// Reads newline-delimited JSON requests from the client and writes
@@ -1048,6 +1123,58 @@ async fn handle_connection(
                 )
                 .await
                 .map_err(IndexError::Io)?;
+            }
+            DaemonRequest::Symbols {
+                query,
+                kind,
+                language,
+                limit,
+                color,
+                cwd,
+            } => {
+                let stale = !caught_up.load(Ordering::Relaxed);
+                let path_rewriter = match cwd {
+                    Some(ref cwd_str) => PathRewriter::new(repo_root, Path::new(cwd_str)),
+                    None => PathRewriter::identity(),
+                };
+                match handle_symbols_request(
+                    manager,
+                    query,
+                    kind,
+                    language,
+                    limit,
+                    color,
+                    &path_rewriter,
+                ) {
+                    Ok((lines, elapsed)) => {
+                        for line_content in &lines {
+                            wire::write_response(
+                                &mut writer,
+                                &DaemonResponse::Line {
+                                    content: line_content.clone(),
+                                },
+                            )
+                            .await
+                            .map_err(IndexError::Io)?;
+                        }
+
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Done {
+                                total: lines.len(),
+                                duration_ms: elapsed.as_millis() as u64,
+                                stale,
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
+                    }
+                    Err(msg) => {
+                        wire::write_response(&mut writer, &DaemonResponse::Error { message: msg })
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
+                }
             }
             DaemonRequest::Reindex => {
                 let start = Instant::now();

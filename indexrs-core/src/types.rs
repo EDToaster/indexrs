@@ -471,6 +471,99 @@ pub enum SymbolKind {
     Module,
 }
 
+impl SymbolKind {
+    /// Convert this symbol kind to its `u8` representation for binary serialization.
+    ///
+    /// Each variant maps to a fixed numeric value (0..=10).
+    pub fn to_u8(self) -> u8 {
+        match self {
+            SymbolKind::Function => 0,
+            SymbolKind::Struct => 1,
+            SymbolKind::Trait => 2,
+            SymbolKind::Enum => 3,
+            SymbolKind::Interface => 4,
+            SymbolKind::Class => 5,
+            SymbolKind::Method => 6,
+            SymbolKind::Constant => 7,
+            SymbolKind::Variable => 8,
+            SymbolKind::Type => 9,
+            SymbolKind::Module => 10,
+        }
+    }
+
+    /// Reconstruct a `SymbolKind` from its `u8` representation.
+    ///
+    /// Returns `None` for unrecognized values.
+    pub fn from_u8(v: u8) -> Option<SymbolKind> {
+        match v {
+            0 => Some(SymbolKind::Function),
+            1 => Some(SymbolKind::Struct),
+            2 => Some(SymbolKind::Trait),
+            3 => Some(SymbolKind::Enum),
+            4 => Some(SymbolKind::Interface),
+            5 => Some(SymbolKind::Class),
+            6 => Some(SymbolKind::Method),
+            7 => Some(SymbolKind::Constant),
+            8 => Some(SymbolKind::Variable),
+            9 => Some(SymbolKind::Type),
+            10 => Some(SymbolKind::Module),
+            _ => None,
+        }
+    }
+
+    /// Parse a `SymbolKind` from user input, supporting common aliases.
+    ///
+    /// The match is case-insensitive. Supported aliases include:
+    /// - Function: "function", "fn", "func", "def"
+    /// - Struct: "struct"
+    /// - Trait: "trait"
+    /// - Enum: "enum"
+    /// - Interface: "interface", "iface"
+    /// - Class: "class"
+    /// - Method: "method"
+    /// - Constant: "constant", "const"
+    /// - Variable: "variable", "var", "let"
+    /// - Type: "type", "typedef", "alias"
+    /// - Module: "module", "mod", "namespace", "package", "ns"
+    pub fn from_str_loose(s: &str) -> Option<SymbolKind> {
+        match s.to_ascii_lowercase().as_str() {
+            "function" | "fn" | "func" | "def" => Some(SymbolKind::Function),
+            "struct" => Some(SymbolKind::Struct),
+            "trait" => Some(SymbolKind::Trait),
+            "enum" => Some(SymbolKind::Enum),
+            "interface" | "iface" => Some(SymbolKind::Interface),
+            "class" => Some(SymbolKind::Class),
+            "method" => Some(SymbolKind::Method),
+            "constant" | "const" => Some(SymbolKind::Constant),
+            "variable" | "var" | "let" => Some(SymbolKind::Variable),
+            "type" | "typedef" | "alias" => Some(SymbolKind::Type),
+            "module" | "mod" | "namespace" | "package" | "ns" => Some(SymbolKind::Module),
+            _ => None,
+        }
+    }
+
+    /// Returns a short lowercase label suitable for CLI output.
+    ///
+    /// These labels are compact and familiar to developers:
+    /// `"fn"`, `"struct"`, `"trait"`, `"enum"`, `"interface"`, `"class"`,
+    /// `"method"`, `"const"`, `"var"`, `"type"`, `"mod"`.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            SymbolKind::Function => "fn",
+            SymbolKind::Struct => "struct",
+            SymbolKind::Trait => "trait",
+            SymbolKind::Enum => "enum",
+            SymbolKind::Interface => "interface",
+            SymbolKind::Class => "class",
+            SymbolKind::Method => "method",
+            SymbolKind::Constant => "const",
+            SymbolKind::Variable => "var",
+            SymbolKind::Type => "type",
+            SymbolKind::Module => "mod",
+        }
+    }
+}
+
 impl fmt::Display for SymbolKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -949,5 +1042,208 @@ mod tests {
         assert_eq!(SymbolKind::Variable.to_string(), "Variable");
         assert_eq!(SymbolKind::Type.to_string(), "Type");
         assert_eq!(SymbolKind::Module.to_string(), "Module");
+    }
+
+    #[test]
+    fn test_symbol_kind_u8_roundtrip() {
+        let all_kinds = [
+            SymbolKind::Function,
+            SymbolKind::Struct,
+            SymbolKind::Trait,
+            SymbolKind::Enum,
+            SymbolKind::Interface,
+            SymbolKind::Class,
+            SymbolKind::Method,
+            SymbolKind::Constant,
+            SymbolKind::Variable,
+            SymbolKind::Type,
+            SymbolKind::Module,
+        ];
+        for kind in all_kinds {
+            let v = kind.to_u8();
+            let roundtripped = SymbolKind::from_u8(v)
+                .unwrap_or_else(|| panic!("from_u8({v}) should return Some for {kind}"));
+            assert_eq!(roundtripped, kind, "roundtrip failed for {kind}");
+        }
+    }
+
+    #[test]
+    fn test_symbol_kind_u8_known_values() {
+        assert_eq!(SymbolKind::Function.to_u8(), 0);
+        assert_eq!(SymbolKind::Struct.to_u8(), 1);
+        assert_eq!(SymbolKind::Trait.to_u8(), 2);
+        assert_eq!(SymbolKind::Enum.to_u8(), 3);
+        assert_eq!(SymbolKind::Interface.to_u8(), 4);
+        assert_eq!(SymbolKind::Class.to_u8(), 5);
+        assert_eq!(SymbolKind::Method.to_u8(), 6);
+        assert_eq!(SymbolKind::Constant.to_u8(), 7);
+        assert_eq!(SymbolKind::Variable.to_u8(), 8);
+        assert_eq!(SymbolKind::Type.to_u8(), 9);
+        assert_eq!(SymbolKind::Module.to_u8(), 10);
+    }
+
+    #[test]
+    fn test_symbol_kind_from_u8_invalid() {
+        assert!(SymbolKind::from_u8(11).is_none());
+        assert!(SymbolKind::from_u8(100).is_none());
+        assert!(SymbolKind::from_u8(255).is_none());
+    }
+
+    #[test]
+    fn test_symbol_kind_from_str_loose_canonical() {
+        assert_eq!(
+            SymbolKind::from_str_loose("function"),
+            Some(SymbolKind::Function)
+        );
+        assert_eq!(
+            SymbolKind::from_str_loose("struct"),
+            Some(SymbolKind::Struct)
+        );
+        assert_eq!(SymbolKind::from_str_loose("trait"), Some(SymbolKind::Trait));
+        assert_eq!(SymbolKind::from_str_loose("enum"), Some(SymbolKind::Enum));
+        assert_eq!(
+            SymbolKind::from_str_loose("interface"),
+            Some(SymbolKind::Interface)
+        );
+        assert_eq!(SymbolKind::from_str_loose("class"), Some(SymbolKind::Class));
+        assert_eq!(
+            SymbolKind::from_str_loose("method"),
+            Some(SymbolKind::Method)
+        );
+        assert_eq!(
+            SymbolKind::from_str_loose("constant"),
+            Some(SymbolKind::Constant)
+        );
+        assert_eq!(
+            SymbolKind::from_str_loose("variable"),
+            Some(SymbolKind::Variable)
+        );
+        assert_eq!(SymbolKind::from_str_loose("type"), Some(SymbolKind::Type));
+        assert_eq!(
+            SymbolKind::from_str_loose("module"),
+            Some(SymbolKind::Module)
+        );
+    }
+
+    #[test]
+    fn test_symbol_kind_from_str_loose_aliases() {
+        // Function aliases
+        assert_eq!(SymbolKind::from_str_loose("fn"), Some(SymbolKind::Function));
+        assert_eq!(
+            SymbolKind::from_str_loose("func"),
+            Some(SymbolKind::Function)
+        );
+        assert_eq!(
+            SymbolKind::from_str_loose("def"),
+            Some(SymbolKind::Function)
+        );
+
+        // Interface alias
+        assert_eq!(
+            SymbolKind::from_str_loose("iface"),
+            Some(SymbolKind::Interface)
+        );
+
+        // Constant alias
+        assert_eq!(
+            SymbolKind::from_str_loose("const"),
+            Some(SymbolKind::Constant)
+        );
+
+        // Variable aliases
+        assert_eq!(
+            SymbolKind::from_str_loose("var"),
+            Some(SymbolKind::Variable)
+        );
+        assert_eq!(
+            SymbolKind::from_str_loose("let"),
+            Some(SymbolKind::Variable)
+        );
+
+        // Type aliases
+        assert_eq!(
+            SymbolKind::from_str_loose("typedef"),
+            Some(SymbolKind::Type)
+        );
+        assert_eq!(SymbolKind::from_str_loose("alias"), Some(SymbolKind::Type));
+
+        // Module aliases
+        assert_eq!(SymbolKind::from_str_loose("mod"), Some(SymbolKind::Module));
+        assert_eq!(
+            SymbolKind::from_str_loose("namespace"),
+            Some(SymbolKind::Module)
+        );
+        assert_eq!(
+            SymbolKind::from_str_loose("package"),
+            Some(SymbolKind::Module)
+        );
+        assert_eq!(SymbolKind::from_str_loose("ns"), Some(SymbolKind::Module));
+    }
+
+    #[test]
+    fn test_symbol_kind_from_str_loose_case_insensitive() {
+        assert_eq!(
+            SymbolKind::from_str_loose("Function"),
+            Some(SymbolKind::Function)
+        );
+        assert_eq!(
+            SymbolKind::from_str_loose("STRUCT"),
+            Some(SymbolKind::Struct)
+        );
+        assert_eq!(SymbolKind::from_str_loose("FN"), Some(SymbolKind::Function));
+        assert_eq!(
+            SymbolKind::from_str_loose("Const"),
+            Some(SymbolKind::Constant)
+        );
+        assert_eq!(SymbolKind::from_str_loose("MOD"), Some(SymbolKind::Module));
+    }
+
+    #[test]
+    fn test_symbol_kind_from_str_loose_invalid() {
+        assert!(SymbolKind::from_str_loose("").is_none());
+        assert!(SymbolKind::from_str_loose("unknown").is_none());
+        assert!(SymbolKind::from_str_loose("foo").is_none());
+        assert!(SymbolKind::from_str_loose("123").is_none());
+    }
+
+    #[test]
+    fn test_symbol_kind_short_label() {
+        assert_eq!(SymbolKind::Function.short_label(), "fn");
+        assert_eq!(SymbolKind::Struct.short_label(), "struct");
+        assert_eq!(SymbolKind::Trait.short_label(), "trait");
+        assert_eq!(SymbolKind::Enum.short_label(), "enum");
+        assert_eq!(SymbolKind::Interface.short_label(), "interface");
+        assert_eq!(SymbolKind::Class.short_label(), "class");
+        assert_eq!(SymbolKind::Method.short_label(), "method");
+        assert_eq!(SymbolKind::Constant.short_label(), "const");
+        assert_eq!(SymbolKind::Variable.short_label(), "var");
+        assert_eq!(SymbolKind::Type.short_label(), "type");
+        assert_eq!(SymbolKind::Module.short_label(), "mod");
+    }
+
+    #[test]
+    fn test_symbol_kind_short_label_roundtrips_via_from_str_loose() {
+        let all_kinds = [
+            SymbolKind::Function,
+            SymbolKind::Struct,
+            SymbolKind::Trait,
+            SymbolKind::Enum,
+            SymbolKind::Interface,
+            SymbolKind::Class,
+            SymbolKind::Method,
+            SymbolKind::Constant,
+            SymbolKind::Variable,
+            SymbolKind::Type,
+            SymbolKind::Module,
+        ];
+        for kind in all_kinds {
+            let label = kind.short_label();
+            let parsed = SymbolKind::from_str_loose(label)
+                .unwrap_or_else(|| panic!("from_str_loose({label:?}) should return Some"));
+            assert_eq!(
+                parsed, kind,
+                "short_label -> from_str_loose roundtrip failed for {kind}"
+            );
+        }
     }
 }

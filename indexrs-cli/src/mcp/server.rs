@@ -9,6 +9,7 @@
 //! - `ping` -- server version and basic status
 //! - `search_code` -- full-text and regex search across indexed files
 //! - `search_files` -- search for files by name/path pattern
+//! - `search_symbols` -- search for symbol definitions (functions, types, etc.)
 //! - `index_status` -- report on current index state
 //! - `reindex` -- trigger reindexing of a repository
 
@@ -135,6 +136,46 @@ pub struct ReindexParams {
     /// If true, rebuild entire index from scratch. Default: false.
     #[schemars(description = "If true, rebuild entire index from scratch. Default: false.")]
     pub full: Option<bool>,
+}
+
+/// Parameters for the `search_symbols` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SearchSymbolsParams {
+    /// Symbol name or pattern to search for.
+    #[schemars(description = "Symbol name or pattern to search for")]
+    pub query: String,
+
+    /// Filter by symbol kind: function, struct, class, trait, enum, interface, type, constant, method, module, variable.
+    #[serde(default)]
+    #[schemars(
+        description = "Filter by symbol kind: function, struct, class, trait, enum, interface, type, constant, method, module, variable"
+    )]
+    pub kind: Option<String>,
+
+    /// Filter by file path substring.
+    #[serde(default)]
+    #[schemars(description = "Filter by file path substring")]
+    pub path: Option<String>,
+
+    /// Filter by programming language.
+    #[serde(default)]
+    #[schemars(description = "Filter by programming language")]
+    pub language: Option<String>,
+
+    /// Filter to a specific indexed repository.
+    #[serde(default)]
+    #[schemars(description = "Filter to a specific indexed repository")]
+    pub repo: Option<String>,
+
+    /// Maximum results to return (default: 20, max: 100).
+    #[serde(default)]
+    #[schemars(description = "Maximum results to return (default: 20, max: 100)")]
+    pub max_results: Option<usize>,
+
+    /// Skip this many results for pagination (default: 0).
+    #[serde(default)]
+    #[schemars(description = "Skip this many results for pagination (default: 0)")]
+    pub offset: Option<usize>,
 }
 
 // ---- Server ------------------------------------------------------------------
@@ -476,11 +517,152 @@ impl IndexrsServer {
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
+
+    /// Search for symbol definitions (functions, types, constants) across indexed repositories.
+    #[tool(
+        name = "search_symbols",
+        description = "Search for symbol definitions (functions, structs, classes, traits, enums, interfaces, types, constants, methods, modules, variables) across indexed repositories. Returns symbol name, kind, file path, and line number. Use the 'kind' parameter to filter by symbol type."
+    )]
+    async fn search_symbols(
+        &self,
+        Parameters(params): Parameters<SearchSymbolsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // Validate parameters
+        let max_results = params.max_results.unwrap_or(20).clamp(1, 100);
+
+        let offset = params.offset.unwrap_or(0);
+
+        // Validate kind filter
+        let kind_filter = match &params.kind {
+            Some(k) => match indexrs_core::SymbolKind::from_str_loose(k) {
+                Some(sk) => Some(sk),
+                None => {
+                    return Ok(errors::invalid_parameter(
+                        "kind",
+                        &format!(
+                            "Unknown symbol kind: \"{k}\". Valid kinds: function, struct, class, trait, enum, interface, type, constant, method, module, variable."
+                        ),
+                    ));
+                }
+            },
+            None => None,
+        };
+
+        // Validate language filter
+        let language_filter = match &params.language {
+            Some(lang_str) => match indexrs_core::match_language(lang_str) {
+                Ok(lang) => Some(lang),
+                Err(_) => {
+                    return Ok(errors::invalid_parameter(
+                        "language",
+                        &format!(
+                            "Unknown language: \"{lang_str}\". Examples: rust, python, typescript."
+                        ),
+                    ));
+                }
+            },
+            None => None,
+        };
+
+        // Dispatch through daemon if available
+        if let Some(daemon) = &self.daemon {
+            let req = indexrs_daemon::DaemonRequest::Symbols {
+                query: Some(params.query.clone()),
+                kind: params.kind.clone(),
+                language: params.language.clone(),
+                limit: Some(max_results),
+                color: false,
+                cwd: None,
+            };
+
+            match daemon.request(req).await {
+                Ok(result) => {
+                    if result.total == 0 {
+                        return Ok(errors::no_results(&params.query, &[]));
+                    }
+                    let mut text = String::new();
+                    if result.stale {
+                        text.push_str("Warning: Index may be stale. Consider running reindex.\n");
+                    }
+                    text.push_str(&result.text);
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+                Err(e) => {
+                    return Ok(errors::daemon_dispatch_error(&e));
+                }
+            }
+        }
+
+        // Fallback: direct symbol search
+        self.search_symbols_direct(
+            &params.query,
+            kind_filter,
+            language_filter,
+            params.path.as_deref(),
+            max_results,
+            offset,
+        )
+        .await
+    }
 }
 
 // ---- Direct-index fallback methods ------------------------------------------
 
 impl IndexrsServer {
+    /// Fallback: search symbols directly against the in-process index.
+    #[cfg(feature = "symbols")]
+    async fn search_symbols_direct(
+        &self,
+        query: &str,
+        kind: Option<indexrs_core::SymbolKind>,
+        language: Option<indexrs_core::Language>,
+        path: Option<&str>,
+        max_results: usize,
+        offset: usize,
+    ) -> Result<CallToolResult, ErrorData> {
+        use indexrs_core::symbol_index::{SymbolSearchOptions, search_symbols};
+
+        let options = SymbolSearchOptions {
+            kind,
+            language,
+            path_filter: path.map(|s| s.to_string()),
+            max_results,
+            offset,
+        };
+
+        let snapshot = self.index_state.snapshot();
+        let matches = match search_symbols(&snapshot, query, &options) {
+            Ok(m) => m,
+            Err(e) => {
+                return Ok(errors::invalid_query(&format!("Symbol search failed: {e}")));
+            }
+        };
+
+        if matches.is_empty() {
+            return Ok(errors::no_results(query, &[]));
+        }
+
+        let text = formatter::format_symbol_results(query, &matches);
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    /// Fallback when the `symbols` feature is not enabled.
+    #[cfg(not(feature = "symbols"))]
+    async fn search_symbols_direct(
+        &self,
+        _query: &str,
+        _kind: Option<indexrs_core::SymbolKind>,
+        _language: Option<indexrs_core::Language>,
+        _path: Option<&str>,
+        _max_results: usize,
+        _offset: usize,
+    ) -> Result<CallToolResult, ErrorData> {
+        Ok(CallToolResult::error(vec![Content::text(
+            "Symbol search requires the 'symbols' feature. Rebuild with --features symbols."
+                .to_string(),
+        )]))
+    }
+
     /// Fallback: search code directly against the in-process index.
     async fn search_code_direct(
         &self,
@@ -664,9 +846,11 @@ impl ServerHandler for IndexrsServer {
                  index is available — they search the entire repository in \
                  milliseconds, far faster than line-by-line grep.\n\n\
                  Workflow: call index_status once per session to verify the index is \
-                 healthy, then use search_code / search_files for all lookups.\n\n\
+                 healthy, then use search_code / search_files / search_symbols for \
+                 all lookups.\n\n\
                  - search_code: Use INSTEAD OF the Grep tool for content search\n\
                  - search_files: Use INSTEAD OF the Glob tool for file lookup\n\
+                 - search_symbols: Find function, struct, class, trait definitions\n\
                  - index_status: Check index health; if stale or empty, fall back to \
                    Grep/Glob until reindex completes\n\
                  - reindex: Trigger re-indexing when the index is stale or missing files"

@@ -8,8 +8,9 @@ name = "indexrs"
 path = "src/main.rs"
 
 [features]
-default = ["mcp"]
+default = ["mcp", "symbols"]
 mcp = ["dep:rmcp", "dep:schemars", "dep:glob"]
+symbols = ["indexrs-core/symbols"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

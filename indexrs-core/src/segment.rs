@@ -60,6 +60,8 @@ pub struct Segment {
     paths_mmap: Mmap,
     entry_count: u32,
     cached_tombstones: RwLock<Option<TombstoneSet>>,
+    #[cfg(feature = "symbols")]
+    symbol_reader: Option<crate::symbol_index::SymbolIndexReader>,
 }
 
 impl std::fmt::Debug for Segment {
@@ -110,6 +112,16 @@ impl Segment {
         let reader = MetadataReader::new(&meta_mmap, &paths_mmap)?;
         let entry_count = reader.entry_count();
 
+        #[cfg(feature = "symbols")]
+        let symbol_reader = {
+            let symbols_path = dir_path.join("symbols.bin");
+            if symbols_path.exists() {
+                Some(crate::symbol_index::SymbolIndexReader::open(dir_path)?)
+            } else {
+                None
+            }
+        };
+
         Ok(Segment {
             segment_id,
             dir_path: dir_path.to_path_buf(),
@@ -119,6 +131,8 @@ impl Segment {
             paths_mmap,
             entry_count,
             cached_tombstones: RwLock::new(None),
+            #[cfg(feature = "symbols")]
+            symbol_reader,
         })
     }
 
@@ -145,6 +159,15 @@ impl Segment {
     /// Access the content store reader for this segment.
     pub fn content_reader(&self) -> &ContentStoreReader {
         &self.content_reader
+    }
+
+    /// Access the symbol index reader for this segment, if available.
+    ///
+    /// Returns `None` if the segment was built without symbol extraction
+    /// (i.e., the `symbols` feature was not enabled during build).
+    #[cfg(feature = "symbols")]
+    pub fn symbol_reader(&self) -> Option<&crate::symbol_index::SymbolIndexReader> {
+        self.symbol_reader.as_ref()
     }
 
     /// Create a `MetadataReader` for this segment's metadata.
@@ -419,6 +442,29 @@ impl SegmentWriter {
 
         // Create empty tombstones.bin
         fs::write(temp_dir.join("tombstones.bin"), b"")?;
+
+        // Extract symbols and write symbol index (when symbols feature is enabled)
+        #[cfg(feature = "symbols")]
+        {
+            use crate::symbol_extractor::extract_symbols;
+            use crate::symbol_index::{SymbolIndexWriter, SymbolRecord};
+
+            let mut symbol_records = Vec::new();
+            for (i, (input, proc_file)) in files.iter().zip(processed.iter()).enumerate() {
+                let file_id = FileId(i as u32);
+                let entries = extract_symbols(file_id, &input.content, proc_file.language);
+                for entry in entries {
+                    symbol_records.push(SymbolRecord {
+                        file_id: entry.file_id,
+                        name: entry.name,
+                        kind: entry.kind,
+                        line: entry.line,
+                        column: entry.column,
+                    });
+                }
+            }
+            SymbolIndexWriter::write(&symbol_records, temp_dir)?;
+        }
 
         // Atomic rename temp dir to final path
         fs::rename(temp_dir, final_dir)?;
