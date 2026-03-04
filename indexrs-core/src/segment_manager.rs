@@ -23,7 +23,7 @@ use crate::changes::ChangeEvent;
 use crate::error::IndexError;
 use crate::index_state::{IndexState, SegmentList};
 use crate::metadata::FileMetadata;
-use crate::segment::{InputFile, Segment, SegmentWriter};
+use crate::segment::{CompactInputFile, InputFile, Segment, SegmentWriter};
 use crate::tombstone::{self, TombstoneSet};
 use crate::types::{FileId, SegmentId};
 
@@ -967,48 +967,69 @@ impl SegmentManager {
             }
         }
 
-        // Phase 2: Decompress content in parallel using rayon.
-        // Each decompression is independent and CPU-bound (zstd decode).
-        let input_files: Vec<InputFile> = live_entries
+        // Phase 2: Build CompactInputFiles in parallel.
+        // Decompress content (needed for trigram extraction) and read raw
+        // compressed bytes (to avoid re-compressing in the output segment).
+        let compact_files: Vec<CompactInputFile> = live_entries
             .par_iter()
             .map(|(seg_idx, entry)| {
                 let segment = &current_segments[*seg_idx];
-                let content = segment
+                let raw_content = segment.content_reader().read_content_with_size_hint(
+                    entry.content_offset,
+                    entry.content_len,
+                    entry.size_bytes as usize,
+                )?;
+                let compressed = segment
                     .content_reader()
-                    .read_content(entry.content_offset, entry.content_len)?;
-                Ok(InputFile {
+                    .read_raw_compressed(entry.content_offset, entry.content_len)?;
+                Ok(CompactInputFile {
                     path: entry.path.clone(),
-                    content,
+                    raw_content,
+                    compressed,
+                    content_hash: entry.content_hash,
+                    language: entry.language,
+                    size_bytes: entry.size_bytes,
+                    line_count: entry.line_count,
                     mtime: entry.mtime_epoch_secs,
                 })
             })
-            .collect::<Result<Vec<InputFile>, IndexError>>()?;
+            .collect::<Result<Vec<CompactInputFile>, IndexError>>()?;
 
-        // Phase 3: Budget-batched segment writing (sequential).
-        let mut batch: Vec<InputFile> = Vec::new();
+        // Phase 3: Budget-batched parallel segment building.
+        let mut batches: Vec<Vec<CompactInputFile>> = Vec::new();
+        let mut batch: Vec<CompactInputFile> = Vec::new();
         let mut batch_bytes: usize = 0;
-        let mut new_segments: Vec<Arc<Segment>> = Vec::new();
 
-        for file in input_files {
-            let content_len = file.content.len();
-            batch.push(file);
+        for file in compact_files {
+            let content_len = file.size_bytes as usize;
             batch_bytes += content_len;
+            batch.push(file);
 
-            // Flush if over budget (0 means unlimited)
             if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
-                let seg_id = self.next_segment_id()?;
-                let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-                new_segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
+                batches.push(std::mem::take(&mut batch));
                 batch_bytes = 0;
             }
         }
-
-        // Flush remaining batch
         if !batch.is_empty() {
-            let seg_id = self.next_segment_id()?;
-            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-            new_segments.push(Arc::new(writer.build(batch)?));
+            batches.push(batch);
         }
+
+        // Pre-allocate segment IDs, then build all batches in parallel
+        let id_batches: Vec<(SegmentId, Vec<CompactInputFile>)> = batches
+            .into_iter()
+            .map(|b| self.next_segment_id().map(|id| (id, b)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let segments_dir = &self.segments_dir;
+        let results: Vec<Result<Arc<Segment>, IndexError>> = id_batches
+            .into_par_iter()
+            .map(|(seg_id, files)| {
+                let writer = SegmentWriter::new(segments_dir, seg_id);
+                writer.build_from_compact(files).map(Arc::new)
+            })
+            .collect();
+
+        let new_segments: Vec<Arc<Segment>> = results.into_iter().collect::<Result<Vec<_>, _>>()?;
 
         let old_dirs: Vec<PathBuf> = current_segments
             .iter()
@@ -2580,5 +2601,66 @@ mod tests {
         let expected_hash = blake3::hash(content);
         let expected_16: [u8; 16] = expected_hash.as_bytes()[..16].try_into().unwrap();
         assert_eq!(hashes["hello.rs"], expected_16);
+    }
+
+    #[test]
+    fn test_compact_with_budget_preserves_content_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Create several segments
+        for i in 0..4 {
+            manager
+                .index_files(vec![InputFile {
+                    path: format!("file_{i}.rs"),
+                    content: format!("fn func_{i}() {{ let result = compute({i}); }}").into_bytes(),
+                    mtime: 1000 + i as u64,
+                }])
+                .unwrap();
+        }
+
+        // Capture pre-compaction metadata
+        let pre_snap = manager.snapshot();
+        let mut pre_meta: Vec<(String, [u8; 16], u64, u32)> = Vec::new();
+        for seg in pre_snap.iter() {
+            let ts = seg.load_tombstones().unwrap();
+            let reader = seg.metadata_reader();
+            for entry in reader.iter_all() {
+                let entry = entry.unwrap();
+                if !ts.contains(entry.file_id) {
+                    pre_meta.push((
+                        entry.path.clone(),
+                        entry.content_hash,
+                        entry.mtime_epoch_secs,
+                        entry.line_count,
+                    ));
+                }
+            }
+        }
+        pre_meta.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Compact with small budget to produce multiple output segments
+        manager.compact_with_budget(1).unwrap();
+
+        // Capture post-compaction metadata
+        let post_snap = manager.snapshot();
+        let mut post_meta: Vec<(String, [u8; 16], u64, u32)> = Vec::new();
+        for seg in post_snap.iter() {
+            let reader = seg.metadata_reader();
+            for entry in reader.iter_all() {
+                let entry = entry.unwrap();
+                post_meta.push((
+                    entry.path.clone(),
+                    entry.content_hash,
+                    entry.mtime_epoch_secs,
+                    entry.line_count,
+                ));
+            }
+        }
+        post_meta.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Content hashes, mtimes, and line counts must be identical
+        assert_eq!(pre_meta, post_meta);
     }
 }
