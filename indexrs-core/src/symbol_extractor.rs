@@ -105,6 +105,58 @@ const GO_QUERY: &str = r#"
 (type_declaration
   (type_spec
     name: (type_identifier) @name) @definition.type)
+
+(source_file
+  (var_declaration
+    (var_spec
+      name: (identifier) @name) @definition.variable))
+
+(source_file
+  (var_declaration
+    (var_spec_list
+      (var_spec
+        name: (identifier) @name) @definition.variable)))
+
+(source_file
+  (const_declaration
+    (const_spec
+      name: (identifier) @name) @definition.constant))
+"#;
+
+/// Tree-sitter query for Ruby symbol definitions.
+const RUBY_QUERY: &str = r#"
+(method
+  name: (identifier) @name) @definition.function
+
+(singleton_method
+  name: (identifier) @name) @definition.method
+
+(class
+  name: (constant) @name) @definition.class
+
+(module
+  name: (constant) @name) @definition.module
+
+(assignment
+  left: (constant) @name) @definition.constant
+"#;
+
+/// Tree-sitter query for Java symbol definitions.
+const JAVA_QUERY: &str = r#"
+(method_declaration
+  name: (identifier) @name) @definition.method
+
+(class_declaration
+  name: (identifier) @name) @definition.class
+
+(interface_declaration
+  name: (identifier) @name) @definition.interface
+
+(enum_declaration
+  name: (identifier) @name) @definition.enum
+
+(constructor_declaration
+  name: (identifier) @name) @definition.function
 "#;
 
 /// Tree-sitter query for C symbol definitions.
@@ -135,6 +187,8 @@ fn compiled_queries() -> &'static HashMap<Language, tree_sitter::Query> {
             (Language::Go, GO_QUERY),
             (Language::C, C_QUERY),
             (Language::Cpp, C_QUERY),
+            (Language::Ruby, RUBY_QUERY),
+            (Language::Java, JAVA_QUERY),
         ];
         let mut map = HashMap::with_capacity(pairs.len());
         for &(lang, query_src) in pairs {
@@ -549,6 +603,130 @@ func (f *Foo) Bar() {}
         assert_eq!(bar.kind, SymbolKind::Method);
     }
 
+    #[test]
+    fn test_go_var_standalone() {
+        let src = r#"
+package main
+
+var Config = map[string]string{}
+var Version string
+"#;
+        let syms = extract(Language::Go, src);
+        let config = find_by_name(&syms, "Config").expect("should find Config");
+        assert_eq!(config.kind, SymbolKind::Variable);
+        let version = find_by_name(&syms, "Version").expect("should find Version");
+        assert_eq!(version.kind, SymbolKind::Variable);
+    }
+
+    #[test]
+    fn test_go_const_standalone() {
+        let src = r#"
+package main
+
+const MaxRetries = 3
+const DefaultTimeout = 30
+"#;
+        let syms = extract(Language::Go, src);
+        let max = find_by_name(&syms, "MaxRetries").expect("should find MaxRetries");
+        assert_eq!(max.kind, SymbolKind::Constant);
+        let timeout = find_by_name(&syms, "DefaultTimeout").expect("should find DefaultTimeout");
+        assert_eq!(timeout.kind, SymbolKind::Constant);
+    }
+
+    #[test]
+    fn test_go_var_block() {
+        let src = r#"
+package main
+
+var (
+    PascalCaseVar   = "hello"
+    SCREAMING_VAR   = "world"
+    camelCaseVar    = 42
+    DatabaseURL     = "postgres://localhost"
+)
+"#;
+        let syms = extract(Language::Go, src);
+        let pascal = find_by_name(&syms, "PascalCaseVar").expect("should find PascalCaseVar");
+        assert_eq!(pascal.kind, SymbolKind::Variable);
+        let screaming = find_by_name(&syms, "SCREAMING_VAR").expect("should find SCREAMING_VAR");
+        assert_eq!(screaming.kind, SymbolKind::Variable);
+        let camel = find_by_name(&syms, "camelCaseVar").expect("should find camelCaseVar");
+        assert_eq!(camel.kind, SymbolKind::Variable);
+        let db = find_by_name(&syms, "DatabaseURL").expect("should find DatabaseURL");
+        assert_eq!(db.kind, SymbolKind::Variable);
+    }
+
+    #[test]
+    fn test_go_const_block() {
+        let src = r#"
+package main
+
+const (
+    SAMPLE_RECORD_ALL_METHODS string = "all_methods"
+    MaxRetries                       = 3
+    DefaultTimeout                   = 30
+    API_VERSION                      = "v2"
+)
+"#;
+        let syms = extract(Language::Go, src);
+        let sample = find_by_name(&syms, "SAMPLE_RECORD_ALL_METHODS")
+            .expect("should find SAMPLE_RECORD_ALL_METHODS");
+        assert_eq!(sample.kind, SymbolKind::Constant);
+        let max = find_by_name(&syms, "MaxRetries").expect("should find MaxRetries");
+        assert_eq!(max.kind, SymbolKind::Constant);
+        let timeout = find_by_name(&syms, "DefaultTimeout").expect("should find DefaultTimeout");
+        assert_eq!(timeout.kind, SymbolKind::Constant);
+        let api = find_by_name(&syms, "API_VERSION").expect("should find API_VERSION");
+        assert_eq!(api.kind, SymbolKind::Constant);
+    }
+
+    #[test]
+    fn test_go_var_block_with_complex_values() {
+        // Modeled after real-world config.go patterns
+        let src = r#"
+package app
+
+var (
+    FullSyncCleanupHeartbeatTimeout = 30
+    OrangeItemsReplica0Url          = "http://localhost"
+    EnableNewFeatureFlag            = false
+)
+"#;
+        let syms = extract(Language::Go, src);
+        let timeout = find_by_name(&syms, "FullSyncCleanupHeartbeatTimeout")
+            .expect("should find FullSyncCleanupHeartbeatTimeout");
+        assert_eq!(timeout.kind, SymbolKind::Variable);
+        let url = find_by_name(&syms, "OrangeItemsReplica0Url")
+            .expect("should find OrangeItemsReplica0Url");
+        assert_eq!(url.kind, SymbolKind::Variable);
+        let flag =
+            find_by_name(&syms, "EnableNewFeatureFlag").expect("should find EnableNewFeatureFlag");
+        assert_eq!(flag.kind, SymbolKind::Variable);
+    }
+
+    #[test]
+    fn test_go_local_vars_not_indexed() {
+        let src = r#"
+package main
+
+func main() {
+    var localVar = "should not appear"
+    const localConst = 42
+}
+"#;
+        let syms = extract(Language::Go, src);
+        assert!(
+            find_by_name(&syms, "localVar").is_none(),
+            "local var should not be indexed"
+        );
+        assert!(
+            find_by_name(&syms, "localConst").is_none(),
+            "local const should not be indexed"
+        );
+        // The function itself should still be found
+        assert!(find_by_name(&syms, "main").is_some());
+    }
+
     // -----------------------------------------------------------------------
     // C
     // -----------------------------------------------------------------------
@@ -593,12 +771,178 @@ enum Color {
     }
 
     // -----------------------------------------------------------------------
+    // Ruby
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_ruby_methods() {
+        let src = r#"
+def greet(name)
+  puts "Hello, #{name}"
+end
+
+def add(a, b)
+  a + b
+end
+"#;
+        let syms = extract(Language::Ruby, src);
+        assert!(names(&syms).contains(&"greet"));
+        assert!(names(&syms).contains(&"add"));
+        assert!(syms.iter().all(|s| s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_ruby_classes() {
+        let src = r#"
+class Animal
+  def speak
+    nil
+  end
+end
+
+class Dog < Animal
+  def speak
+    "woof"
+  end
+end
+"#;
+        let syms = extract(Language::Ruby, src);
+        let animal = find_by_name(&syms, "Animal").expect("should find Animal");
+        assert_eq!(animal.kind, SymbolKind::Class);
+        let dog = find_by_name(&syms, "Dog").expect("should find Dog");
+        assert_eq!(dog.kind, SymbolKind::Class);
+        assert!(names(&syms).contains(&"speak"));
+    }
+
+    #[test]
+    fn test_ruby_modules() {
+        let src = r#"
+module Serializable
+  def serialize
+    to_s
+  end
+end
+"#;
+        let syms = extract(Language::Ruby, src);
+        let serializable = find_by_name(&syms, "Serializable").expect("should find Serializable");
+        assert_eq!(serializable.kind, SymbolKind::Module);
+    }
+
+    #[test]
+    fn test_ruby_singleton_methods() {
+        let src = r#"
+class Config
+  def self.load
+    new
+  end
+end
+"#;
+        let syms = extract(Language::Ruby, src);
+        let load = find_by_name(&syms, "load").expect("should find load");
+        assert_eq!(load.kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn test_ruby_constants() {
+        let src = r#"
+MAX_RETRIES = 3
+DEFAULT_HOST = "localhost"
+"#;
+        let syms = extract(Language::Ruby, src);
+        let max = find_by_name(&syms, "MAX_RETRIES").expect("should find MAX_RETRIES");
+        assert_eq!(max.kind, SymbolKind::Constant);
+        let host = find_by_name(&syms, "DEFAULT_HOST").expect("should find DEFAULT_HOST");
+        assert_eq!(host.kind, SymbolKind::Constant);
+    }
+
+    // -----------------------------------------------------------------------
+    // Java
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_java_classes() {
+        let src = r#"
+public class Animal {
+    public void speak() {}
+}
+"#;
+        let syms = extract(Language::Java, src);
+        let animal = find_by_name(&syms, "Animal").expect("should find Animal");
+        assert_eq!(animal.kind, SymbolKind::Class);
+    }
+
+    #[test]
+    fn test_java_methods() {
+        let src = r#"
+public class Calculator {
+    public int add(int a, int b) {
+        return a + b;
+    }
+
+    public int subtract(int a, int b) {
+        return a - b;
+    }
+}
+"#;
+        let syms = extract(Language::Java, src);
+        assert!(names(&syms).contains(&"add"));
+        assert!(names(&syms).contains(&"subtract"));
+        let add = find_by_name(&syms, "add").expect("should find add");
+        assert_eq!(add.kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn test_java_interfaces() {
+        let src = r#"
+public interface Shape {
+    double area();
+}
+"#;
+        let syms = extract(Language::Java, src);
+        let shape = find_by_name(&syms, "Shape").expect("should find Shape");
+        assert_eq!(shape.kind, SymbolKind::Interface);
+    }
+
+    #[test]
+    fn test_java_enums() {
+        let src = r#"
+public enum Direction {
+    NORTH, SOUTH, EAST, WEST
+}
+"#;
+        let syms = extract(Language::Java, src);
+        let dir = find_by_name(&syms, "Direction").expect("should find Direction");
+        assert_eq!(dir.kind, SymbolKind::Enum);
+    }
+
+    #[test]
+    fn test_java_constructors() {
+        let src = r#"
+public class Point {
+    private int x, y;
+    public Point(int x, int y) {
+        this.x = x;
+        this.y = y;
+    }
+}
+"#;
+        let syms = extract(Language::Java, src);
+        let point_syms: Vec<_> = syms.iter().filter(|s| s.name == "Point").collect();
+        assert!(
+            point_syms.len() >= 2,
+            "should find both class and constructor for Point"
+        );
+        assert!(point_syms.iter().any(|s| s.kind == SymbolKind::Class));
+        assert!(point_syms.iter().any(|s| s.kind == SymbolKind::Function));
+    }
+
+    // -----------------------------------------------------------------------
     // Edge cases
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_unsupported_language_returns_empty() {
-        let syms = extract(Language::Ruby, "def foo; end");
+        let syms = extract(Language::Haskell, "main = putStrLn \"hello\"");
         assert!(syms.is_empty());
     }
 
@@ -702,13 +1046,13 @@ struct Good { x: i32 }
         assert!(cache.contains_key(&Language::Go));
         assert!(cache.contains_key(&Language::C));
         assert!(cache.contains_key(&Language::Cpp));
+        assert!(cache.contains_key(&Language::Ruby));
+        assert!(cache.contains_key(&Language::Java));
     }
 
     #[test]
     fn test_compiled_queries_unsupported() {
         let cache = compiled_queries();
-        assert!(!cache.contains_key(&Language::Ruby));
-        assert!(!cache.contains_key(&Language::Java));
         assert!(!cache.contains_key(&Language::Unknown));
     }
 

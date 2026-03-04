@@ -21,6 +21,8 @@ use crate::types::Language;
 /// | Go                | `tree-sitter-go`          |
 /// | C                 | `tree-sitter-c`           |
 /// | Cpp               | `tree-sitter-c`           |
+/// | Ruby              | `tree-sitter-ruby`        |
+/// | Java              | `tree-sitter-java`        |
 ///
 /// JavaScript reuses the TypeScript grammar (TSX), and C++ reuses the C grammar.
 pub fn tree_sitter_language(lang: Language) -> Option<tree_sitter::Language> {
@@ -31,6 +33,8 @@ pub fn tree_sitter_language(lang: Language) -> Option<tree_sitter::Language> {
         Language::JavaScript => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
         Language::C | Language::Cpp => Some(tree_sitter_c::LANGUAGE.into()),
+        Language::Ruby => Some(tree_sitter_ruby::LANGUAGE.into()),
+        Language::Java => Some(tree_sitter_java::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -91,9 +95,19 @@ mod tests {
     }
 
     #[test]
+    fn test_ruby_grammar_loads() {
+        let lang = tree_sitter_language(Language::Ruby).expect("Ruby should be supported");
+        assert!(lang.node_kind_count() > 0);
+    }
+
+    #[test]
+    fn test_java_grammar_loads() {
+        let lang = tree_sitter_language(Language::Java).expect("Java should be supported");
+        assert!(lang.node_kind_count() > 0);
+    }
+
+    #[test]
     fn test_unsupported_language_returns_none() {
-        assert!(tree_sitter_language(Language::Ruby).is_none());
-        assert!(tree_sitter_language(Language::Java).is_none());
         assert!(tree_sitter_language(Language::Shell).is_none());
         assert!(tree_sitter_language(Language::Markdown).is_none());
         assert!(tree_sitter_language(Language::Unknown).is_none());
@@ -108,12 +122,12 @@ mod tests {
         assert!(supports_symbols(Language::Go));
         assert!(supports_symbols(Language::C));
         assert!(supports_symbols(Language::Cpp));
+        assert!(supports_symbols(Language::Ruby));
+        assert!(supports_symbols(Language::Java));
     }
 
     #[test]
     fn test_supports_symbols_false() {
-        assert!(!supports_symbols(Language::Ruby));
-        assert!(!supports_symbols(Language::Java));
         assert!(!supports_symbols(Language::Haskell));
         assert!(!supports_symbols(Language::Unknown));
     }
