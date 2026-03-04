@@ -208,4 +208,28 @@
             setSearchMode(btn.dataset.mode);
         }
     });
+
+    // Outline panel toggle
+    var outlineToggle = document.getElementById("outline-toggle");
+    if (outlineToggle) {
+        outlineToggle.addEventListener("click", function() {
+            var panel = document.getElementById("outline-panel");
+            if (panel) panel.classList.toggle("hidden");
+        });
+    }
+
+    // Outline click-to-scroll
+    document.addEventListener("click", function(e) {
+        var item = e.target.closest(".outline-item");
+        if (!item) return;
+        e.preventDefault();
+        var line = item.getAttribute("data-line");
+        var target = document.getElementById("L" + line);
+        if (target) {
+            target.scrollIntoView({ block: "center", behavior: "smooth" });
+            // Flash highlight
+            target.classList.add("code-line--highlight");
+            setTimeout(function() { target.classList.remove("code-line--highlight"); }, 1500);
+        }
+    });
 })();

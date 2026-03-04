@@ -155,10 +155,23 @@ struct ReposTemplate {
 #[derive(Template)]
 #[template(path = "file_preview.html")]
 struct FilePreviewTemplate {
+    repo: String,
     path: String,
     language: String,
     total_lines: usize,
     lines: Vec<(usize, String)>,
+}
+
+#[derive(Template)]
+#[template(path = "symbol_outline.html")]
+struct SymbolOutlineTemplate {
+    symbols: Vec<SymbolItem>,
+}
+
+#[derive(Deserialize)]
+pub struct OutlineParams {
+    repo: String,
+    path: String,
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -493,6 +506,7 @@ pub async fn file_preview(
                 .collect();
 
             render_template(FilePreviewTemplate {
+                repo: repo.clone(),
                 path: file_resp.path,
                 language: file_resp.language,
                 total_lines: file_resp.total_lines,
@@ -775,4 +789,54 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
 
     let repo_count = repos.len();
     render_template(ReposTemplate { repos, repo_count })
+}
+
+/// GET /symbol-outline?repo=...&path=...
+pub async fn symbol_outline_fragment(
+    State(state): State<AppState>,
+    Query(params): Query<OutlineParams>,
+) -> Response {
+    let repos_map = state.repos().await;
+    let repo_path = match repos_map.get(&params.repo) {
+        Some(p) => p.clone(),
+        None => return render_template(SymbolOutlineTemplate { symbols: vec![] }),
+    };
+
+    let stream = match indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path).await {
+        Ok(s) => s,
+        Err(_) => return render_template(SymbolOutlineTemplate { symbols: vec![] }),
+    };
+
+    // Empty query + path_filter = return all symbols in file
+    let request = indexrs_daemon::types::DaemonRequest::JsonSymbols {
+        query: None,
+        kind: None,
+        language: None,
+        path_filter: Some(params.path),
+        max_results: Some(500),
+        offset: None,
+    };
+
+    match indexrs_daemon::send_json_request(stream, &request).await {
+        Ok(result) => {
+            let mut symbols: Vec<SymbolItem> = Vec::new();
+            for payload in &result.payloads {
+                if let Ok(indexrs_daemon::JsonSymbolsFrame::Symbol(m)) =
+                    serde_json::from_str(payload)
+                {
+                    symbols.push(SymbolItem {
+                        name: m.name,
+                        kind: m.kind,
+                        path: m.path,
+                        line: m.line,
+                        score: m.score,
+                    });
+                }
+            }
+            // Sort by line number for outline view
+            symbols.sort_by_key(|s| s.line);
+            render_template(SymbolOutlineTemplate { symbols })
+        }
+        Err(_) => render_template(SymbolOutlineTemplate { symbols: vec![] }),
+    }
 }

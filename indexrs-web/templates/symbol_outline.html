@@ -1,0 +1,17 @@
+{% if !symbols.is_empty() %}
+<div class="outline-header">
+    <span class="outline-title">Symbols</span>
+    <span class="outline-count">{{ symbols.len() }}</span>
+</div>
+<div class="outline-list">
+{% for sym in &symbols %}
+    <a href="#L{{ sym.line }}" class="outline-item" data-line="{{ sym.line }}">
+        <span class="symbol-kind symbol-kind--{{ sym.kind }}">{{ sym.kind }}</span>
+        <span class="outline-name">{{ sym.name }}</span>
+        <span class="outline-line">{{ sym.line }}</span>
+    </a>
+{% endfor %}
+</div>
+{% else %}
+<div class="outline-empty">No symbols found</div>
+{% endif %}

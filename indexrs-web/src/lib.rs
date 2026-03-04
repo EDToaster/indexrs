@@ -106,6 +106,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/repo-status", get(ui::repo_status))
         .route("/repos", get(ui::repos_page))
         .route("/file/{repo}/{*path}", get(ui::file_preview))
+        .route("/symbol-outline", get(ui::symbol_outline_fragment))
         .route("/static/{*path}", get(static_files::static_handler))
         .nest("/api/v1", api)
         .with_state(state)

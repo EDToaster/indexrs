@@ -1119,3 +1119,138 @@ mark {
     max-width: 50%;
     text-align: right;
 }
+
+/* File preview layout with outline */
+.file-preview-layout {
+    display: flex;
+    min-height: calc(100vh - 120px);
+}
+
+.outline-panel {
+    width: 240px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg-secondary);
+    overflow-y: auto;
+    max-height: calc(100vh - 120px);
+    position: sticky;
+    top: 0;
+}
+
+.outline-panel.hidden {
+    display: none;
+}
+
+.file-preview-layout .code-lines {
+    flex: 1;
+    min-width: 0;
+}
+
+.outline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.outline-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+}
+
+.outline-count {
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 0.05rem 0.35rem;
+    border-radius: 999px;
+    background: var(--accent-glow);
+    color: var(--accent);
+    border: 1px solid rgba(13, 148, 136, 0.15);
+    font-variant-numeric: tabular-nums;
+}
+
+.outline-list {
+    padding: 0.25rem 0;
+}
+
+.outline-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.7rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--fg);
+    text-decoration: none;
+    transition: background var(--transition);
+    cursor: pointer;
+}
+
+.outline-item:hover {
+    background: var(--selection-bg);
+    color: var(--fg);
+}
+
+.outline-item .symbol-kind {
+    font-size: 0.62rem;
+    min-width: 2.8em;
+    padding: 0.05rem 0.25rem;
+}
+
+.outline-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.outline-line {
+    font-size: 0.68rem;
+    color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.outline-empty {
+    padding: 1rem 0.7rem;
+    font-size: 0.78rem;
+    color: var(--fg-muted);
+    text-align: center;
+}
+
+.outline-loading {
+    padding: 1rem;
+    text-align: center;
+}
+
+.outline-toggle {
+    margin-left: 0.75rem;
+    padding: 0.15rem 0.45rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    background: var(--bg);
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all var(--transition);
+    font-family: var(--font-sans);
+}
+
+.outline-toggle:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.code-line--highlight {
+    background: var(--match-bg);
+    transition: background 0.3s ease;
+}
