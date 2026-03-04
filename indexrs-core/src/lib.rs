@@ -31,6 +31,8 @@ pub mod segment;
 pub mod segment_manager;
 #[cfg(feature = "symbols")]
 pub mod symbol_extractor;
+#[cfg(feature = "symbols")]
+pub mod symbol_index;
 pub mod tombstone;
 pub mod trigram;
 pub mod types;
