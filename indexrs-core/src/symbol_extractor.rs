@@ -4,6 +4,9 @@
 //! classes, traits, enums, etc.) and returns them as [`SymbolEntry`] values.
 //! This module is gated behind the `symbols` cargo feature.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use streaming_iterator::StreamingIterator;
 
 use crate::grammar::tree_sitter_language;
@@ -119,23 +122,34 @@ const C_QUERY: &str = r#"
   declarator: (type_identifier) @name) @definition.type
 "#;
 
+/// Global cache of compiled tree-sitter queries, keyed by language.
+fn compiled_queries() -> &'static HashMap<Language, tree_sitter::Query> {
+    static CACHE: OnceLock<HashMap<Language, tree_sitter::Query>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let pairs: &[(Language, &str)] = &[
+            (Language::Rust, RUST_QUERY),
+            (Language::Python, PYTHON_QUERY),
+            (Language::TypeScript, TYPESCRIPT_QUERY),
+            (Language::JavaScript, TYPESCRIPT_QUERY),
+            (Language::Go, GO_QUERY),
+            (Language::C, C_QUERY),
+            (Language::Cpp, C_QUERY),
+        ];
+        let mut map = HashMap::with_capacity(pairs.len());
+        for &(lang, query_src) in pairs {
+            if let Some(ts_lang) = tree_sitter_language(lang)
+                && let Ok(q) = tree_sitter::Query::new(&ts_lang, query_src)
+            {
+                map.insert(lang, q);
+            }
+        }
+        map
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-
-/// Returns the tree-sitter query pattern for the given language, or `None` if
-/// the language is not supported for symbol extraction.
-fn query_for_language(lang: Language) -> Option<&'static str> {
-    match lang {
-        Language::Rust => Some(RUST_QUERY),
-        Language::Python => Some(PYTHON_QUERY),
-        Language::TypeScript => Some(TYPESCRIPT_QUERY),
-        Language::JavaScript => Some(TYPESCRIPT_QUERY),
-        Language::Go => Some(GO_QUERY),
-        Language::C | Language::Cpp => Some(C_QUERY),
-        _ => None,
-    }
-}
 
 /// Maps a tree-sitter capture name suffix (e.g. `"definition.function"`) to
 /// the corresponding [`SymbolKind`].
@@ -170,13 +184,13 @@ pub fn extract_symbols(file_id: FileId, content: &[u8], language: Language) -> V
         return Vec::new();
     }
 
-    let ts_lang = match tree_sitter_language(language) {
-        Some(l) => l,
+    let query = match compiled_queries().get(&language) {
+        Some(q) => q,
         None => return Vec::new(),
     };
 
-    let query_source = match query_for_language(language) {
-        Some(q) => q,
+    let ts_lang = match tree_sitter_language(language) {
+        Some(l) => l,
         None => return Vec::new(),
     };
 
@@ -191,21 +205,9 @@ pub fn extract_symbols(file_id: FileId, content: &[u8], language: Language) -> V
         None => return Vec::new(),
     };
 
-    let query = match tree_sitter::Query::new(&ts_lang, query_source) {
-        Ok(q) => q,
-        Err(e) => {
-            tracing::warn!(
-                "failed to compile tree-sitter query for {:?}: {}",
-                language,
-                e
-            );
-            return Vec::new();
-        }
-    };
-
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut symbols = Vec::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), content);
+    let mut matches = cursor.matches(query, tree.root_node(), content);
 
     while let Some(match_) = {
         matches.advance();
@@ -670,24 +672,39 @@ struct Good { x: i32 }
     }
 
     // -----------------------------------------------------------------------
-    // query_for_language tests
+    // compiled_queries cache tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_query_for_language_supported() {
-        assert!(query_for_language(Language::Rust).is_some());
-        assert!(query_for_language(Language::Python).is_some());
-        assert!(query_for_language(Language::TypeScript).is_some());
-        assert!(query_for_language(Language::JavaScript).is_some());
-        assert!(query_for_language(Language::Go).is_some());
-        assert!(query_for_language(Language::C).is_some());
-        assert!(query_for_language(Language::Cpp).is_some());
+    fn test_compiled_queries_supported() {
+        let cache = compiled_queries();
+        assert!(cache.contains_key(&Language::Rust));
+        assert!(cache.contains_key(&Language::Python));
+        assert!(cache.contains_key(&Language::TypeScript));
+        assert!(cache.contains_key(&Language::JavaScript));
+        assert!(cache.contains_key(&Language::Go));
+        assert!(cache.contains_key(&Language::C));
+        assert!(cache.contains_key(&Language::Cpp));
     }
 
     #[test]
-    fn test_query_for_language_unsupported() {
-        assert!(query_for_language(Language::Ruby).is_none());
-        assert!(query_for_language(Language::Java).is_none());
-        assert!(query_for_language(Language::Unknown).is_none());
+    fn test_compiled_queries_unsupported() {
+        let cache = compiled_queries();
+        assert!(!cache.contains_key(&Language::Ruby));
+        assert!(!cache.contains_key(&Language::Java));
+        assert!(!cache.contains_key(&Language::Unknown));
+    }
+
+    #[test]
+    fn test_cached_queries_return_same_results() {
+        let src = b"fn alpha() {}\nstruct Beta {}\nenum Gamma { A, B }\n";
+        let first = extract_symbols(FileId(0), src, Language::Rust);
+        let second = extract_symbols(FileId(1), src, Language::Rust);
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.iter().zip(second.iter()) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.line, b.line);
+        }
     }
 }
