@@ -204,11 +204,60 @@ impl ProgressRenderer {
                 sp.enable_steady_tick(std::time::Duration::from_millis(80));
                 self.spinner = Some(sp);
             }
-            ReindexProgress::CompactingCollected { .. }
-            | ReindexProgress::CompactingFiles { .. }
-            | ReindexProgress::CompactingWriting { .. }
-            | ReindexProgress::CompactionComplete { .. } => {
-                // TODO(task-4): render detailed compaction progress
+            ReindexProgress::CompactingCollected {
+                live_files,
+                tombstoned,
+            } => {
+                if tombstoned > 0 {
+                    eprintln!("Compacting {live_files} live files ({tombstoned} tombstoned)");
+                } else {
+                    eprintln!("Compacting {live_files} files");
+                }
+                // Set up progress bar for decompression + writing.
+                if let Some(sp) = self.spinner.take() {
+                    sp.finish_and_clear();
+                }
+                let bar = ProgressBar::new(live_files as u64);
+                bar.set_style(
+                    ProgressStyle::with_template(
+                        "Compacting [{bar:30.yellow/dim}] {pos}/{len} files  {msg}",
+                    )
+                    .unwrap()
+                    .progress_chars("##-"),
+                );
+                bar.set_message("decompressing...");
+                self.bar = Some(bar);
+            }
+            ReindexProgress::CompactingFiles { current, total } => {
+                if let Some(bar) = &self.bar {
+                    bar.set_length(total as u64);
+                    bar.set_position(current as u64);
+                    bar.set_message("decompressing...");
+                }
+            }
+            ReindexProgress::CompactingWriting {
+                segment_id,
+                files_done,
+                files_total,
+            } => {
+                if let Some(bar) = &self.bar {
+                    bar.set_length(files_total as u64);
+                    bar.set_position(files_done as u64);
+                    bar.set_message(format!("writing seg_{segment_id:04}"));
+                }
+            }
+            ReindexProgress::CompactionComplete {
+                input_segments,
+                output_segments,
+                duration_ms,
+            } => {
+                if let Some(bar) = self.bar.take() {
+                    bar.finish_and_clear();
+                }
+                let secs = duration_ms as f64 / 1000.0;
+                eprintln!(
+                    "Compaction complete: {input_segments} segments \u{2192} {output_segments} in {secs:.1}s"
+                );
             }
             ReindexProgress::Complete { .. } => {
                 self.finish();
