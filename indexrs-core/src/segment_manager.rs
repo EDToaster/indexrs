@@ -20,10 +20,10 @@ use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 
 use crate::changes::ChangeEvent;
-use crate::reindex_progress::ReindexProgress;
 use crate::error::IndexError;
 use crate::index_state::{IndexState, SegmentList};
 use crate::metadata::FileMetadata;
+use crate::reindex_progress::ReindexProgress;
 use crate::segment::{InputFile, Segment, SegmentWriter};
 use crate::tombstone::{self, TombstoneSet};
 use crate::types::{FileId, SegmentId};
