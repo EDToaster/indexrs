@@ -56,7 +56,7 @@
     }
 
     function navigatePage(direction) {
-        var links = document.querySelectorAll(".pagination a");
+        var links = document.querySelectorAll(".pagination button");
         for (var i = 0; i < links.length; i++) {
             var text = links[i].textContent.trim().toLowerCase();
             if (direction === "next" && (text === "next" || text.indexOf("next") !== -1)) {
@@ -215,18 +215,6 @@
         }
     });
 
-    // Update status badge when repo changes
-    var repoSelect = document.getElementById("repo-select");
-    if (repoSelect) {
-        repoSelect.addEventListener("change", function() {
-            var badge = document.getElementById("repo-status");
-            if (!badge) return;
-            fetch("/repo-status?repo-select=" + encodeURIComponent(repoSelect.value))
-                .then(function(r) { return r.text(); })
-                .then(function(text) { badge.textContent = text; });
-        });
-    }
-
     // Theme toggle (light <-> dark)
     var themeToggle = document.getElementById("theme-toggle");
     if (themeToggle) {
@@ -252,34 +240,15 @@
         }
     });
 
-    // Auto-focus search on page load
-    document.addEventListener("DOMContentLoaded", function() {
-        focusSearch();
-    });
-
     // Search mode toggle (text vs symbols)
-    var currentMode = "text";
-
-    function searchUrl() {
-        return currentMode === "symbol" ? "/symbol-results" : "/search-results";
-    }
-
-    // Override the request URL based on current search mode
-    document.addEventListener("htmx:configRequest", function(e) {
-        var elt = e.detail.elt;
-        if (elt.classList.contains("search-input") || elt.id === "repo-select") {
-            e.detail.path = searchUrl();
-        }
-    });
-
     function setSearchMode(mode) {
-        currentMode = mode;
         var textBtn = document.getElementById("mode-text");
         var symBtn = document.getElementById("mode-symbol");
         var input = document.querySelector(".search-input");
-        var repoSelect = document.getElementById("repo-select");
-        if (!textBtn || !symBtn || !input) return;
+        var modeInput = document.getElementById("search-mode");
+        if (!textBtn || !symBtn || !input || !modeInput) return;
 
+        modeInput.value = mode;
         textBtn.classList.toggle("mode-btn--active", mode === "text");
         symBtn.classList.toggle("mode-btn--active", mode === "symbol");
 
@@ -287,11 +256,9 @@
             ? "Search symbols... (functions, structs, classes)"
             : "Search code... (press / to focus, ? for help)");
 
-        // Re-search with the new endpoint
-        if (input.value && window.htmx) {
-            var params = "q=" + encodeURIComponent(input.value);
-            if (repoSelect) params += "&repo-select=" + encodeURIComponent(repoSelect.value);
-            htmx.ajax("GET", searchUrl() + "?" + params, {target: "#results"});
+        // Re-trigger search with current value
+        if (input.value) {
+            htmx.trigger(input, "search");
         }
     }
 

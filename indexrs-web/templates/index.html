@@ -15,7 +15,7 @@
         {% if !repos.is_empty() %}
         <select name="repo-select" id="repo-select" class="repo-select"
                 hx-get="/search-results" hx-trigger="change"
-                hx-target="#results" hx-include=".search-input">
+                hx-target="#results" hx-include=".search-input, #search-mode">
             {% for repo in &repos %}
             <option value="{{ repo.name }}"{% if repo.name == selected_repo %} selected{% endif %}>{{ repo.name }}</option>
             {% endfor %}
@@ -26,7 +26,9 @@
             <span class="theme-icon-sun" aria-hidden="true">&#9788;</span>
             <span class="theme-icon-moon" aria-hidden="true">&#9790;</span>
         </button>
-        <span class="badge badge--ok" id="repo-status">{{ status }}</span>
+        <span class="badge badge--ok" id="repo-status"
+              hx-get="/repo-status" hx-trigger="change from:#repo-select"
+              hx-include="#repo-select">{{ status }}</span>
         <a href="/repos" class="badge badge--link">{{ repo_count }} repo{% if repo_count != 1 %}s{% endif %} &#8250;</a>
     </header>
 
@@ -35,13 +37,14 @@
             <button type="button" class="mode-btn mode-btn--active" id="mode-text" data-mode="text">Code</button>
             <button type="button" class="mode-btn" id="mode-symbol" data-mode="symbol">Symbols</button>
         </div>
+        <input type="hidden" name="mode" id="search-mode" value="text">
         <input type="search" name="q" class="search-input"
                placeholder="Search code... (press / to focus, ? for help)"
                autocomplete="off" autofocus
                hx-get="/search-results"
                hx-trigger="keyup changed delay:150ms, search"
                hx-target="#results"
-               hx-include="#repo-select"
+               hx-include="#repo-select, #search-mode"
                hx-indicator="#search-spinner">
     </div>
 

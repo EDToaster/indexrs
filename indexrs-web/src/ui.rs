@@ -229,6 +229,7 @@ pub struct SearchParams {
     #[serde(rename = "repo-select")]
     repo_select: Option<String>,
     page: Option<usize>,
+    mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -422,11 +423,20 @@ pub async fn repo_status(
     Html(status).into_response()
 }
 
-/// GET /search-results?q=...&repo-select=...&page=1
+/// GET /search-results?q=...&repo-select=...&page=1&mode=text|symbol
 pub async fn search_results_fragment(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
 ) -> Response {
+    if params.mode.as_deref() == Some("symbol") {
+        let sym_params = SymbolSearchParams {
+            q: params.q,
+            repo_select: params.repo_select,
+            kind: None,
+        };
+        return symbol_results_fragment(State(state), Query(sym_params)).await;
+    }
+
     let query = params.q.unwrap_or_default();
     let repo = params.repo_select.unwrap_or_default();
     let page = params.page.unwrap_or(1).max(1);
