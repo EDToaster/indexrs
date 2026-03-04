@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 
 use crate::changes::ChangeEvent;
+use crate::reindex_progress::ReindexProgress;
 use crate::error::IndexError;
 use crate::index_state::{IndexState, SegmentList};
 use crate::metadata::FileMetadata;
@@ -39,7 +40,7 @@ const DEFAULT_MAX_TOMBSTONE_RATIO: f32 = 0.30;
 /// overhead for posting lists (~2x content size for positional postings, much
 /// less for file-level postings). A 256 MB budget keeps total compaction RAM
 /// under ~1 GB on typical codebases.
-const DEFAULT_COMPACTION_BUDGET: usize = 256 * 1024 * 1024;
+pub(crate) const DEFAULT_COMPACTION_BUDGET: usize = 256 * 1024 * 1024;
 
 /// Segment lifecycle manager.
 ///
@@ -1028,6 +1029,152 @@ impl SegmentManager {
             input_segments = old_dirs.len(),
             output_segments = output_segment_count,
             elapsed_ms = start.elapsed().as_millis() as u64,
+            "compaction complete"
+        );
+        Ok(())
+    }
+
+    /// Like [`compact_with_budget`], but calls `on_progress` with
+    /// [`ReindexProgress`] events at each phase.
+    pub fn compact_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
+        &self,
+        max_segment_bytes: usize,
+        on_progress: &F,
+    ) -> Result<(), IndexError> {
+        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
+
+        if current_segments.is_empty() {
+            tracing::debug!("compaction skipped: no segments");
+            return Ok(());
+        }
+
+        if current_segments.len() == 1 {
+            let ts = current_segments[0].load_tombstones()?;
+            if ts.is_empty() {
+                tracing::debug!("compaction skipped: single segment with no tombstones");
+                return Ok(());
+            }
+        }
+
+        tracing::info!(
+            input_segments = current_segments.len(),
+            max_segment_bytes,
+            "compaction starting"
+        );
+        let start = std::time::Instant::now();
+
+        // Phase 1: Collect live entries.
+        let mut live_entries: Vec<(usize, FileMetadata)> = Vec::new();
+        let mut tombstoned_count: usize = 0;
+        for (seg_idx, segment) in current_segments.iter().enumerate() {
+            let tombstones = segment.load_tombstones()?;
+            let reader = segment.metadata_reader();
+            for entry_result in reader.iter_all() {
+                let entry: FileMetadata = entry_result?;
+                if tombstones.contains(entry.file_id) {
+                    tombstoned_count += 1;
+                } else {
+                    live_entries.push((seg_idx, entry));
+                }
+            }
+        }
+        on_progress(ReindexProgress::CompactingCollected {
+            live_files: live_entries.len(),
+            tombstoned: tombstoned_count,
+        });
+
+        // Phase 2: Decompress content in parallel with progress.
+        let total_files = live_entries.len();
+        let files_done = AtomicUsize::new(0);
+        let input_files: Vec<InputFile> = live_entries
+            .par_iter()
+            .map(|(seg_idx, entry)| {
+                let segment = &current_segments[*seg_idx];
+                let content = segment
+                    .content_reader()
+                    .read_content(entry.content_offset, entry.content_len)?;
+                let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
+                // Emit progress every 50 files or on the last file.
+                if done.is_multiple_of(50) || done == total_files {
+                    on_progress(ReindexProgress::CompactingFiles {
+                        current: done,
+                        total: total_files,
+                    });
+                }
+                Ok(InputFile {
+                    path: entry.path.clone(),
+                    content,
+                    mtime: entry.mtime_epoch_secs,
+                })
+            })
+            .collect::<Result<Vec<InputFile>, IndexError>>()?;
+
+        // Phase 3: Budget-batched segment writing.
+        let mut batch: Vec<InputFile> = Vec::new();
+        let mut batch_bytes: usize = 0;
+        let mut new_segments: Vec<Arc<Segment>> = Vec::new();
+        let mut written_files: usize = 0;
+
+        for file in input_files {
+            let content_len = file.content.len();
+            batch.push(file);
+            batch_bytes += content_len;
+
+            if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
+                let batch_len = batch.len();
+                let seg_id = self.next_segment_id()?;
+                let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+                new_segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
+                written_files += batch_len;
+                on_progress(ReindexProgress::CompactingWriting {
+                    segment_id: seg_id.0,
+                    files_done: written_files,
+                    files_total: total_files,
+                });
+                batch_bytes = 0;
+            }
+        }
+
+        if !batch.is_empty() {
+            let batch_len = batch.len();
+            let seg_id = self.next_segment_id()?;
+            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
+            new_segments.push(Arc::new(writer.build(batch)?));
+            written_files += batch_len;
+            on_progress(ReindexProgress::CompactingWriting {
+                segment_id: seg_id.0,
+                files_done: written_files,
+                files_total: total_files,
+            });
+        }
+
+        let old_dirs: Vec<PathBuf> = current_segments
+            .iter()
+            .map(|s| s.dir_path().to_path_buf())
+            .collect();
+
+        let input_segment_count = old_dirs.len();
+        let output_segment_count = new_segments.len();
+        self.state.publish(new_segments);
+
+        for old_dir in &old_dirs {
+            if let Err(e) = fs::remove_dir_all(old_dir) {
+                tracing::warn!(path = %old_dir.display(), error = %e, "failed to remove old segment directory");
+            }
+        }
+
+        let elapsed = start.elapsed();
+        on_progress(ReindexProgress::CompactionComplete {
+            input_segments: input_segment_count,
+            output_segments: output_segment_count,
+            duration_ms: elapsed.as_millis() as u64,
+        });
+
+        tracing::info!(
+            input_segments = input_segment_count,
+            output_segments = output_segment_count,
+            elapsed_ms = elapsed.as_millis() as u64,
             "compaction complete"
         );
         Ok(())
