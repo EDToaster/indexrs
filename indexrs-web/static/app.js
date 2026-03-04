@@ -70,7 +70,77 @@
         }
     }
 
+    // Quick-open modal (Go to Symbol)
+    var quickopenSelectedIndex = -1;
+
+    function openQuickOpen() {
+        var overlay = document.getElementById("quickopen-overlay");
+        if (!overlay) return;
+        overlay.classList.add("visible");
+        var input = document.getElementById("quickopen-input");
+        if (input) {
+            input.value = "";
+            input.focus();
+        }
+        quickopenSelectedIndex = -1;
+    }
+
+    function closeQuickOpen() {
+        var overlay = document.getElementById("quickopen-overlay");
+        if (overlay) overlay.classList.remove("visible");
+        quickopenSelectedIndex = -1;
+    }
+
+    function getQuickOpenResults() {
+        return document.querySelectorAll("#quickopen-results .symbol-result");
+    }
+
+    function selectQuickOpenResult(index) {
+        var results = getQuickOpenResults();
+        if (results.length === 0) return;
+        results.forEach(function(el) { el.classList.remove("selected"); });
+        quickopenSelectedIndex = Math.max(0, Math.min(index, results.length - 1));
+        var el = results[quickopenSelectedIndex];
+        el.classList.add("selected");
+        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+
+    function openQuickOpenSelected() {
+        var results = getQuickOpenResults();
+        if (quickopenSelectedIndex < 0 || quickopenSelectedIndex >= results.length) return;
+        var link = results[quickopenSelectedIndex].querySelector("a");
+        if (link && link.href) {
+            window.location.href = link.href;
+        }
+    }
+
     document.addEventListener("keydown", function(e) {
+        // Quick-open keyboard handling
+        var quickopen = document.getElementById("quickopen-overlay");
+        if (quickopen && quickopen.classList.contains("visible")) {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                closeQuickOpen();
+                return;
+            }
+            if (e.key === "ArrowDown" || (e.key === "j" && e.ctrlKey)) {
+                e.preventDefault();
+                selectQuickOpenResult(quickopenSelectedIndex + 1);
+                return;
+            }
+            if (e.key === "ArrowUp" || (e.key === "k" && e.ctrlKey)) {
+                e.preventDefault();
+                selectQuickOpenResult(quickopenSelectedIndex - 1);
+                return;
+            }
+            if (e.key === "Enter") {
+                e.preventDefault();
+                openQuickOpenSelected();
+                return;
+            }
+            return; // Let all other keys pass to the quickopen input
+        }
+
         // Close help overlay on any key if visible
         var overlay = document.querySelector(".help-overlay");
         if (overlay && overlay.classList.contains("visible") && e.key !== "?") {
@@ -130,12 +200,19 @@
                 e.preventDefault();
                 toggleHelp();
                 break;
+            case "@":
+                e.preventDefault();
+                openQuickOpen();
+                break;
         }
     });
 
     // Reset selection when htmx swaps in new content
-    document.addEventListener("htmx:afterSwap", function() {
+    document.addEventListener("htmx:afterSwap", function(e) {
         clearSelection();
+        if (e.target && e.target.id === "quickopen-results") {
+            quickopenSelectedIndex = -1;
+        }
     });
 
     // Update status badge when repo changes
@@ -166,6 +243,13 @@
         if (!toggle) return;
         var target = document.getElementById(toggle.getAttribute("data-toggle"));
         if (target) target.style.display = target.style.display === "none" ? "" : "none";
+    });
+
+    // Close quick-open on backdrop click
+    document.addEventListener("click", function(e) {
+        if (e.target.id === "quickopen-overlay") {
+            closeQuickOpen();
+        }
     });
 
     // Auto-focus search on page load

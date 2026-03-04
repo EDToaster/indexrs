@@ -68,6 +68,19 @@
         </div>
     </div>
 
+    <div class="quickopen-overlay" id="quickopen-overlay">
+        <div class="quickopen-modal">
+            <input type="text" class="quickopen-input" id="quickopen-input"
+                   placeholder="Go to symbol..."
+                   autocomplete="off"
+                   hx-get="/symbol-results"
+                   hx-trigger="keyup changed delay:100ms"
+                   hx-target="#quickopen-results"
+                   hx-include="#repo-select">
+            <div id="quickopen-results" class="quickopen-results"></div>
+        </div>
+    </div>
+
     <script src="/static/htmx.min.js"></script>
     <script src="/static/app.js"></script>
 </body>
