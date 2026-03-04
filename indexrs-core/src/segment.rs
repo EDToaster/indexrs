@@ -40,6 +40,33 @@ pub struct InputFile {
     pub mtime: u64,
 }
 
+/// A pre-processed file for compaction, carrying both raw content (for trigram
+/// extraction) and pre-compressed bytes (to avoid re-compressing).
+///
+/// Used by [`SegmentWriter::build_from_compact`] to skip the blake3 hash,
+/// zstd compress, language detection, and line counting that
+/// [`SegmentWriter::build`] performs — all of which are redundant when
+/// merging existing segments whose metadata is already known.
+#[derive(Debug, Clone)]
+pub struct CompactInputFile {
+    /// Relative path from the repository root.
+    pub path: String,
+    /// Raw (decompressed) file content — needed for trigram extraction.
+    pub raw_content: Vec<u8>,
+    /// Pre-compressed zstd bytes from the source segment's content store.
+    pub compressed: Vec<u8>,
+    /// Blake3 content hash (truncated to 16 bytes) from source metadata.
+    pub content_hash: [u8; 16],
+    /// Detected language from source metadata.
+    pub language: Language,
+    /// Original uncompressed size from source metadata.
+    pub size_bytes: u32,
+    /// Line count from source metadata.
+    pub line_count: u32,
+    /// Last modification time as seconds since the Unix epoch.
+    pub mtime: u64,
+}
+
 /// A loaded, immutable index segment.
 ///
 /// Contains all readers needed to query the segment's trigram index, file
@@ -479,6 +506,112 @@ impl SegmentWriter {
         fs::rename(temp_dir, final_dir)?;
 
         // Open and return the segment
+        Segment::open(final_dir, self.segment_id)
+    }
+
+    /// Build a segment from pre-processed compact files.
+    ///
+    /// Unlike [`build`](Self::build), this method:
+    /// - Uses `ContentStoreWriter::add_raw()` to copy pre-compressed bytes directly
+    /// - Reuses `content_hash`, `language`, `size_bytes`, `line_count` from source metadata
+    /// - Only decompresses content for trigram extraction (unavoidable due to file_id remapping)
+    ///
+    /// This eliminates the blake3 hash, zstd compress, language detection, and line
+    /// counting steps, roughly halving compaction CPU time and peak memory.
+    pub fn build_from_compact(self, files: Vec<CompactInputFile>) -> Result<Segment, IndexError> {
+        let seg_name = format!("seg_{:04}", self.segment_id.0);
+        let final_dir = self.base_dir.join(&seg_name);
+        let temp_dir = self
+            .base_dir
+            .join(format!(".{seg_name}_tmp_{}", std::process::id()));
+
+        if temp_dir.exists() {
+            fs::remove_dir_all(&temp_dir)?;
+        }
+        fs::create_dir_all(&temp_dir)?;
+
+        match self.build_compact_inner(&temp_dir, &final_dir, files) {
+            Ok(segment) => Ok(segment),
+            Err(e) => {
+                let _ = fs::remove_dir_all(&temp_dir);
+                Err(e)
+            }
+        }
+    }
+
+    fn build_compact_inner(
+        &self,
+        temp_dir: &Path,
+        final_dir: &Path,
+        files: Vec<CompactInputFile>,
+    ) -> Result<Segment, IndexError> {
+        let mut posting_builder = PostingListBuilder::file_only();
+        let mut metadata_builder = MetadataBuilder::new();
+        let mut content_writer =
+            ContentStoreWriter::new(&temp_dir.join("content.zst")).map_err(IndexError::Io)?;
+
+        for (i, file) in files.iter().enumerate() {
+            let file_id = FileId(u32::try_from(i).map_err(|_| {
+                IndexError::IndexCorruption("too many files for segment (>4B)".to_string())
+            })?);
+
+            // Trigram extraction from raw content (must be sequential)
+            posting_builder.add_file(file_id, &file.raw_content);
+
+            // Write pre-compressed content directly — no re-compress
+            let (content_offset, content_len) = content_writer
+                .add_raw(&file.compressed)
+                .map_err(IndexError::Io)?;
+
+            metadata_builder.add_file(FileMetadata {
+                file_id,
+                path: file.path.clone(),
+                content_hash: file.content_hash,
+                language: file.language,
+                size_bytes: file.size_bytes,
+                mtime_epoch_secs: file.mtime,
+                line_count: file.line_count,
+                content_offset,
+                content_len,
+            });
+        }
+
+        posting_builder.finalize();
+
+        TrigramIndexWriter::write(&posting_builder, &temp_dir.join("trigrams.bin"))?;
+
+        let mut meta_file = fs::File::create(temp_dir.join("meta.bin"))?;
+        let mut paths_file = fs::File::create(temp_dir.join("paths.bin"))?;
+        metadata_builder
+            .write_to(&mut meta_file, &mut paths_file)
+            .map_err(IndexError::Io)?;
+
+        content_writer.finish().map_err(IndexError::Io)?;
+        fs::write(temp_dir.join("tombstones.bin"), b"")?;
+
+        // Symbol index for compaction: re-extract from raw content
+        #[cfg(feature = "symbols")]
+        {
+            use crate::symbol_extractor::extract_symbols;
+            use crate::symbol_index::{SymbolIndexWriter, SymbolRecord};
+
+            let mut symbol_records = Vec::new();
+            for (i, file) in files.iter().enumerate() {
+                let file_id = FileId(i as u32);
+                for entry in extract_symbols(file_id, &file.raw_content, file.language) {
+                    symbol_records.push(SymbolRecord {
+                        file_id,
+                        name: entry.name.clone(),
+                        kind: entry.kind,
+                        line: entry.line,
+                        column: entry.column,
+                    });
+                }
+            }
+            SymbolIndexWriter::write(&symbol_records, temp_dir)?;
+        }
+
+        fs::rename(temp_dir, final_dir)?;
         Segment::open(final_dir, self.segment_id)
     }
 }
@@ -1180,6 +1313,85 @@ mod tests {
         // load_tombstones should return empty, not an I/O error
         let ts = segment.load_tombstones().unwrap();
         assert!(ts.is_empty());
+    }
+
+    #[test]
+    fn test_build_from_compact_preserves_content_and_metadata() {
+        use crate::multi_search::search_segments;
+
+        let dir = tempfile::tempdir().unwrap();
+        let segments_dir = dir.path().join("segments");
+        fs::create_dir_all(&segments_dir).unwrap();
+
+        // Build a source segment with known files
+        let writer = SegmentWriter::new(&segments_dir, SegmentId(0));
+        let source = writer
+            .build(vec![
+                InputFile {
+                    path: "hello.rs".to_string(),
+                    content: b"fn hello_world() { println!(\"hello\"); }".to_vec(),
+                    mtime: 1000,
+                },
+                InputFile {
+                    path: "greet.rs".to_string(),
+                    content: b"fn greet_user(name: &str) { println!(\"hi {}\", name); }".to_vec(),
+                    mtime: 2000,
+                },
+            ])
+            .unwrap();
+
+        // Collect CompactInputFiles from the source segment
+        let reader = source.metadata_reader();
+        let mut compact_files = Vec::new();
+        for entry in reader.iter_all() {
+            let entry = entry.unwrap();
+            let raw_compressed = source
+                .content_reader()
+                .read_raw_compressed(entry.content_offset, entry.content_len)
+                .unwrap();
+            let raw_content = source
+                .content_reader()
+                .read_content_with_size_hint(
+                    entry.content_offset,
+                    entry.content_len,
+                    entry.size_bytes as usize,
+                )
+                .unwrap();
+            compact_files.push(CompactInputFile {
+                path: entry.path,
+                raw_content,
+                compressed: raw_compressed,
+                content_hash: entry.content_hash,
+                language: entry.language,
+                size_bytes: entry.size_bytes,
+                line_count: entry.line_count,
+                mtime: entry.mtime_epoch_secs,
+            });
+        }
+
+        // Build a new segment from compact files
+        let writer2 = SegmentWriter::new(&segments_dir, SegmentId(1));
+        let compacted = writer2.build_from_compact(compact_files).unwrap();
+
+        // Verify metadata is preserved
+        let new_reader = compacted.metadata_reader();
+        let entries: Vec<_> = new_reader.iter_all().map(|e| e.unwrap()).collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, "hello.rs");
+        assert_eq!(entries[0].mtime_epoch_secs, 1000);
+        assert_eq!(entries[0].line_count, 0); // no newline in content
+        assert_eq!(entries[1].path, "greet.rs");
+        assert_eq!(entries[1].mtime_epoch_secs, 2000);
+
+        // Verify content is searchable
+        let snap = std::sync::Arc::new(vec![std::sync::Arc::new(compacted)]);
+        let result = search_segments(&snap, "hello_world").unwrap();
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].path, Path::new("hello.rs"));
+
+        let result2 = search_segments(&snap, "greet_user").unwrap();
+        assert_eq!(result2.files.len(), 1);
+        assert_eq!(result2.files[0].path, Path::new("greet.rs"));
     }
 
     #[cfg(feature = "symbols")]

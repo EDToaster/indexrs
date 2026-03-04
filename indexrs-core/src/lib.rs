@@ -87,7 +87,7 @@ pub use reindex_progress::ReindexProgress;
 pub use search::{
     ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, SearchOptions, SearchResult,
 };
-pub use segment::{InputFile, Segment, SegmentWriter};
+pub use segment::{CompactInputFile, InputFile, Segment, SegmentWriter};
 pub use segment_manager::SegmentManager;
 pub use tombstone::{TombstoneSet, needs_new_entry, needs_tombstone};
 pub use trigram::{
