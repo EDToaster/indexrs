@@ -204,6 +204,12 @@ impl ProgressRenderer {
                 sp.enable_steady_tick(std::time::Duration::from_millis(80));
                 self.spinner = Some(sp);
             }
+            ReindexProgress::CompactingCollected { .. }
+            | ReindexProgress::CompactingFiles { .. }
+            | ReindexProgress::CompactingWriting { .. }
+            | ReindexProgress::CompactionComplete { .. } => {
+                // TODO(task-4): render detailed compaction progress
+            }
             ReindexProgress::Complete { .. } => {
                 self.finish();
             }

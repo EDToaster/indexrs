@@ -35,6 +35,25 @@ pub enum ReindexProgress {
     Tombstoning { count: u32 },
     /// Segment compaction started.
     CompactingSegments { input_segments: usize },
+    /// Live entries collected from segments for compaction.
+    CompactingCollected {
+        live_files: usize,
+        tombstoned: usize,
+    },
+    /// Decompressing file content during compaction.
+    CompactingFiles { current: usize, total: usize },
+    /// Writing a compacted segment.
+    CompactingWriting {
+        segment_id: u32,
+        files_done: usize,
+        files_total: usize,
+    },
+    /// Compaction finished.
+    CompactionComplete {
+        input_segments: usize,
+        output_segments: usize,
+        duration_ms: u64,
+    },
     /// Reindex finished successfully.
     Complete { changes_applied: usize },
 }
@@ -70,6 +89,52 @@ mod tests {
             created: 10,
             modified: 20,
             deleted: 5,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ReindexProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_compacting_collected() {
+        let event = ReindexProgress::CompactingCollected {
+            live_files: 100,
+            tombstoned: 25,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ReindexProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_compacting_files() {
+        let event = ReindexProgress::CompactingFiles {
+            current: 50,
+            total: 200,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ReindexProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_compacting_writing() {
+        let event = ReindexProgress::CompactingWriting {
+            segment_id: 5,
+            files_done: 30,
+            files_total: 100,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ReindexProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_compaction_complete() {
+        let event = ReindexProgress::CompactionComplete {
+            input_segments: 5,
+            output_segments: 1,
+            duration_ms: 3200,
         };
         let json = serde_json::to_string(&event).unwrap();
         let back: ReindexProgress = serde_json::from_str(&json).unwrap();
