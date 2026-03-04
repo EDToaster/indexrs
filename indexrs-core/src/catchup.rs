@@ -31,7 +31,7 @@ pub fn run_catchup(
     indexrs_dir: &Path,
     manager: &Arc<SegmentManager>,
 ) -> Result<Vec<ChangeEvent>> {
-    run_catchup_with_progress(repo_root, indexrs_dir, manager, |_| {})
+    run_catchup_with_progress(repo_root, indexrs_dir, manager, false, |_| {})
 }
 
 /// Like [`run_catchup`], but calls `on_progress` with structured
@@ -40,6 +40,7 @@ pub fn run_catchup_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
     repo_root: &Path,
     indexrs_dir: &Path,
     manager: &Arc<SegmentManager>,
+    force_compact: bool,
     on_progress: F,
 ) -> Result<Vec<ChangeEvent>> {
     let checkpoint = read_checkpoint(indexrs_dir)?;
@@ -66,6 +67,16 @@ pub fn run_catchup_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
 
     if changes.is_empty() {
         on_progress(ReindexProgress::NoChanges);
+
+        // Force compaction even with no changes if requested.
+        if force_compact && !manager.snapshot().is_empty() {
+            let snap = manager.snapshot();
+            on_progress(ReindexProgress::CompactingSegments {
+                input_segments: snap.len(),
+            });
+            drop(manager.compact_background());
+            on_progress(ReindexProgress::Complete { changes_applied: 0 });
+        }
     } else {
         // Count change types.
         let mut created = 0usize;
@@ -87,7 +98,7 @@ pub fn run_catchup_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
 
         manager.apply_changes_with_progress(repo_root, &changes, &on_progress)?;
 
-        if manager.should_compact() {
+        if force_compact || manager.should_compact() {
             tracing::info!("compaction recommended after catch-up");
             let snap = manager.snapshot();
             on_progress(ReindexProgress::CompactingSegments {
@@ -254,7 +265,7 @@ mod tests {
         fs::write(repo.join("progress.rs"), "fn progress() { let x = 1; }").unwrap();
 
         let events = std::sync::Mutex::new(Vec::new());
-        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, |ev| {
+        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, false, |ev| {
             events.lock().unwrap().push(ev);
         })
         .unwrap();
@@ -299,7 +310,7 @@ mod tests {
         write_checkpoint(&indexrs_dir, &cp).unwrap();
 
         let events = std::sync::Mutex::new(Vec::new());
-        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, |ev| {
+        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, false, |ev| {
             events.lock().unwrap().push(ev);
         })
         .unwrap();
@@ -336,5 +347,42 @@ mod tests {
         // Checkpoint should still be present.
         let cp2 = read_checkpoint(&indexrs_dir).unwrap();
         assert!(cp2.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_catchup_force_compact_emits_compacting_event() {
+        use crate::reindex_progress::ReindexProgress;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        init_git_repo(repo);
+
+        let indexrs_dir = repo.join(".indexrs");
+        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+        let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+
+        // Write checkpoint at current HEAD.
+        let git = GitChangeDetector::new(repo.to_path_buf());
+        let head = git.get_head_sha().unwrap();
+        let cp = Checkpoint::new(Some(head), 0);
+        write_checkpoint(&indexrs_dir, &cp).unwrap();
+
+        // Create a file so there's a change to apply.
+        fs::write(repo.join("compact_test.rs"), "fn compact() {}").unwrap();
+
+        let events = std::sync::Mutex::new(Vec::new());
+        let _changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, true, |ev| {
+            events.lock().unwrap().push(ev);
+        })
+        .unwrap();
+
+        let events = events.into_inner().unwrap();
+        // With force_compact=true and at least 1 segment, CompactingSegments should fire.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ReindexProgress::CompactingSegments { .. })),
+            "expected CompactingSegments with force_compact=true, got: {events:?}"
+        );
     }
 }

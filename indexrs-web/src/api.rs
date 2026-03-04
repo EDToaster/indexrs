@@ -220,7 +220,7 @@ pub async fn refresh_index(
         .await
         .map_err(|e| ApiError::service_unavailable(format!("daemon unavailable: {e}")))?;
 
-    let request = indexrs_daemon::types::DaemonRequest::Reindex;
+    let request = indexrs_daemon::types::DaemonRequest::Reindex { compact: false };
     // Send the request but don't wait for full result processing - just accept.
     let _ = indexrs_daemon::send_json_request(stream, &request).await;
 

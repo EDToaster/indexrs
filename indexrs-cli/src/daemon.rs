@@ -1335,7 +1335,7 @@ async fn handle_connection(
                     }
                 }
             }
-            DaemonRequest::Reindex => {
+            DaemonRequest::Reindex { compact } => {
                 let start = Instant::now();
                 let repo = repo_root.to_path_buf();
                 let idir = indexrs_dir.to_path_buf();
@@ -1344,7 +1344,7 @@ async fn handle_connection(
                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
                 let handle = tokio::task::spawn_blocking(move || {
-                    indexrs_core::run_catchup_with_progress(&repo, &idir, &mgr, |ev| {
+                    indexrs_core::run_catchup_with_progress(&repo, &idir, &mgr, compact, |ev| {
                         let _ = tx
                             .send(serde_json::to_string(&ev).unwrap_or_else(|_| format!("{ev:?}")));
                     })
@@ -1570,10 +1570,10 @@ mod tests {
 
     #[test]
     fn test_request_roundtrip_reindex() {
-        let req = DaemonRequest::Reindex;
+        let req = DaemonRequest::Reindex { compact: false };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, DaemonRequest::Reindex));
+        assert!(matches!(parsed, DaemonRequest::Reindex { compact: false }));
     }
 
     #[test]

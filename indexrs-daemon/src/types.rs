@@ -88,7 +88,11 @@ pub enum DaemonRequest {
     },
     Ping,
     Shutdown,
-    Reindex,
+    Reindex {
+        /// When true, force compaction after reindex regardless of heuristics.
+        #[serde(default)]
+        compact: bool,
+    },
 }
 
 #[cfg(test)]

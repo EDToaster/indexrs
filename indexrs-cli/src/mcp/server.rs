@@ -491,7 +491,10 @@ impl IndexrsServer {
     ) -> Result<CallToolResult, ErrorData> {
         // Dispatch through daemon if available
         if let Some(daemon) = &self.daemon {
-            match daemon.request(indexrs_daemon::DaemonRequest::Reindex).await {
+            match daemon
+                .request(indexrs_daemon::DaemonRequest::Reindex { compact: false })
+                .await
+            {
                 Ok(result) => {
                     return Ok(CallToolResult::success(vec![Content::text(result.text)]));
                 }

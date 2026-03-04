@@ -14,13 +14,14 @@ use indexrs_daemon::types::DaemonRequest;
 /// Run `indexrs reindex` with indicatif progress bars.
 pub async fn run_reindex_with_progress(
     repo_root: &std::path::Path,
+    compact: bool,
 ) -> Result<ExitCode, IndexError> {
     let stream = ensure_daemon(repo_root, true).await?;
     let (reader, mut sock_writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
     // Send Reindex request.
-    let json = serde_json::to_string(&DaemonRequest::Reindex)
+    let json = serde_json::to_string(&DaemonRequest::Reindex { compact })
         .map_err(|e| IndexError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
     sock_writer
         .write_all(format!("{json}\n").as_bytes())

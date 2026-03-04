@@ -239,13 +239,13 @@ async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::In
             status::run_status(&repo_root)?;
             Ok(ExitCode::Success)
         }
-        Command::Reindex { full } => {
+        Command::Reindex { full, compact } => {
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
             if full {
                 // Full rebuild — same as init --force.
                 init::run_init(&repo_root, true)?;
             } else {
-                reindex_display::run_reindex_with_progress(&repo_root).await?;
+                reindex_display::run_reindex_with_progress(&repo_root, compact).await?;
             }
             Ok(ExitCode::Success)
         }

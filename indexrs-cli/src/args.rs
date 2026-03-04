@@ -166,8 +166,12 @@ pub enum Command {
     /// Trigger reindex of the repository
     Reindex {
         /// Perform a full reindex (default: incremental)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "compact")]
         full: bool,
+
+        /// Force compaction after reindex
+        #[arg(long, conflicts_with = "full")]
+        compact: bool,
     },
 
     /// Estimate index size and peak RAM for a directory (without building)
