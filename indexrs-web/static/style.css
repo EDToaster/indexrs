@@ -885,12 +885,28 @@ mark {
     background: #8b5cf6;
 }
 
+.breakdown-bar--tombstones {
+    background: #ef4444;
+}
+
+.breakdown-bar--symbols {
+    background: #06b6d4;
+}
+
 [data-theme="dark"] .breakdown-bar--trigrams {
     background: #fbbf24;
 }
 
 [data-theme="dark"] .breakdown-bar--meta {
     background: #a78bfa;
+}
+
+[data-theme="dark"] .breakdown-bar--tombstones {
+    background: #f87171;
+}
+
+[data-theme="dark"] .breakdown-bar--symbols {
+    background: #22d3ee;
 }
 
 .breakdown-legend {
@@ -927,12 +943,28 @@ mark {
     background: #8b5cf6;
 }
 
+.breakdown-dot--tombstones {
+    background: #ef4444;
+}
+
+.breakdown-dot--symbols {
+    background: #06b6d4;
+}
+
 [data-theme="dark"] .breakdown-dot--trigrams {
     background: #fbbf24;
 }
 
 [data-theme="dark"] .breakdown-dot--meta {
     background: #a78bfa;
+}
+
+[data-theme="dark"] .breakdown-dot--tombstones {
+    background: #f87171;
+}
+
+[data-theme="dark"] .breakdown-dot--symbols {
+    background: #22d3ee;
 }
 
 /* Segments detail table */
