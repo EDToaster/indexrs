@@ -77,6 +77,15 @@ pub enum DaemonRequest {
         color: bool,
         cwd: Option<String>,
     },
+    /// Structured symbol search returning JSON-serializable SymbolMatch objects.
+    JsonSymbols {
+        query: Option<String>,
+        kind: Option<String>,
+        language: Option<String>,
+        path_filter: Option<String>,
+        max_results: Option<usize>,
+        offset: Option<usize>,
+    },
     Ping,
     Shutdown,
     Reindex,
@@ -184,6 +193,38 @@ mod tests {
                 assert_eq!(limit, Some(50));
                 assert!(color);
                 assert_eq!(cwd, Some("/repo/src".to_string()));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_json_symbols_roundtrip() {
+        let req = DaemonRequest::JsonSymbols {
+            query: Some("process".to_string()),
+            kind: Some("fn".to_string()),
+            language: None,
+            path_filter: Some("src/".to_string()),
+            max_results: Some(50),
+            offset: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: DaemonRequest = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            DaemonRequest::JsonSymbols {
+                query,
+                kind,
+                language,
+                path_filter,
+                max_results,
+                offset,
+            } => {
+                assert_eq!(query, Some("process".to_string()));
+                assert_eq!(kind, Some("fn".to_string()));
+                assert!(language.is_none());
+                assert_eq!(path_filter, Some("src/".to_string()));
+                assert_eq!(max_results, Some(50));
+                assert!(offset.is_none());
             }
             other => panic!("unexpected variant: {other:?}"),
         }

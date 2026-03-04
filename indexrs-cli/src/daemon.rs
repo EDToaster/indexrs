@@ -1186,6 +1186,17 @@ async fn handle_connection(
                     }
                 }
             }
+            DaemonRequest::JsonSymbols { .. } => {
+                // TODO(task-5): implement structured JSON symbol search handler.
+                wire::write_response(
+                    &mut writer,
+                    &DaemonResponse::Error {
+                        message: "JsonSymbols not yet implemented".to_string(),
+                    },
+                )
+                .await
+                .map_err(IndexError::Io)?;
+            }
             DaemonRequest::Reindex => {
                 let start = Instant::now();
                 let repo = repo_root.to_path_buf();

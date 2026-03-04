@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use indexrs_core::search::FileMatch;
+#[cfg(feature = "symbols")]
+use indexrs_core::symbol_index::SymbolMatch;
 
 /// Wrapper for JSON search response frames.
 #[derive(Debug, Serialize, Deserialize)]
@@ -104,6 +106,48 @@ pub struct HealthResponse {
     pub status: String,
     pub version: String,
     pub uptime_seconds: u64,
+}
+
+/// Wrapper for JSON symbol search response frames.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum JsonSymbolsFrame {
+    #[serde(rename = "symbol")]
+    Symbol(SymbolMatchResponse),
+    #[serde(rename = "stats")]
+    Stats { stats: SymbolsStats },
+}
+
+/// A symbol match with 1-based line numbers for display.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SymbolMatchResponse {
+    pub name: String,
+    pub kind: String,
+    pub path: String,
+    /// 1-based line number (converted from SymbolMatch's 0-based).
+    pub line: u32,
+    pub column: u16,
+    pub score: f64,
+}
+
+#[cfg(feature = "symbols")]
+impl From<SymbolMatch> for SymbolMatchResponse {
+    fn from(m: SymbolMatch) -> Self {
+        Self {
+            name: m.name,
+            kind: m.kind.short_label().to_string(),
+            path: m.path,
+            line: m.line + 1,
+            column: m.column,
+            score: m.score,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SymbolsStats {
+    pub total: usize,
+    pub duration_ms: u64,
 }
 
 #[cfg(test)]
@@ -273,5 +317,30 @@ mod tests {
         assert_eq!(deserialized.status, "healthy");
         assert_eq!(deserialized.version, "0.1.0");
         assert_eq!(deserialized.uptime_seconds, 3600);
+    }
+
+    #[test]
+    fn test_json_symbols_frame_serialization() {
+        let frame = JsonSymbolsFrame::Symbol(SymbolMatchResponse {
+            name: "process_data".to_string(),
+            kind: "fn".to_string(),
+            path: "src/main.rs".to_string(),
+            line: 42,
+            column: 4,
+            score: 1.0,
+        });
+        let json = serde_json::to_string(&frame).unwrap();
+        assert!(json.contains(r#""type":"symbol"#));
+        assert!(json.contains("process_data"));
+
+        let stats_frame = JsonSymbolsFrame::Stats {
+            stats: SymbolsStats {
+                total: 10,
+                duration_ms: 5,
+            },
+        };
+        let stats_json = serde_json::to_string(&stats_frame).unwrap();
+        assert!(stats_json.contains(r#""type":"stats"#));
+        assert!(stats_json.contains(r#""total":10"#));
     }
 }

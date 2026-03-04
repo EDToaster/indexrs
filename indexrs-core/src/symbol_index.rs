@@ -449,7 +449,7 @@ impl Default for SymbolSearchOptions {
 }
 
 /// A symbol match from a multi-segment search.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SymbolMatch {
     /// The symbol name.
     pub name: String,
