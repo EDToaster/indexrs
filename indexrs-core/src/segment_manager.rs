@@ -929,6 +929,31 @@ impl SegmentManager {
     ///   the current batch is flushed as a segment and a new batch begins.
     ///   A value of 0 means no limit (equivalent to `compact()`).
     pub fn compact_with_budget(&self, max_segment_bytes: usize) -> Result<(), IndexError> {
+        self.compact_with_progress(max_segment_bytes, &|_| {})
+    }
+
+    /// Compact segments with a per-segment memory budget and progress reporting.
+    ///
+    /// Like [`compact()`](Self::compact), but instead of merging everything
+    /// into a single segment, flushes a new output segment whenever the
+    /// accumulated content size exceeds `max_segment_bytes`. This bounds
+    /// peak memory usage during compaction to approximately `max_segment_bytes`
+    /// plus overhead for posting lists and metadata.
+    ///
+    /// Calls `on_progress` with [`ReindexProgress`] events at each phase.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_segment_bytes` - Maximum total uncompressed content bytes per
+    ///   output segment. When the accumulated size exceeds this threshold,
+    ///   the current batch is flushed as a segment and a new batch begins.
+    ///   A value of 0 means no limit (equivalent to `compact()`).
+    /// * `on_progress` - Callback invoked with progress events during compaction.
+    pub fn compact_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
+        &self,
+        max_segment_bytes: usize,
+        on_progress: &F,
+    ) -> Result<(), IndexError> {
         let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
         self.is_compacting.store(true, Ordering::Release);
         let _compacting_guard = CompactingGuard(&self.is_compacting);
@@ -955,22 +980,30 @@ impl SegmentManager {
         let start = std::time::Instant::now();
 
         // Phase 1: Collect all live (non-tombstoned) entries with their segment index.
-        // This is cheap — metadata is already memory-mapped.
         let mut live_entries: Vec<(usize, FileMetadata)> = Vec::new();
+        let mut tombstoned_count: usize = 0;
         for (seg_idx, segment) in current_segments.iter().enumerate() {
             let tombstones = segment.load_tombstones()?;
             let reader = segment.metadata_reader();
             for entry_result in reader.iter_all() {
                 let entry: FileMetadata = entry_result?;
-                if !tombstones.contains(entry.file_id) {
+                if tombstones.contains(entry.file_id) {
+                    tombstoned_count += 1;
+                } else {
                     live_entries.push((seg_idx, entry));
                 }
             }
         }
+        on_progress(ReindexProgress::CompactingCollected {
+            live_files: live_entries.len(),
+            tombstoned: tombstoned_count,
+        });
 
         // Phase 2: Build CompactInputFiles in parallel.
         // Decompress content (needed for trigram extraction) and read raw
         // compressed bytes (to avoid re-compressing in the output segment).
+        let total_files = live_entries.len();
+        let files_done = AtomicUsize::new(0);
         let compact_files: Vec<CompactInputFile> = live_entries
             .par_iter()
             .map(|(seg_idx, entry)| {
@@ -983,6 +1016,13 @@ impl SegmentManager {
                 let compressed = segment
                     .content_reader()
                     .read_raw_compressed(entry.content_offset, entry.content_len)?;
+                let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
+                if done.is_multiple_of(50) || done == total_files {
+                    on_progress(ReindexProgress::CompactingFiles {
+                        current: done,
+                        total: total_files,
+                    });
+                }
                 Ok(CompactInputFile {
                     path: entry.path.clone(),
                     raw_content,
@@ -1032,139 +1072,12 @@ impl SegmentManager {
 
         let new_segments: Vec<Arc<Segment>> = results.into_iter().collect::<Result<Vec<_>, _>>()?;
 
-        let old_dirs: Vec<PathBuf> = current_segments
-            .iter()
-            .map(|s| s.dir_path().to_path_buf())
-            .collect();
-
-        let output_segment_count = new_segments.len();
-        self.state.publish(new_segments);
-
-        for old_dir in &old_dirs {
-            if let Err(e) = fs::remove_dir_all(old_dir) {
-                tracing::warn!(path = %old_dir.display(), error = %e, "failed to remove old segment directory");
-            }
-        }
-
-        tracing::info!(
-            input_segments = old_dirs.len(),
-            output_segments = output_segment_count,
-            elapsed_ms = start.elapsed().as_millis() as u64,
-            "compaction complete"
-        );
-        Ok(())
-    }
-
-    /// Like [`compact_with_budget`], but calls `on_progress` with
-    /// [`ReindexProgress`] events at each phase.
-    pub fn compact_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
-        &self,
-        max_segment_bytes: usize,
-        on_progress: &F,
-    ) -> Result<(), IndexError> {
-        let _guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let current_segments: Vec<Arc<Segment>> = self.state.snapshot().as_ref().clone();
-
-        if current_segments.is_empty() {
-            tracing::debug!("compaction skipped: no segments");
-            return Ok(());
-        }
-
-        if current_segments.len() == 1 {
-            let ts = current_segments[0].load_tombstones()?;
-            if ts.is_empty() {
-                tracing::debug!("compaction skipped: single segment with no tombstones");
-                return Ok(());
-            }
-        }
-
-        tracing::info!(
-            input_segments = current_segments.len(),
-            max_segment_bytes,
-            "compaction starting"
-        );
-        let start = std::time::Instant::now();
-
-        // Phase 1: Collect live entries.
-        let mut live_entries: Vec<(usize, FileMetadata)> = Vec::new();
-        let mut tombstoned_count: usize = 0;
-        for (seg_idx, segment) in current_segments.iter().enumerate() {
-            let tombstones = segment.load_tombstones()?;
-            let reader = segment.metadata_reader();
-            for entry_result in reader.iter_all() {
-                let entry: FileMetadata = entry_result?;
-                if tombstones.contains(entry.file_id) {
-                    tombstoned_count += 1;
-                } else {
-                    live_entries.push((seg_idx, entry));
-                }
-            }
-        }
-        on_progress(ReindexProgress::CompactingCollected {
-            live_files: live_entries.len(),
-            tombstoned: tombstoned_count,
-        });
-
-        // Phase 2: Decompress content in parallel with progress.
-        let total_files = live_entries.len();
-        let files_done = AtomicUsize::new(0);
-        let input_files: Vec<InputFile> = live_entries
-            .par_iter()
-            .map(|(seg_idx, entry)| {
-                let segment = &current_segments[*seg_idx];
-                let content = segment
-                    .content_reader()
-                    .read_content(entry.content_offset, entry.content_len)?;
-                let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
-                // Emit progress every 50 files or on the last file.
-                if done.is_multiple_of(50) || done == total_files {
-                    on_progress(ReindexProgress::CompactingFiles {
-                        current: done,
-                        total: total_files,
-                    });
-                }
-                Ok(InputFile {
-                    path: entry.path.clone(),
-                    content,
-                    mtime: entry.mtime_epoch_secs,
-                })
-            })
-            .collect::<Result<Vec<InputFile>, IndexError>>()?;
-
-        // Phase 3: Budget-batched segment writing.
-        let mut batch: Vec<InputFile> = Vec::new();
-        let mut batch_bytes: usize = 0;
-        let mut new_segments: Vec<Arc<Segment>> = Vec::new();
+        // Emit per-segment progress after parallel build completes
         let mut written_files: usize = 0;
-
-        for file in input_files {
-            let content_len = file.content.len();
-            batch.push(file);
-            batch_bytes += content_len;
-
-            if max_segment_bytes > 0 && batch_bytes > max_segment_bytes {
-                let batch_len = batch.len();
-                let seg_id = self.next_segment_id()?;
-                let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-                new_segments.push(Arc::new(writer.build(std::mem::take(&mut batch))?));
-                written_files += batch_len;
-                on_progress(ReindexProgress::CompactingWriting {
-                    segment_id: seg_id.0,
-                    files_done: written_files,
-                    files_total: total_files,
-                });
-                batch_bytes = 0;
-            }
-        }
-
-        if !batch.is_empty() {
-            let batch_len = batch.len();
-            let seg_id = self.next_segment_id()?;
-            let writer = SegmentWriter::new(&self.segments_dir, seg_id);
-            new_segments.push(Arc::new(writer.build(batch)?));
-            written_files += batch_len;
+        for seg in &new_segments {
+            written_files += seg.entry_count() as usize;
             on_progress(ReindexProgress::CompactingWriting {
-                segment_id: seg_id.0,
+                segment_id: seg.segment_id().0,
                 files_done: written_files,
                 files_total: total_files,
             });
