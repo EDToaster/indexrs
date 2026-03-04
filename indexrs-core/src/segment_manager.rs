@@ -1062,26 +1062,25 @@ impl SegmentManager {
             .collect::<Result<Vec<_>, _>>()?;
 
         let segments_dir = &self.segments_dir;
+        let written_files = AtomicUsize::new(0);
         let results: Vec<Result<Arc<Segment>, IndexError>> = id_batches
             .into_par_iter()
             .map(|(seg_id, files)| {
+                let batch_file_count = files.len();
                 let writer = SegmentWriter::new(segments_dir, seg_id);
-                writer.build_from_compact(files).map(Arc::new)
+                let segment = writer.build_from_compact(files).map(Arc::new)?;
+                let done = written_files.fetch_add(batch_file_count, Ordering::Relaxed)
+                    + batch_file_count;
+                on_progress(ReindexProgress::CompactingWriting {
+                    segment_id: seg_id.0,
+                    files_done: done,
+                    files_total: total_files,
+                });
+                Ok(segment)
             })
             .collect();
 
         let new_segments: Vec<Arc<Segment>> = results.into_iter().collect::<Result<Vec<_>, _>>()?;
-
-        // Emit per-segment progress after parallel build completes
-        let mut written_files: usize = 0;
-        for seg in &new_segments {
-            written_files += seg.entry_count() as usize;
-            on_progress(ReindexProgress::CompactingWriting {
-                segment_id: seg.segment_id().0,
-                files_done: written_files,
-                files_total: total_files,
-            });
-        }
 
         let old_dirs: Vec<PathBuf> = current_segments
             .iter()
