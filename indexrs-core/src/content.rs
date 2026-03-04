@@ -255,6 +255,29 @@ impl ContentStoreReader {
         }
         Ok(output)
     }
+    /// Read raw compressed bytes from the content store without decompressing.
+    ///
+    /// Returns the zstd-compressed block as-is. Useful during compaction to
+    /// copy content between segments without a decompress→re-compress cycle.
+    pub fn read_raw_compressed(&self, offset: u64, compressed_len: u32) -> crate::Result<Vec<u8>> {
+        let start = usize::try_from(offset).map_err(|_| {
+            IndexError::IndexCorruption(format!("content offset {offset} exceeds address space"))
+        })?;
+        let clen = compressed_len as usize;
+        let end = start.checked_add(clen).ok_or_else(|| {
+            IndexError::IndexCorruption(format!("content range overflow: {start} + {clen}"))
+        })?;
+
+        if end > self.mmap.len() {
+            return Err(IndexError::IndexCorruption(format!(
+                "content read out of bounds: offset={offset}, len={compressed_len}, \
+                 store size={}",
+                self.mmap.len()
+            )));
+        }
+
+        Ok(self.mmap[start..end].to_vec())
+    }
 }
 
 #[cfg(test)]
@@ -471,5 +494,23 @@ impl ConfigManager {
             }
             other => panic!("expected IndexCorruption, got: {other}"),
         }
+    }
+
+    #[test]
+    fn test_read_raw_compressed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("content.zst");
+
+        let original = b"fn main() { println!(\"hello\"); }";
+        let mut writer = ContentStoreWriter::new(&path).unwrap();
+        let (offset, compressed_len) = writer.add_content(original).unwrap();
+        writer.finish().unwrap();
+
+        let reader = ContentStoreReader::open(&path).unwrap();
+        let raw = reader.read_raw_compressed(offset, compressed_len).unwrap();
+
+        // Raw bytes should decompress to original content
+        let decompressed = zstd::bulk::decompress(&raw, 1024 * 1024).unwrap();
+        assert_eq!(decompressed, original);
     }
 }
