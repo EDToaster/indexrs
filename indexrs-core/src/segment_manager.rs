@@ -222,6 +222,37 @@ impl SegmentManager {
         result
     }
 
+    /// Look up the content hash of each path in the current segments.
+    ///
+    /// Returns the hash from the **newest** non-tombstoned entry for each path
+    /// (highest segment index wins). Used to skip re-indexing files whose
+    /// content has not changed.
+    fn batch_find_file_hashes(
+        segments: &[Arc<Segment>],
+        paths: &std::collections::HashSet<String>,
+    ) -> std::collections::HashMap<String, [u8; 16]> {
+        let mut result: std::collections::HashMap<String, [u8; 16]> =
+            std::collections::HashMap::new();
+
+        // Iterate segments in order so later (newer) segments overwrite earlier ones.
+        for segment in segments.iter() {
+            let reader = segment.metadata_reader();
+            let tombstones = segment.load_tombstones().unwrap_or_default();
+
+            for entry in reader.iter_all() {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                if paths.contains(&entry.path) && !tombstones.contains(entry.file_id) {
+                    result.insert(entry.path, entry.content_hash);
+                }
+            }
+        }
+
+        result
+    }
+
     /// Index a set of files, splitting into multiple segments when the
     /// accumulated content size exceeds `max_segment_bytes`.
     ///
@@ -502,6 +533,14 @@ impl SegmentManager {
             .filter(|c| tombstone::needs_new_entry(&c.kind))
             .collect();
 
+        // Look up existing content hashes for paths that need new entries,
+        // so we can skip files whose content hasn't changed.
+        let new_entry_paths: std::collections::HashSet<String> = new_file_changes
+            .iter()
+            .map(|c| c.path.to_string_lossy().to_string())
+            .collect();
+        let existing_hashes = Self::batch_find_file_hashes(&current_segments, &new_entry_paths);
+
         let new_files: Vec<InputFile> = new_file_changes
             .par_iter()
             .filter_map(|change| {
@@ -532,6 +571,16 @@ impl SegmentManager {
 
                 if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
                     return None;
+                }
+
+                // Skip if file is already indexed with the same content hash.
+                if !tombstone_paths.contains(&path_str) {
+                    let hash = blake3::hash(&content);
+                    let hash_16: [u8; 16] = hash.as_bytes()[..16].try_into().unwrap();
+                    if existing_hashes.get(&path_str) == Some(&hash_16) {
+                        tracing::debug!(path = %path_str, "skipping unchanged file");
+                        return None;
+                    }
                 }
 
                 let mtime = full_path
@@ -642,6 +691,14 @@ impl SegmentManager {
             .filter(|c| tombstone::needs_new_entry(&c.kind))
             .collect();
 
+        // Look up existing content hashes for paths that need new entries,
+        // so we can skip files whose content hasn't changed.
+        let new_entry_paths: std::collections::HashSet<String> = new_file_changes
+            .iter()
+            .map(|c| c.path.to_string_lossy().to_string())
+            .collect();
+        let existing_hashes = Self::batch_find_file_hashes(&current_segments, &new_entry_paths);
+
         let total_to_read = new_file_changes.len();
         let files_read = AtomicUsize::new(0);
 
@@ -675,6 +732,16 @@ impl SegmentManager {
 
                 if !crate::binary::should_index_file(&full_path, &content, 1_048_576) {
                     return None;
+                }
+
+                // Skip if file is already indexed with the same content hash.
+                if !tombstone_paths.contains(&path_str) {
+                    let hash = blake3::hash(&content);
+                    let hash_16: [u8; 16] = hash.as_bytes()[..16].try_into().unwrap();
+                    if existing_hashes.get(&path_str) == Some(&hash_16) {
+                        tracing::debug!(path = %path_str, "skipping unchanged file");
+                        return None;
+                    }
                 }
 
                 let mtime = full_path
@@ -2417,5 +2484,101 @@ mod tests {
         assert_eq!(snap[0].entry_count(), 1);
         let meta = snap[0].get_metadata(FileId(0)).unwrap().unwrap();
         assert_eq!(meta.path, "code.rs");
+    }
+
+    #[test]
+    fn test_apply_changes_with_progress_skips_unchanged_files() {
+        use crate::reindex_progress::ReindexProgress;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Index a file initially.
+        fs::write(repo_dir.join("stable.rs"), b"fn stable() {}").unwrap();
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("stable.rs"),
+            kind: ChangeKind::Created,
+        }];
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+        assert_eq!(manager.snapshot().len(), 1);
+
+        // Apply the same Created event again with progress callback.
+        let events = std::sync::Mutex::new(Vec::new());
+        manager
+            .apply_changes_with_progress(&repo_dir, &changes, |ev| {
+                events.lock().unwrap().push(format!("{ev:?}"));
+            })
+            .unwrap();
+
+        // Should still be 1 segment.
+        assert_eq!(
+            manager.snapshot().len(),
+            1,
+            "unchanged file should not create a new segment (with_progress variant)"
+        );
+    }
+
+    #[test]
+    fn test_apply_changes_skips_unchanged_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        // Index a file initially.
+        fs::write(repo_dir.join("stable.rs"), b"fn stable() {}").unwrap();
+        let changes = vec![ChangeEvent {
+            path: PathBuf::from("stable.rs"),
+            kind: ChangeKind::Created,
+        }];
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        let snap = manager.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].entry_count(), 1);
+
+        // Apply the same Created event again with identical content on disk.
+        manager.apply_changes(&repo_dir, &changes).unwrap();
+
+        // Should still be 1 segment — the duplicate was skipped.
+        let snap = manager.snapshot();
+        assert_eq!(
+            snap.len(),
+            1,
+            "unchanged file should not create a new segment"
+        );
+    }
+
+    #[test]
+    fn test_batch_find_file_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_dir = dir.path().join(".indexrs");
+
+        let manager = SegmentManager::new(&base_dir).unwrap();
+
+        let content = b"fn hello() {}";
+        manager
+            .index_files(vec![InputFile {
+                path: "hello.rs".to_string(),
+                content: content.to_vec(),
+                mtime: 100,
+            }])
+            .unwrap();
+
+        let snap = manager.snapshot();
+        let paths: std::collections::HashSet<String> =
+            ["hello.rs".to_string()].into_iter().collect();
+        let hashes = SegmentManager::batch_find_file_hashes(&snap, &paths);
+
+        assert_eq!(hashes.len(), 1);
+        let expected_hash = blake3::hash(content);
+        let expected_16: [u8; 16] = expected_hash.as_bytes()[..16].try_into().unwrap();
+        assert_eq!(hashes["hello.rs"], expected_16);
     }
 }
