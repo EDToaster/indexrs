@@ -396,7 +396,7 @@ impl SegmentWriter {
             symbols: Vec<crate::symbol_extractor::SymbolEntry>,
         }
 
-        let mut posting_builder = PostingListBuilder::file_only();
+        let mut posting_builder = PostingListBuilder::file_only_with_capacity(65536);
         let mut metadata_builder = MetadataBuilder::new();
         let mut content_writer =
             ContentStoreWriter::new(&temp_dir.join("content.zst")).map_err(IndexError::Io)?;
@@ -545,7 +545,7 @@ impl SegmentWriter {
         final_dir: &Path,
         files: Vec<CompactInputFile>,
     ) -> Result<Segment, IndexError> {
-        let mut posting_builder = PostingListBuilder::file_only();
+        let mut posting_builder = PostingListBuilder::file_only_with_capacity(65536);
         let mut metadata_builder = MetadataBuilder::new();
         let mut content_writer =
             ContentStoreWriter::new(&temp_dir.join("content.zst")).map_err(IndexError::Io)?;

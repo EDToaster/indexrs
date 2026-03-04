@@ -63,6 +63,19 @@ impl PostingListBuilder {
         }
     }
 
+    /// Create a file-only posting list builder with pre-allocated capacity.
+    ///
+    /// `estimated_trigrams` sets the initial capacity of the HashMap to avoid
+    /// rehashing. A typical 256 MB segment has 30K–60K distinct trigrams;
+    /// 65536 is a reasonable default.
+    pub fn file_only_with_capacity(estimated_trigrams: usize) -> Self {
+        PostingListBuilder {
+            file_postings: HashMap::with_capacity(estimated_trigrams),
+            positional_postings: HashMap::new(),
+            store_positions: false,
+        }
+    }
+
     /// Whether this builder accumulates positional postings.
     pub fn stores_positions(&self) -> bool {
         self.store_positions
@@ -104,13 +117,19 @@ impl PostingListBuilder {
     ///
     /// This must be called before the posting lists are serialized or queried.
     pub fn finalize(&mut self) {
-        for file_ids in self.file_postings.values_mut() {
-            file_ids.sort();
-            file_ids.dedup();
-        }
         if self.store_positions {
+            for file_ids in self.file_postings.values_mut() {
+                file_ids.sort();
+                file_ids.dedup();
+            }
             for positions in self.positional_postings.values_mut() {
                 positions.sort();
+            }
+        } else {
+            // In file-only mode, file IDs are pushed in ascending order
+            // (FileId(0), FileId(1), ...), so sort is unnecessary — just dedup.
+            for file_ids in self.file_postings.values_mut() {
+                file_ids.dedup();
             }
         }
     }
@@ -429,6 +448,40 @@ mod tests {
         assert!(fp_lower.contains_key(&Trigram::from_bytes(b'f', b'n', b' ')));
 
         assert!(!fp_upper.contains_key(&Trigram::from_bytes(b'F', b'N', b' ')));
+    }
+
+    #[test]
+    fn test_file_only_finalize_dedup_without_sort() {
+        let mut builder = PostingListBuilder::file_only();
+        // Add three files — trigrams from file 0, 1, 2 in order
+        builder.add_file(FileId(0), b"fn main() {}");
+        builder.add_file(FileId(1), b"fn main() { let x = 1; }");
+        builder.add_file(FileId(2), b"fn parse() {}");
+        builder.finalize();
+
+        // "fn " trigram should appear in all three files, sorted and deduped
+        let trigram_fn = crate::trigram::extract_unique_trigrams_folded(b"fn ");
+        for tri in &trigram_fn {
+            if let Some(ids) = builder.file_postings().get(tri) {
+                // Must be sorted and deduped
+                for window in ids.windows(2) {
+                    assert!(window[0] <= window[1], "posting list not sorted: {:?}", ids);
+                }
+                // No duplicates
+                let mut deduped = ids.clone();
+                deduped.dedup();
+                assert_eq!(ids, &deduped, "posting list has duplicates");
+            }
+        }
+    }
+
+    #[test]
+    fn test_file_only_with_capacity() {
+        let mut builder = PostingListBuilder::file_only_with_capacity(1024);
+        assert!(!builder.stores_positions());
+        builder.add_file(FileId(0), b"fn main() {}");
+        builder.finalize();
+        assert!(builder.trigram_count() > 0);
     }
 
     #[test]
