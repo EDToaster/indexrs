@@ -376,7 +376,7 @@ mark {
 }
 
 .pagination .current {
-    background: var(--accent);
+    background: linear-gradient(135deg, var(--accent), var(--accent-hover));
     color: #fff;
     border-color: var(--accent);
     font-weight: 600;
@@ -422,6 +422,7 @@ mark {
     background: rgba(5, 150, 105, 0.1);
     color: var(--success);
     border: 1px solid rgba(5, 150, 105, 0.2);
+    animation: pulse 2s ease-in-out infinite;
 }
 
 .badge--error {
@@ -604,6 +605,11 @@ mark {
 }
 
 /* Loading skeleton */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
 @keyframes shimmer {
     0%   { background-position: -200% 0; }
     100% { background-position: 200% 0; }
@@ -1364,7 +1370,7 @@ mark {
 }
 
 .mode-btn--active {
-    background: var(--accent);
+    background: linear-gradient(135deg, var(--accent), var(--accent-hover));
     color: #fff;
     border-color: var(--accent);
 }
