@@ -4,6 +4,7 @@
 //! classes, traits, enums, etc.) and returns them as [`SymbolEntry`] values.
 //! This module is gated behind the `symbols` cargo feature.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -147,6 +148,29 @@ fn compiled_queries() -> &'static HashMap<Language, tree_sitter::Query> {
     })
 }
 
+thread_local! {
+    static PARSER_CACHE: RefCell<HashMap<Language, tree_sitter::Parser>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Parse content using a thread-local cached parser for the given language.
+fn parse_with_cached_parser(
+    content: &[u8],
+    language: Language,
+    ts_lang: &tree_sitter::Language,
+) -> Option<tree_sitter::Tree> {
+    PARSER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let parser = cache.entry(language).or_insert_with(|| {
+            let mut p = tree_sitter::Parser::new();
+            let _ = p.set_language(ts_lang);
+            p
+        });
+        let _ = parser.set_language(ts_lang);
+        parser.parse(content, None)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -194,13 +218,7 @@ pub fn extract_symbols(file_id: FileId, content: &[u8], language: Language) -> V
         None => return Vec::new(),
     };
 
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&ts_lang).is_err() {
-        tracing::warn!("failed to set tree-sitter language for {:?}", language);
-        return Vec::new();
-    }
-
-    let tree = match parser.parse(content, None) {
+    let tree = match parse_with_cached_parser(content, language, &ts_lang) {
         Some(t) => t,
         None => return Vec::new(),
     };
@@ -706,5 +724,30 @@ struct Good { x: i32 }
             assert_eq!(a.kind, b.kind);
             assert_eq!(a.line, b.line);
         }
+    }
+
+    #[test]
+    fn test_parser_reuse_across_languages() {
+        // Extract from multiple languages in sequence to exercise parser reuse.
+        let rust_src = b"fn hello() {}";
+        let py_src = b"def world():\n    pass\n";
+        let go_src = b"package main\nfunc foo() {}\n";
+
+        let r = extract_symbols(FileId(0), rust_src, Language::Rust);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].name, "hello");
+
+        let p = extract_symbols(FileId(1), py_src, Language::Python);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].name, "world");
+
+        let g = extract_symbols(FileId(2), go_src, Language::Go);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].name, "foo");
+
+        // Back to Rust — parser must switch back correctly
+        let r2 = extract_symbols(FileId(3), b"struct Bar;", Language::Rust);
+        assert_eq!(r2.len(), 1);
+        assert_eq!(r2[0].name, "Bar");
     }
 }
