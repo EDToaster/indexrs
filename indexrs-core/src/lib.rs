@@ -7,6 +7,8 @@ pub mod content;
 pub mod disk;
 pub mod error;
 pub mod git_diff;
+#[cfg(feature = "symbols")]
+pub mod grammar;
 pub mod hash_diff;
 pub mod hybrid_detector;
 pub mod index_reader;
