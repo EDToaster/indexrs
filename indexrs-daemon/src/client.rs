@@ -40,9 +40,17 @@ pub fn spawn_daemon_process(
     }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(IndexError::Io)?;
+        .stderr(std::process::Stdio::null());
+
+    // Detach from the parent's process group so terminal signals
+    // (e.g. Ctrl+C SIGINT) sent to the web server don't kill the daemon.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    cmd.spawn().map_err(IndexError::Io)?;
     Ok(())
 }
 
