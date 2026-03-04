@@ -114,7 +114,20 @@
             {% if !repo.languages.is_empty() %}
             <div class="repo-card-langs">
                 {% for lang in &repo.languages %}
-                <span class="lang-chip">{{ lang.0 }} <span class="lang-chip-count">{{ lang.1 }}</span></span>
+                <span class="lang-chip-wrap">
+                    <span class="lang-chip">{{ lang.name }} <span class="lang-chip-count">{{ lang.count }}</span></span>
+                    {% if !lang.extensions.is_empty() %}
+                    <span class="lang-tooltip" role="tooltip">
+                        <span class="lang-tooltip-header">{{ lang.name }}</span>
+                        {% for ext in &lang.extensions %}
+                        <span class="lang-tooltip-row">
+                            <span class="lang-tooltip-ext">{% if ext.0.is_empty() %}(no ext){% else %}.{{ ext.0 }}{% endif %}</span>
+                            <span class="lang-tooltip-count">{{ ext.1 }}</span>
+                        </span>
+                        {% endfor %}
+                    </span>
+                    {% endif %}
+                </span>
                 {% endfor %}
             </div>
             {% endif %}

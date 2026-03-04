@@ -896,6 +896,10 @@ async fn handle_connection(
                 let mut last_mtime: u64 = 0;
                 let mut lang_counts: std::collections::HashMap<String, usize> =
                     std::collections::HashMap::new();
+                let mut ext_counts: std::collections::HashMap<
+                    String,
+                    std::collections::HashMap<String, usize>,
+                > = std::collections::HashMap::new();
 
                 let mut agg_content_bytes: u64 = 0;
                 let mut agg_trigrams_bytes: u64 = 0;
@@ -919,7 +923,18 @@ async fn handle_connection(
                         if entry.mtime_epoch_secs > last_mtime {
                             last_mtime = entry.mtime_epoch_secs;
                         }
-                        *lang_counts.entry(entry.language.to_string()).or_insert(0) += 1;
+                        let lang_name = entry.language.to_string();
+                        *lang_counts.entry(lang_name.clone()).or_insert(0) += 1;
+                        let ext = std::path::Path::new(&entry.path)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        *ext_counts
+                            .entry(lang_name)
+                            .or_default()
+                            .entry(ext)
+                            .or_insert(0) += 1;
                     }
 
                     // Per-segment file sizes
@@ -952,6 +967,18 @@ async fn handle_connection(
                 languages.sort_by(|a, b| b.1.cmp(&a.1));
                 languages.truncate(10);
 
+                // Build per-language extension breakdown (only for top 10 languages).
+                let language_extensions: Vec<(String, Vec<(String, usize)>)> = languages
+                    .iter()
+                    .filter_map(|(lang, _)| {
+                        ext_counts.remove(lang).map(|exts| {
+                            let mut ext_vec: Vec<(String, usize)> = exts.into_iter().collect();
+                            ext_vec.sort_by(|a, b| b.1.cmp(&a.1));
+                            (lang.clone(), ext_vec)
+                        })
+                    })
+                    .collect();
+
                 let tombstone_ratio = if total_entries == 0 {
                     0.0
                 } else {
@@ -982,6 +1009,7 @@ async fn handle_connection(
                     trigrams_bytes: agg_trigrams_bytes,
                     meta_paths_bytes: agg_meta_paths_bytes,
                     segment_details,
+                    language_extensions,
                 };
                 let payload = serde_json::to_string(&resp)
                     .map_err(|e| IndexError::Io(std::io::Error::other(e)))?;

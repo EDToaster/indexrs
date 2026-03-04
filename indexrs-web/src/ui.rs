@@ -77,6 +77,13 @@ pub struct SegmentDetailItem {
     pub meta_paths_bytes: String,
 }
 
+/// Language info with per-extension breakdown for tooltips.
+pub struct LanguageInfo {
+    pub name: String,
+    pub count: usize,
+    pub extensions: Vec<(String, usize)>,
+}
+
 /// A repo entry for the repos overview page.
 pub struct RepoOverviewItem {
     pub name: String,
@@ -87,7 +94,7 @@ pub struct RepoOverviewItem {
     pub online: bool,
     pub index_bytes: String,
     pub last_indexed: String,
-    pub languages: Vec<(String, usize)>,
+    pub languages: Vec<LanguageInfo>,
     pub tombstone_ratio: f32,
     pub tombstone_pct: String,
     pub needs_compaction: bool,
@@ -481,7 +488,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             segments,
             index_bytes,
             last_indexed_ts,
-            languages,
+            raw_languages,
             tombstone_ratio,
             path_valid,
             tombstoned_count,
@@ -489,6 +496,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
             trigrams_bytes_raw,
             meta_paths_bytes_raw,
             segment_details_raw,
+            lang_extensions,
         ) = match sr_opt {
             Some(sr) => (
                 sr.status.clone(),
@@ -504,6 +512,7 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                 sr.trigrams_bytes,
                 sr.meta_paths_bytes,
                 sr.segment_details,
+                sr.language_extensions,
             ),
             None => (
                 "offline".to_string(),
@@ -519,8 +528,24 @@ pub async fn repos_page(State(state): State<AppState>) -> Response {
                 0,
                 0,
                 vec![],
+                vec![],
             ),
         };
+
+        // Build LanguageInfo with extension breakdown.
+        let ext_map: std::collections::HashMap<String, Vec<(String, usize)>> =
+            lang_extensions.into_iter().collect();
+        let languages: Vec<LanguageInfo> = raw_languages
+            .into_iter()
+            .map(|(name, count)| {
+                let extensions = ext_map.get(&name).cloned().unwrap_or_default();
+                LanguageInfo {
+                    name,
+                    count,
+                    extensions,
+                }
+            })
+            .collect();
 
         let total_breakdown = content_bytes_raw + trigrams_bytes_raw + meta_paths_bytes_raw;
         let (content_pct, trigrams_pct, meta_pct) = if total_breakdown > 0 {

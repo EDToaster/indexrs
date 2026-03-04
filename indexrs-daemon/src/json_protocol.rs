@@ -80,6 +80,9 @@ pub struct StatusResponse {
     /// Per-segment breakdown.
     #[serde(default)]
     pub segment_details: Vec<SegmentInfo>,
+    /// Per-language file extension breakdown: vec of (language_name, vec of (extension, count)).
+    #[serde(default)]
+    pub language_extensions: Vec<(String, Vec<(String, usize)>)>,
 }
 
 fn default_true() -> bool {
@@ -198,6 +201,13 @@ mod tests {
             trigrams_bytes: 1500,
             meta_paths_bytes: 500,
             segment_details: vec![],
+            language_extensions: vec![
+                ("Rust".to_string(), vec![("rs".to_string(), 100)]),
+                (
+                    "Python".to_string(),
+                    vec![("py".to_string(), 45), ("pyi".to_string(), 5)],
+                ),
+            ],
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains(r#""status":"ready"#));
