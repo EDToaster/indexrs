@@ -979,6 +979,8 @@ async fn handle_connection(
                 let mut agg_content_bytes: u64 = 0;
                 let mut agg_trigrams_bytes: u64 = 0;
                 let mut agg_meta_paths_bytes: u64 = 0;
+                let mut agg_tombstones_bytes: u64 = 0;
+                let mut agg_symbols_bytes: u64 = 0;
                 let mut segment_details = Vec::with_capacity(snapshot.len());
 
                 for seg in snapshot.iter() {
@@ -1019,10 +1021,14 @@ async fn handle_connection(
                     let paths_b = file_size(&seg_dir.join("paths.bin"));
                     let content_b = file_size(&seg_dir.join("content.zst"));
                     let tombstones_b = file_size(&seg_dir.join("tombstones.bin"));
+                    let symbols_b = file_size(&seg_dir.join("symbols.bin"));
+                    let sym_trigrams_b = file_size(&seg_dir.join("sym_trigrams.bin"));
 
                     agg_trigrams_bytes += trigrams_b;
                     agg_meta_paths_bytes += meta_b + paths_b;
                     agg_content_bytes += content_b;
+                    agg_tombstones_bytes += tombstones_b;
+                    agg_symbols_bytes += symbols_b + sym_trigrams_b;
 
                     segment_details.push(indexrs_daemon::SegmentInfo {
                         id: seg.segment_id().0,
@@ -1032,6 +1038,8 @@ async fn handle_connection(
                         meta_paths_bytes: meta_b + paths_b,
                         content_bytes: content_b,
                         tombstones_bytes: tombstones_b,
+                        symbols_bytes: symbols_b,
+                        sym_trigrams_bytes: sym_trigrams_b,
                     });
                 }
 
@@ -1083,6 +1091,8 @@ async fn handle_connection(
                     content_bytes: agg_content_bytes,
                     trigrams_bytes: agg_trigrams_bytes,
                     meta_paths_bytes: agg_meta_paths_bytes,
+                    tombstones_bytes: agg_tombstones_bytes,
+                    symbols_bytes: agg_symbols_bytes,
                     segment_details,
                     language_extensions,
                 };
