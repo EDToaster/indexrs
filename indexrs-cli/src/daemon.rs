@@ -15,7 +15,8 @@ use indexrs_core::search::MatchPattern;
 use indexrs_core::types::FileId;
 
 use indexrs_daemon::json_protocol::{
-    FileResponse, HealthResponse, JsonSearchFrame, SearchStats, StatusResponse,
+    FileResponse, HealthResponse, JsonSearchFrame, JsonSymbolsFrame, SearchStats, StatusResponse,
+    SymbolsStats,
 };
 pub use indexrs_daemon::{DaemonRequest, DaemonResponse};
 
@@ -392,6 +393,88 @@ fn handle_symbols_request(
     _color: bool,
     _path_rewriter: &PathRewriter,
 ) -> Result<(Vec<String>, Duration), String> {
+    Err(
+        "symbol search requires the 'symbols' feature (rebuild with --features symbols)"
+            .to_string(),
+    )
+}
+
+/// Execute a structured JSON symbol search against the loaded index.
+#[cfg(feature = "symbols")]
+fn handle_json_symbols_request(
+    manager: &SegmentManager,
+    query: Option<String>,
+    kind: Option<String>,
+    language: Option<String>,
+    path_filter: Option<String>,
+    max_results: Option<usize>,
+    offset: Option<usize>,
+) -> Result<
+    (
+        Vec<indexrs_core::symbol_index::SymbolMatch>,
+        std::time::Duration,
+    ),
+    String,
+> {
+    use indexrs_core::symbol_index::{SymbolSearchOptions, search_symbols};
+    use indexrs_core::types::SymbolKind;
+
+    let start = std::time::Instant::now();
+
+    let query_str = query.unwrap_or_default();
+
+    // Allow empty query when path_filter is set (for file outline mode).
+    if query_str.is_empty() && path_filter.is_none() {
+        return Err("symbol search requires 'query' or 'path_filter'".to_string());
+    }
+
+    let kind_filter = match kind {
+        Some(ref k) => match SymbolKind::from_str_loose(k) {
+            Some(sk) => Some(sk),
+            None => return Err(format!("unknown symbol kind: \"{k}\"")),
+        },
+        None => None,
+    };
+
+    let language_filter = match language {
+        Some(ref lang_str) => match indexrs_core::match_language(lang_str) {
+            Ok(lang) => Some(lang),
+            Err(_) => return Err(format!("unknown language: \"{lang_str}\"")),
+        },
+        None => None,
+    };
+
+    let options = SymbolSearchOptions {
+        kind: kind_filter,
+        language: language_filter,
+        path_filter,
+        max_results: max_results.unwrap_or(100).min(500),
+        offset: offset.unwrap_or(0),
+    };
+
+    let snapshot = manager.snapshot();
+    let matches = search_symbols(&snapshot, &query_str, &options).map_err(|e| e.to_string())?;
+
+    Ok((matches, start.elapsed()))
+}
+
+/// Fallback when the `symbols` feature is not enabled.
+#[cfg(not(feature = "symbols"))]
+fn handle_json_symbols_request(
+    _manager: &SegmentManager,
+    _query: Option<String>,
+    _kind: Option<String>,
+    _language: Option<String>,
+    _path_filter: Option<String>,
+    _max_results: Option<usize>,
+    _offset: Option<usize>,
+) -> Result<
+    (
+        Vec<indexrs_daemon::SymbolMatchResponse>,
+        std::time::Duration,
+    ),
+    String,
+> {
     Err(
         "symbol search requires the 'symbols' feature (rebuild with --features symbols)"
             .to_string(),
@@ -1186,16 +1269,67 @@ async fn handle_connection(
                     }
                 }
             }
-            DaemonRequest::JsonSymbols { .. } => {
-                // TODO(task-5): implement structured JSON symbol search handler.
-                wire::write_response(
-                    &mut writer,
-                    &DaemonResponse::Error {
-                        message: "JsonSymbols not yet implemented".to_string(),
-                    },
-                )
-                .await
-                .map_err(IndexError::Io)?;
+            DaemonRequest::JsonSymbols {
+                query,
+                kind,
+                language,
+                path_filter,
+                max_results,
+                offset,
+            } => {
+                let stale = !caught_up.load(Ordering::Relaxed);
+                match handle_json_symbols_request(
+                    manager,
+                    query,
+                    kind,
+                    language,
+                    path_filter,
+                    max_results,
+                    offset,
+                ) {
+                    Ok((matches, elapsed)) => {
+                        let total = matches.len();
+                        for m in matches {
+                            let frame = JsonSymbolsFrame::Symbol(m.into());
+                            let payload = serde_json::to_string(&frame).unwrap();
+                            wire::write_response(&mut writer, &DaemonResponse::Json { payload })
+                                .await
+                                .map_err(IndexError::Io)?;
+                        }
+                        // Send stats frame.
+                        let stats_frame = JsonSymbolsFrame::Stats {
+                            stats: SymbolsStats {
+                                total,
+                                duration_ms: elapsed.as_millis() as u64,
+                            },
+                        };
+                        let stats_payload = serde_json::to_string(&stats_frame).unwrap();
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Json {
+                                payload: stats_payload,
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
+
+                        wire::write_response(
+                            &mut writer,
+                            &DaemonResponse::Done {
+                                total,
+                                duration_ms: elapsed.as_millis() as u64,
+                                stale,
+                            },
+                        )
+                        .await
+                        .map_err(IndexError::Io)?;
+                    }
+                    Err(msg) => {
+                        wire::write_response(&mut writer, &DaemonResponse::Error { message: msg })
+                            .await
+                            .map_err(IndexError::Io)?;
+                    }
+                }
             }
             DaemonRequest::Reindex => {
                 let start = Instant::now();
