@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "devDependencies": {
+    "stylelint": "^17.4.0",
+    "stylelint-config-standard": "^40.0.0"
+  },
+  "scripts": {
+    "lint:css": "stylelint 'indexrs-web/static/**/*.css'"
+  }
+}

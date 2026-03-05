@@ -1,0 +1,18 @@
+{
+  "extends": "stylelint-config-standard",
+  "rules": {
+    "no-descending-specificity": null,
+    "selector-class-pattern": null,
+    "custom-property-pattern": null,
+    "custom-property-empty-line-before": null,
+    "value-keyword-case": ["lower", {
+      "ignoreFunctions": ["url"],
+      "camelCaseSvgKeywords": true,
+      "ignoreProperties": ["--font-sans", "--font-mono", "font-family"]
+    }],
+    "property-no-vendor-prefix": [true, {
+      "ignoreProperties": ["-webkit-backdrop-filter"]
+    }],
+    "declaration-block-single-line-max-declarations": null
+  }
+}

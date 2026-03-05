@@ -63,3 +63,20 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+
+  lint-web:
+    name: Lint Web (CSS + Templates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: pip install djlint
+      - run: npx stylelint 'indexrs-web/static/**/*.css'
+      - run: djlint indexrs-web/templates/ --lint

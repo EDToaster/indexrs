@@ -3,3 +3,4 @@
 **/.playwright-mcp/
 **/.indexrs/
 **/.worktrees/
+node_modules/

@@ -4,7 +4,7 @@
 :root {
     --bg: #fafaf9;
     --bg-secondary: #f0efed;
-    --bg-elevated: #ffffff;
+    --bg-elevated: #fff;
     --fg: #1c1917;
     --fg-dim: #78716c;
     --fg-muted: #a8a29e;
@@ -15,24 +15,24 @@
     --border-subtle: #f0efed;
     --accent: #0d9488;
     --accent-hover: #0f766e;
-    --accent-glow: rgba(13, 148, 136, 0.12);
+    --accent-glow: rgb(13 148 136 / 12%);
     --danger: #dc2626;
     --success: #059669;
     --code-bg: #fafaf9;
     --line-number-fg: #a8a29e;
     --line-number-bg: #f5f5f4;
-    --selection-bg: rgba(13, 148, 136, 0.08);
+    --selection-bg: rgb(13 148 136 / 8%);
 
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
     --radius: 6px;
     --radius-lg: 10px;
-    --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.04);
-    --shadow: 0 1px 3px rgba(28, 25, 23, 0.06), 0 1px 2px rgba(28, 25, 23, 0.04);
-    --shadow-lg: 0 4px 12px rgba(28, 25, 23, 0.08);
+    --shadow-sm: 0 1px 2px rgb(28 25 23 / 4%);
+    --shadow: 0 1px 3px rgb(28 25 23 / 6%), 0 1px 2px rgb(28 25 23 / 4%);
+    --shadow-lg: 0 4px 12px rgb(28 25 23 / 8%);
     --transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
     --header-height: 42px;
-    --bar-stripe: rgba(255, 255, 255, 0.18);
+    --bar-stripe: rgb(255 255 255 / 18%);
     --color-trigrams: #f59e0b;
     --color-meta: #8b5cf6;
     --color-tombstones: #ef4444;
@@ -54,18 +54,18 @@
     --border-subtle: #1c1917;
     --accent: #2dd4bf;
     --accent-hover: #5eead4;
-    --accent-glow: rgba(45, 212, 191, 0.1);
+    --accent-glow: rgb(45 212 191 / 10%);
     --danger: #f87171;
     --success: #34d399;
     --code-bg: #0c0a09;
     --line-number-fg: #57534e;
     --line-number-bg: #151311;
-    --selection-bg: rgba(45, 212, 191, 0.08);
+    --selection-bg: rgb(45 212 191 / 8%);
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.4);
-    --bar-stripe: rgba(0, 0, 0, 0.15);
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 20%);
+    --shadow: 0 1px 3px rgb(0 0 0 / 30%);
+    --shadow-lg: 0 4px 12px rgb(0 0 0 / 40%);
+    --bar-stripe: rgb(0 0 0 / 15%);
     --color-trigrams: #fbbf24;
     --color-meta: #a78bfa;
     --color-tombstones: #f87171;
@@ -414,21 +414,21 @@ mark {
 }
 
 .badge--ok {
-    background: rgba(5, 150, 105, 0.1);
+    background: rgb(5 150 105 / 10%);
     color: var(--success);
-    border: 1px solid rgba(5, 150, 105, 0.2);
+    border: 1px solid rgb(5 150 105 / 20%);
 }
 
 .badge--error {
-    background: rgba(220, 38, 38, 0.1);
+    background: rgb(220 38 38 / 10%);
     color: var(--danger);
-    border: 1px solid rgba(220, 38, 38, 0.2);
+    border: 1px solid rgb(220 38 38 / 20%);
 }
 
 .badge--warning {
-    background: rgba(217, 119, 6, 0.1);
+    background: rgb(217 119 6 / 10%);
     color: #d97706;
-    border: 1px solid rgba(217, 119, 6, 0.2);
+    border: 1px solid rgb(217 119 6 / 20%);
 }
 
 .badge--link {
@@ -446,16 +446,18 @@ mark {
 }
 
 [data-theme="dark"] .badge--ok {
-    background: rgba(52, 211, 153, 0.1);
-    border-color: rgba(52, 211, 153, 0.2);
+    background: rgb(52 211 153 / 10%);
+    border-color: rgb(52 211 153 / 20%);
 }
+
 [data-theme="dark"] .badge--error {
-    background: rgba(248, 113, 113, 0.1);
-    border-color: rgba(248, 113, 113, 0.2);
+    background: rgb(248 113 113 / 10%);
+    border-color: rgb(248 113 113 / 20%);
 }
+
 [data-theme="dark"] .badge--warning {
-    background: rgba(251, 191, 36, 0.1);
-    border-color: rgba(251, 191, 36, 0.2);
+    background: rgb(251 191 36 / 10%);
+    border-color: rgb(251 191 36 / 20%);
     color: #fbbf24;
 }
 
@@ -497,7 +499,7 @@ mark {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgb(0 0 0 / 40%);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     z-index: 100;
@@ -692,12 +694,12 @@ mark {
     border-radius: 999px;
     background: var(--accent-glow);
     color: var(--accent);
-    border: 1px solid rgba(13, 148, 136, 0.15);
+    border: 1px solid rgb(13 148 136 / 15%);
     font-variant-numeric: tabular-nums;
 }
 
 [data-theme="dark"] .repos-count {
-    border-color: rgba(45, 212, 191, 0.15);
+    border-color: rgb(45 212 191 / 15%);
 }
 
 .repo-card {
@@ -737,20 +739,20 @@ mark {
     border-radius: 50%;
     background: var(--success);
     flex-shrink: 0;
-    box-shadow: 0 0 4px rgba(5, 150, 105, 0.35);
+    box-shadow: 0 0 4px rgb(5 150 105 / 35%);
 }
 
 .status-dot--offline {
     background: var(--danger);
-    box-shadow: 0 0 4px rgba(220, 38, 38, 0.35);
+    box-shadow: 0 0 4px rgb(220 38 38 / 35%);
 }
 
 [data-theme="dark"] .status-dot {
-    box-shadow: 0 0 4px rgba(52, 211, 153, 0.4);
+    box-shadow: 0 0 4px rgb(52 211 153 / 40%);
 }
 
 [data-theme="dark"] .status-dot--offline {
-    box-shadow: 0 0 4px rgba(248, 113, 113, 0.4);
+    box-shadow: 0 0 4px rgb(248 113 113 / 40%);
 }
 
 .repo-card-name {
@@ -1307,20 +1309,20 @@ mark {
     border: 1px solid var(--border);
 }
 
-.symbol-kind--fn, .symbol-kind--method { color: #2563eb; border-color: #93c5fd; background: rgba(37, 99, 235, 0.08); }
-.symbol-kind--struct, .symbol-kind--class { color: #059669; border-color: #6ee7b7; background: rgba(5, 150, 105, 0.08); }
-.symbol-kind--trait, .symbol-kind--interface { color: #7c3aed; border-color: #c4b5fd; background: rgba(124, 58, 237, 0.08); }
-.symbol-kind--enum { color: #d97706; border-color: #fcd34d; background: rgba(217, 119, 6, 0.08); }
-.symbol-kind--const { color: #dc2626; border-color: #fca5a5; background: rgba(220, 38, 38, 0.08); }
+.symbol-kind--fn, .symbol-kind--method { color: #2563eb; border-color: #93c5fd; background: rgb(37 99 235 / 8%); }
+.symbol-kind--struct, .symbol-kind--class { color: #059669; border-color: #6ee7b7; background: rgb(5 150 105 / 8%); }
+.symbol-kind--trait, .symbol-kind--interface { color: #7c3aed; border-color: #c4b5fd; background: rgb(124 58 237 / 8%); }
+.symbol-kind--enum { color: #d97706; border-color: #fcd34d; background: rgb(217 119 6 / 8%); }
+.symbol-kind--const { color: #dc2626; border-color: #fca5a5; background: rgb(220 38 38 / 8%); }
 .symbol-kind--var, .symbol-kind--mod { color: #78716c; }
-.symbol-kind--type { color: #0891b2; border-color: #67e8f9; background: rgba(8, 145, 178, 0.08); }
+.symbol-kind--type { color: #0891b2; border-color: #67e8f9; background: rgb(8 145 178 / 8%); }
 
-[data-theme="dark"] .symbol-kind--fn, [data-theme="dark"] .symbol-kind--method { color: #60a5fa; border-color: #1e40af; background: rgba(96, 165, 250, 0.1); }
-[data-theme="dark"] .symbol-kind--struct, [data-theme="dark"] .symbol-kind--class { color: #34d399; border-color: #065f46; background: rgba(52, 211, 153, 0.1); }
-[data-theme="dark"] .symbol-kind--trait, [data-theme="dark"] .symbol-kind--interface { color: #a78bfa; border-color: #5b21b6; background: rgba(167, 139, 250, 0.1); }
-[data-theme="dark"] .symbol-kind--enum { color: #fbbf24; border-color: #92400e; background: rgba(251, 191, 36, 0.1); }
-[data-theme="dark"] .symbol-kind--const { color: #f87171; border-color: #991b1b; background: rgba(248, 113, 113, 0.1); }
-[data-theme="dark"] .symbol-kind--type { color: #22d3ee; border-color: #155e75; background: rgba(34, 211, 238, 0.1); }
+[data-theme="dark"] .symbol-kind--fn, [data-theme="dark"] .symbol-kind--method { color: #60a5fa; border-color: #1e40af; background: rgb(96 165 250 / 10%); }
+[data-theme="dark"] .symbol-kind--struct, [data-theme="dark"] .symbol-kind--class { color: #34d399; border-color: #065f46; background: rgb(52 211 153 / 10%); }
+[data-theme="dark"] .symbol-kind--trait, [data-theme="dark"] .symbol-kind--interface { color: #a78bfa; border-color: #5b21b6; background: rgb(167 139 250 / 10%); }
+[data-theme="dark"] .symbol-kind--enum { color: #fbbf24; border-color: #92400e; background: rgb(251 191 36 / 10%); }
+[data-theme="dark"] .symbol-kind--const { color: #f87171; border-color: #991b1b; background: rgb(248 113 113 / 10%); }
+[data-theme="dark"] .symbol-kind--type { color: #22d3ee; border-color: #155e75; background: rgb(34 211 238 / 10%); }
 
 .symbol-name {
     font-weight: 700;
@@ -1391,7 +1393,7 @@ mark {
     border-radius: 999px;
     background: var(--accent-glow);
     color: var(--accent);
-    border: 1px solid rgba(13, 148, 136, 0.15);
+    border: 1px solid rgb(13 148 136 / 15%);
     font-variant-numeric: tabular-nums;
 }
 
@@ -1478,7 +1480,7 @@ mark {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgb(0 0 0 / 50%);
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     z-index: 200;
