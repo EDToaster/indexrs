@@ -141,11 +141,19 @@ ferret web --port 8080  # custom port
 
 ![Search results](resources/web-search-results.png)
 
-**File preview** — click any result to view the full file with line numbers and language detection:
+**Symbol search** — toggle to Symbols mode to find functions, structs, traits, and enums across your codebase, color-coded by kind:
+
+![Symbol search](resources/web-symbol-search.png)
+
+**File preview** — click any result to view the full file with a collapsible symbol outline panel for quick navigation:
 
 ![File preview](resources/web-file-preview.png)
 
-**Keyboard-driven** — navigate entirely from the keyboard (`/` to focus, `j`/`k` to move, `Enter` to open, `?` for help):
+**Repository dashboard** — see all registered repos at a glance with file counts, index size breakdown, segment details, and per-language file distribution:
+
+![Repositories](resources/web-repos.png)
+
+**Keyboard-driven** — navigate entirely from the keyboard (`/` to focus, `j`/`k` to move, `Enter` to open, `@` for quick-open, `?` for help):
 
 ![Keyboard shortcuts](resources/web-keyboard-shortcuts.png)
 
