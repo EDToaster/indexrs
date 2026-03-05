@@ -1379,20 +1379,13 @@ mark {
     border: 1px solid var(--border);
 }
 
-.symbol-kind--fn, .symbol-kind--method { color: #2563eb; border-color: #93c5fd; background: rgb(37 99 235 / 8%); }
-.symbol-kind--struct, .symbol-kind--class { color: #059669; border-color: #6ee7b7; background: rgb(5 150 105 / 8%); }
-.symbol-kind--trait, .symbol-kind--interface { color: #7c3aed; border-color: #c4b5fd; background: rgb(124 58 237 / 8%); }
-.symbol-kind--enum { color: #d97706; border-color: #fcd34d; background: rgb(217 119 6 / 8%); }
-.symbol-kind--const { color: #dc2626; border-color: #fca5a5; background: rgb(220 38 38 / 8%); }
-.symbol-kind--var, .symbol-kind--mod { color: #78716c; }
-.symbol-kind--type { color: #0891b2; border-color: #67e8f9; background: rgb(8 145 178 / 8%); }
-
-[data-theme="dark"] .symbol-kind--fn, [data-theme="dark"] .symbol-kind--method { color: #60a5fa; border-color: #1e40af; background: rgb(96 165 250 / 10%); }
-[data-theme="dark"] .symbol-kind--struct, [data-theme="dark"] .symbol-kind--class { color: #34d399; border-color: #065f46; background: rgb(52 211 153 / 10%); }
-[data-theme="dark"] .symbol-kind--trait, [data-theme="dark"] .symbol-kind--interface { color: #a78bfa; border-color: #5b21b6; background: rgb(167 139 250 / 10%); }
-[data-theme="dark"] .symbol-kind--enum { color: #fbbf24; border-color: #92400e; background: rgb(251 191 36 / 10%); }
-[data-theme="dark"] .symbol-kind--const { color: #f87171; border-color: #991b1b; background: rgb(248 113 113 / 10%); }
-[data-theme="dark"] .symbol-kind--type { color: #22d3ee; border-color: #155e75; background: rgb(34 211 238 / 10%); }
+.symbol-kind--fn, .symbol-kind--method { color: var(--tok-function); border-color: color-mix(in srgb, var(--tok-function) 40%, transparent); background: color-mix(in srgb, var(--tok-function) 8%, transparent); }
+.symbol-kind--struct, .symbol-kind--class { color: var(--tok-type); border-color: color-mix(in srgb, var(--tok-type) 40%, transparent); background: color-mix(in srgb, var(--tok-type) 8%, transparent); }
+.symbol-kind--trait, .symbol-kind--interface { color: var(--tok-macro); border-color: color-mix(in srgb, var(--tok-macro) 40%, transparent); background: color-mix(in srgb, var(--tok-macro) 8%, transparent); }
+.symbol-kind--enum { color: var(--tok-number); border-color: color-mix(in srgb, var(--tok-number) 40%, transparent); background: color-mix(in srgb, var(--tok-number) 8%, transparent); }
+.symbol-kind--const { color: var(--tok-constant); border-color: color-mix(in srgb, var(--tok-constant) 40%, transparent); background: color-mix(in srgb, var(--tok-constant) 8%, transparent); }
+.symbol-kind--var, .symbol-kind--mod { color: var(--tok-module); }
+.symbol-kind--type { color: var(--tok-type); border-color: color-mix(in srgb, var(--tok-type) 40%, transparent); background: color-mix(in srgb, var(--tok-type) 8%, transparent); }
 
 .symbol-name {
     font-weight: 700;
