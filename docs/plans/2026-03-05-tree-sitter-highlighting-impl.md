@@ -1,6 +1,6 @@
 # Tree-sitter Highlighting Migration — Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan. Dispatch one subagent per task, review between tasks.
 
 **Goal:** Replace syntect with tree-sitter for syntax highlighting, sharing a single parse with symbol extraction.
 
