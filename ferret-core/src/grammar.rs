@@ -4,45 +4,102 @@
 //! symbol extraction for supported languages. This module is gated behind the
 //! `symbols` cargo feature.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use crate::types::Language;
 
-/// Returns the tree-sitter [`Language`](tree_sitter::Language) for a given
-/// [`Language`] variant, or `None` if the language is not supported for symbol
-/// extraction.
-///
-/// # Supported languages
-///
-/// | Language variant  | Grammar crate             |
-/// |-------------------|---------------------------|
-/// | Rust              | `tree-sitter-rust`        |
-/// | Python            | `tree-sitter-python`      |
-/// | TypeScript        | `tree-sitter-typescript`  |
-/// | JavaScript        | `tree-sitter-typescript`  |
-/// | Go                | `tree-sitter-go`          |
-/// | C                 | `tree-sitter-c`           |
-/// | Cpp               | `tree-sitter-c`           |
-/// | Ruby              | `tree-sitter-ruby`        |
-/// | Java              | `tree-sitter-java`        |
-///
-/// JavaScript reuses the TypeScript grammar (TSX), and C++ reuses the C grammar.
-pub fn tree_sitter_language(lang: Language) -> Option<tree_sitter::Language> {
-    match lang {
-        Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
-        Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
-        Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
-        Language::JavaScript => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
-        Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
-        Language::C | Language::Cpp => Some(tree_sitter_c::LANGUAGE.into()),
-        Language::Ruby => Some(tree_sitter_ruby::LANGUAGE.into()),
-        Language::Java => Some(tree_sitter_java::LANGUAGE.into()),
-        _ => None,
-    }
+/// Unified per-language tree-sitter config: grammar + highlight query + symbol query.
+pub struct LanguageConfig {
+    pub ts_language: tree_sitter::Language,
+    pub highlight_query: tree_sitter::Query,
+    pub symbol_query: Option<tree_sitter::Query>,
 }
 
-/// Returns `true` if the given language has tree-sitter grammar support for
-/// symbol extraction.
-pub fn supports_symbols(lang: Language) -> bool {
-    tree_sitter_language(lang).is_some()
+/// Get the cached `LanguageConfig` for a given language, or `None` if unsupported.
+pub fn language_config(lang: Language) -> Option<&'static LanguageConfig> {
+    static CACHE: OnceLock<HashMap<Language, LanguageConfig>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let entries: Vec<(Language, tree_sitter::Language, &str, Option<&str>)> = vec![
+                (
+                    Language::Rust,
+                    tree_sitter_rust::LANGUAGE.into(),
+                    tree_sitter_rust::HIGHLIGHTS_QUERY,
+                    Some(super::symbol_extractor::RUST_QUERY),
+                ),
+                (
+                    Language::Python,
+                    tree_sitter_python::LANGUAGE.into(),
+                    tree_sitter_python::HIGHLIGHTS_QUERY,
+                    Some(super::symbol_extractor::PYTHON_QUERY),
+                ),
+                (
+                    Language::TypeScript,
+                    tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+                    tree_sitter_typescript::HIGHLIGHTS_QUERY,
+                    Some(super::symbol_extractor::TYPESCRIPT_QUERY),
+                ),
+                (
+                    Language::JavaScript,
+                    tree_sitter_typescript::LANGUAGE_TSX.into(),
+                    tree_sitter_typescript::HIGHLIGHTS_QUERY,
+                    Some(super::symbol_extractor::TYPESCRIPT_QUERY),
+                ),
+                (
+                    Language::Go,
+                    tree_sitter_go::LANGUAGE.into(),
+                    tree_sitter_go::HIGHLIGHTS_QUERY,
+                    Some(super::symbol_extractor::GO_QUERY),
+                ),
+                (
+                    Language::C,
+                    tree_sitter_c::LANGUAGE.into(),
+                    tree_sitter_c::HIGHLIGHT_QUERY,
+                    Some(super::symbol_extractor::C_QUERY),
+                ),
+                (
+                    Language::Cpp,
+                    tree_sitter_c::LANGUAGE.into(),
+                    tree_sitter_c::HIGHLIGHT_QUERY,
+                    Some(super::symbol_extractor::C_QUERY),
+                ),
+                (
+                    Language::Ruby,
+                    tree_sitter_ruby::LANGUAGE.into(),
+                    tree_sitter_ruby::HIGHLIGHTS_QUERY,
+                    Some(super::symbol_extractor::RUBY_QUERY),
+                ),
+                (
+                    Language::Java,
+                    tree_sitter_java::LANGUAGE.into(),
+                    tree_sitter_java::HIGHLIGHTS_QUERY,
+                    Some(super::symbol_extractor::JAVA_QUERY),
+                ),
+            ];
+            let mut map = HashMap::with_capacity(entries.len());
+            for (lang, ts_lang, hl_query_src, sym_query_src) in entries {
+                let highlight_query = match tree_sitter::Query::new(&ts_lang, hl_query_src) {
+                    Ok(q) => q,
+                    Err(e) => {
+                        tracing::warn!(?lang, %e, "failed to compile highlight query");
+                        continue;
+                    }
+                };
+                let symbol_query =
+                    sym_query_src.and_then(|src| tree_sitter::Query::new(&ts_lang, src).ok());
+                map.insert(
+                    lang,
+                    LanguageConfig {
+                        ts_language: ts_lang,
+                        highlight_query,
+                        symbol_query,
+                    },
+                );
+            }
+            map
+        })
+        .get(&lang)
 }
 
 #[cfg(test)]
@@ -50,95 +107,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_rust_grammar_loads() {
-        let lang = tree_sitter_language(Language::Rust).expect("Rust should be supported");
-        // Verify the language is functional by checking it has node kinds
-        assert!(lang.node_kind_count() > 0);
+    fn test_language_config_loads_for_all_supported() {
+        for lang in [
+            Language::Rust,
+            Language::Python,
+            Language::TypeScript,
+            Language::JavaScript,
+            Language::Go,
+            Language::C,
+            Language::Cpp,
+            Language::Ruby,
+            Language::Java,
+        ] {
+            let config = language_config(lang);
+            assert!(config.is_some(), "should have config for {lang:?}");
+            let c = config.unwrap();
+            // highlight query should have at least one capture name
+            assert!(
+                !c.highlight_query.capture_names().is_empty(),
+                "no captures for {lang:?}"
+            );
+        }
     }
 
     #[test]
-    fn test_python_grammar_loads() {
-        let lang = tree_sitter_language(Language::Python).expect("Python should be supported");
-        assert!(lang.node_kind_count() > 0);
-    }
-
-    #[test]
-    fn test_typescript_grammar_loads() {
-        let lang =
-            tree_sitter_language(Language::TypeScript).expect("TypeScript should be supported");
-        assert!(lang.node_kind_count() > 0);
-    }
-
-    #[test]
-    fn test_javascript_grammar_loads() {
-        let lang =
-            tree_sitter_language(Language::JavaScript).expect("JavaScript should be supported");
-        assert!(lang.node_kind_count() > 0);
-    }
-
-    #[test]
-    fn test_go_grammar_loads() {
-        let lang = tree_sitter_language(Language::Go).expect("Go should be supported");
-        assert!(lang.node_kind_count() > 0);
-    }
-
-    #[test]
-    fn test_c_grammar_loads() {
-        let lang = tree_sitter_language(Language::C).expect("C should be supported");
-        assert!(lang.node_kind_count() > 0);
-    }
-
-    #[test]
-    fn test_cpp_uses_c_grammar() {
-        let lang = tree_sitter_language(Language::Cpp).expect("Cpp should be supported");
-        assert!(lang.node_kind_count() > 0);
-    }
-
-    #[test]
-    fn test_ruby_grammar_loads() {
-        let lang = tree_sitter_language(Language::Ruby).expect("Ruby should be supported");
-        assert!(lang.node_kind_count() > 0);
-    }
-
-    #[test]
-    fn test_java_grammar_loads() {
-        let lang = tree_sitter_language(Language::Java).expect("Java should be supported");
-        assert!(lang.node_kind_count() > 0);
-    }
-
-    #[test]
-    fn test_unsupported_language_returns_none() {
-        assert!(tree_sitter_language(Language::Shell).is_none());
-        assert!(tree_sitter_language(Language::Markdown).is_none());
-        assert!(tree_sitter_language(Language::Unknown).is_none());
-    }
-
-    #[test]
-    fn test_supports_symbols_true() {
-        assert!(supports_symbols(Language::Rust));
-        assert!(supports_symbols(Language::Python));
-        assert!(supports_symbols(Language::TypeScript));
-        assert!(supports_symbols(Language::JavaScript));
-        assert!(supports_symbols(Language::Go));
-        assert!(supports_symbols(Language::C));
-        assert!(supports_symbols(Language::Cpp));
-        assert!(supports_symbols(Language::Ruby));
-        assert!(supports_symbols(Language::Java));
-    }
-
-    #[test]
-    fn test_supports_symbols_false() {
-        assert!(!supports_symbols(Language::Haskell));
-        assert!(!supports_symbols(Language::Unknown));
+    fn test_language_config_none_for_unsupported() {
+        assert!(language_config(Language::Shell).is_none());
+        assert!(language_config(Language::Unknown).is_none());
     }
 
     #[test]
     fn test_parser_can_be_configured() {
         // Verify that the language can actually be used with a parser
-        let lang = tree_sitter_language(Language::Rust).unwrap();
+        let config = language_config(Language::Rust).unwrap();
         let mut parser = tree_sitter::Parser::new();
         parser
-            .set_language(&lang)
+            .set_language(&config.ts_language)
             .expect("should be able to set Rust language on parser");
 
         let source = b"fn main() {}";

@@ -459,23 +459,24 @@ impl SegmentWriter {
                 let compressed = zstd::bulk::compress(&input.content, ZSTD_LEVEL)
                     .expect("zstd compression should not fail on valid input");
 
-                // Tokenize for syntax highlighting
-                let highlight_compressed =
-                    crate::highlight::tokenize_file(&input.content, language).map(|line_tokens| {
-                        let fh = crate::highlight::build_file_highlight(&line_tokens);
-                        let serialized = crate::highlight::serialize_file_highlight(&fh);
-                        let hl_compressed = zstd::bulk::compress(&serialized, ZSTD_LEVEL)
-                            .expect("zstd compress highlight");
-                        let lines = fh.line_offsets.len() as u32;
-                        (hl_compressed, lines)
-                    });
+                // Unified tree-sitter processing: parse once, extract highlights + symbols
+                #[cfg(feature = "symbols")]
+                let ts_results =
+                    crate::tree_sitter_process::process_file(&input.content, language, FileId(0));
+                #[cfg(feature = "symbols")]
+                let highlight_compressed = ts_results.highlights.map(|line_tokens| {
+                    let fh = crate::highlight::build_file_highlight(&line_tokens);
+                    let serialized = crate::highlight::serialize_file_highlight(&fh);
+                    let hl_compressed = zstd::bulk::compress(&serialized, ZSTD_LEVEL)
+                        .expect("zstd compress highlight");
+                    let lines = fh.line_offsets.len() as u32;
+                    (hl_compressed, lines)
+                });
+                #[cfg(not(feature = "symbols"))]
+                let highlight_compressed: Option<(Vec<u8>, u32)> = None;
 
                 #[cfg(feature = "symbols")]
-                let symbols = crate::symbol_extractor::extract_symbols(
-                    FileId(0), // placeholder — remapped in Phase 3
-                    &input.content,
-                    language,
-                );
+                let symbols = ts_results.symbols;
 
                 on_file_done();
 
@@ -624,6 +625,9 @@ impl SegmentWriter {
             crate::highlight::HighlightStoreWriter::new(&temp_dir.join("highlights.zst"))
                 .map_err(IndexError::Io)?;
 
+        #[cfg(feature = "symbols")]
+        let mut symbol_records: Vec<crate::symbol_index::SymbolRecord> = Vec::new();
+
         for (i, file) in files.iter().enumerate() {
             let file_id = FileId(u32::try_from(i).map_err(|_| {
                 IndexError::IndexCorruption("too many files for segment (>4B)".to_string())
@@ -637,9 +641,17 @@ impl SegmentWriter {
                 .add_raw(&file.compressed)
                 .map_err(IndexError::Io)?;
 
-            // Re-tokenize for highlight data (file_ids are remapped during compaction)
+            // Unified tree-sitter processing for highlights + symbols
+            #[cfg(feature = "symbols")]
+            let compact_ts =
+                crate::tree_sitter_process::process_file(&file.raw_content, file.language, file_id);
+            #[cfg(not(feature = "symbols"))]
+            let compact_hl: Option<Vec<Vec<crate::highlight::Token>>> = None;
+            #[cfg(feature = "symbols")]
+            let compact_hl = compact_ts.highlights;
+
             let (highlight_offset, highlight_len, highlight_lines) = if let Some(line_tokens) =
-                crate::highlight::tokenize_file(&file.raw_content, file.language)
+                compact_hl
             {
                 let fh = crate::highlight::build_file_highlight(&line_tokens);
                 let (off, len, lines) = highlight_writer.add_file(&fh).map_err(IndexError::Io)?;
@@ -647,6 +659,17 @@ impl SegmentWriter {
             } else {
                 (0, 0, 0)
             };
+
+            #[cfg(feature = "symbols")]
+            for entry in compact_ts.symbols {
+                symbol_records.push(crate::symbol_index::SymbolRecord {
+                    file_id,
+                    name: entry.name.clone(),
+                    kind: entry.kind,
+                    line: entry.line,
+                    column: entry.column,
+                });
+            }
 
             metadata_builder.add_file(FileMetadata {
                 file_id,
@@ -678,27 +701,8 @@ impl SegmentWriter {
         highlight_writer.finish().map_err(IndexError::Io)?;
         fs::write(temp_dir.join("tombstones.bin"), b"")?;
 
-        // Symbol index for compaction: re-extract from raw content
         #[cfg(feature = "symbols")]
-        {
-            use crate::symbol_extractor::extract_symbols;
-            use crate::symbol_index::{SymbolIndexWriter, SymbolRecord};
-
-            let mut symbol_records = Vec::new();
-            for (i, file) in files.iter().enumerate() {
-                let file_id = FileId(i as u32);
-                for entry in extract_symbols(file_id, &file.raw_content, file.language) {
-                    symbol_records.push(SymbolRecord {
-                        file_id,
-                        name: entry.name.clone(),
-                        kind: entry.kind,
-                        line: entry.line,
-                        column: entry.column,
-                    });
-                }
-            }
-            SymbolIndexWriter::write(&symbol_records, temp_dir)?;
-        }
+        crate::symbol_index::SymbolIndexWriter::write(&symbol_records, temp_dir)?;
 
         fs::rename(temp_dir, final_dir)?;
         Segment::open(final_dir, self.segment_id)

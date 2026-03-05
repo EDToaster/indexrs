@@ -4,13 +4,8 @@
 //! classes, traits, enums, etc.) and returns them as [`SymbolEntry`] values.
 //! This module is gated behind the `symbols` cargo feature.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
 use streaming_iterator::StreamingIterator;
 
-use crate::grammar::tree_sitter_language;
 use crate::types::{FileId, Language, SymbolKind};
 
 /// A symbol definition extracted from source code via tree-sitter AST walking.
@@ -33,7 +28,7 @@ pub struct SymbolEntry {
 // ---------------------------------------------------------------------------
 
 /// Tree-sitter query for Rust symbol definitions.
-const RUST_QUERY: &str = r#"
+pub(crate) const RUST_QUERY: &str = r#"
 (function_item
   name: (identifier) @name) @definition.function
 
@@ -65,7 +60,7 @@ const RUST_QUERY: &str = r#"
 "#;
 
 /// Tree-sitter query for Python symbol definitions.
-const PYTHON_QUERY: &str = r#"
+pub(crate) const PYTHON_QUERY: &str = r#"
 (function_definition
   name: (identifier) @name) @definition.function
 
@@ -74,7 +69,7 @@ const PYTHON_QUERY: &str = r#"
 "#;
 
 /// Tree-sitter query for TypeScript symbol definitions.
-const TYPESCRIPT_QUERY: &str = r#"
+pub(crate) const TYPESCRIPT_QUERY: &str = r#"
 (function_declaration
   name: (identifier) @name) @definition.function
 
@@ -95,7 +90,7 @@ const TYPESCRIPT_QUERY: &str = r#"
 "#;
 
 /// Tree-sitter query for Go symbol definitions.
-const GO_QUERY: &str = r#"
+pub(crate) const GO_QUERY: &str = r#"
 (function_declaration
   name: (identifier) @name) @definition.function
 
@@ -124,7 +119,7 @@ const GO_QUERY: &str = r#"
 "#;
 
 /// Tree-sitter query for Ruby symbol definitions.
-const RUBY_QUERY: &str = r#"
+pub(crate) const RUBY_QUERY: &str = r#"
 (method
   name: (identifier) @name) @definition.function
 
@@ -142,7 +137,7 @@ const RUBY_QUERY: &str = r#"
 "#;
 
 /// Tree-sitter query for Java symbol definitions.
-const JAVA_QUERY: &str = r#"
+pub(crate) const JAVA_QUERY: &str = r#"
 (method_declaration
   name: (identifier) @name) @definition.method
 
@@ -160,7 +155,7 @@ const JAVA_QUERY: &str = r#"
 "#;
 
 /// Tree-sitter query for C symbol definitions.
-const C_QUERY: &str = r#"
+pub(crate) const C_QUERY: &str = r#"
 (function_definition
   declarator: (function_declarator
     declarator: (identifier) @name)) @definition.function
@@ -174,55 +169,6 @@ const C_QUERY: &str = r#"
 (type_definition
   declarator: (type_identifier) @name) @definition.type
 "#;
-
-/// Global cache of compiled tree-sitter queries, keyed by language.
-fn compiled_queries() -> &'static HashMap<Language, tree_sitter::Query> {
-    static CACHE: OnceLock<HashMap<Language, tree_sitter::Query>> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        let pairs: &[(Language, &str)] = &[
-            (Language::Rust, RUST_QUERY),
-            (Language::Python, PYTHON_QUERY),
-            (Language::TypeScript, TYPESCRIPT_QUERY),
-            (Language::JavaScript, TYPESCRIPT_QUERY),
-            (Language::Go, GO_QUERY),
-            (Language::C, C_QUERY),
-            (Language::Cpp, C_QUERY),
-            (Language::Ruby, RUBY_QUERY),
-            (Language::Java, JAVA_QUERY),
-        ];
-        let mut map = HashMap::with_capacity(pairs.len());
-        for &(lang, query_src) in pairs {
-            if let Some(ts_lang) = tree_sitter_language(lang)
-                && let Ok(q) = tree_sitter::Query::new(&ts_lang, query_src)
-            {
-                map.insert(lang, q);
-            }
-        }
-        map
-    })
-}
-
-thread_local! {
-    static PARSER_CACHE: RefCell<HashMap<Language, tree_sitter::Parser>> =
-        RefCell::new(HashMap::new());
-}
-
-/// Parse content using a thread-local cached parser for the given language.
-fn parse_with_cached_parser(
-    content: &[u8],
-    language: Language,
-    ts_lang: &tree_sitter::Language,
-) -> Option<tree_sitter::Tree> {
-    PARSER_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let parser = cache.entry(language).or_insert_with(|| {
-            let mut p = tree_sitter::Parser::new();
-            let _ = p.set_language(ts_lang);
-            p
-        });
-        parser.parse(content, None)
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -249,33 +195,16 @@ fn kind_from_capture(capture_name: &str) -> Option<SymbolKind> {
     }
 }
 
-/// Extract symbol definitions from source code using tree-sitter.
+/// Extract symbols from a pre-parsed tree-sitter AST.
 ///
-/// Returns an empty vec if:
-/// - The language is not supported for symbol extraction
-/// - The content is empty
-/// - Parsing fails
-/// - The query pattern fails to compile (logged as a warning)
-pub fn extract_symbols(file_id: FileId, content: &[u8], language: Language) -> Vec<SymbolEntry> {
-    if content.is_empty() {
-        return Vec::new();
-    }
-
-    let query = match compiled_queries().get(&language) {
-        Some(q) => q,
-        None => return Vec::new(),
-    };
-
-    let ts_lang = match tree_sitter_language(language) {
-        Some(l) => l,
-        None => return Vec::new(),
-    };
-
-    let tree = match parse_with_cached_parser(content, language, &ts_lang) {
-        Some(t) => t,
-        None => return Vec::new(),
-    };
-
+/// This is the shared-parse variant — called by `tree_sitter_process::process_file`
+/// when the tree is already available from highlight processing.
+pub fn extract_symbols_from_tree(
+    file_id: FileId,
+    content: &[u8],
+    tree: &tree_sitter::Tree,
+    query: &tree_sitter::Query,
+) -> Vec<SymbolEntry> {
     let mut cursor = tree_sitter::QueryCursor::new();
     let mut symbols = Vec::new();
     let mut matches = cursor.matches(query, tree.root_node(), content);
@@ -295,8 +224,7 @@ pub fn extract_symbols(file_id: FileId, content: &[u8], language: Language) -> V
                 let node = capture.node;
                 if let Ok(text) = std::str::from_utf8(&content[node.byte_range()]) {
                     name_text = Some(text.to_string());
-                    // Use the name node's position for line/column
-                    def_line = node.start_position().row as u32; // 0-based; callers add 1 for display
+                    def_line = node.start_position().row as u32;
                     def_column = node.start_position().column as u16;
                 }
             } else if let Some(k) = kind_from_capture(capture_name) {
@@ -316,6 +244,43 @@ pub fn extract_symbols(file_id: FileId, content: &[u8], language: Language) -> V
     }
 
     symbols
+}
+
+/// Extract symbol definitions from source code using tree-sitter.
+///
+/// Returns an empty vec if:
+/// - The language is not supported for symbol extraction
+/// - The content is empty
+/// - Parsing fails
+///
+/// This is a convenience wrapper that parses content and delegates to
+/// [`extract_symbols_from_tree`]. For callers that already have a parsed tree
+/// (e.g. the unified highlight+symbol path), use that function directly.
+pub fn extract_symbols(file_id: FileId, content: &[u8], language: Language) -> Vec<SymbolEntry> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    let config = match crate::grammar::language_config(language) {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+
+    let symbol_query = match config.symbol_query.as_ref() {
+        Some(q) => q,
+        None => return Vec::new(),
+    };
+
+    let tree = {
+        let mut parser = tree_sitter::Parser::new();
+        let _ = parser.set_language(&config.ts_language);
+        match parser.parse(content, None) {
+            Some(t) => t,
+            None => return Vec::new(),
+        }
+    };
+
+    extract_symbols_from_tree(file_id, content, &tree, symbol_query)
 }
 
 #[cfg(test)]
@@ -1033,27 +998,34 @@ struct Good { x: i32 }
     }
 
     // -----------------------------------------------------------------------
-    // compiled_queries cache tests
+    // language_config cache tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_compiled_queries_supported() {
-        let cache = compiled_queries();
-        assert!(cache.contains_key(&Language::Rust));
-        assert!(cache.contains_key(&Language::Python));
-        assert!(cache.contains_key(&Language::TypeScript));
-        assert!(cache.contains_key(&Language::JavaScript));
-        assert!(cache.contains_key(&Language::Go));
-        assert!(cache.contains_key(&Language::C));
-        assert!(cache.contains_key(&Language::Cpp));
-        assert!(cache.contains_key(&Language::Ruby));
-        assert!(cache.contains_key(&Language::Java));
+    fn test_language_config_supported() {
+        use crate::grammar::language_config;
+        for lang in [
+            Language::Rust,
+            Language::Python,
+            Language::TypeScript,
+            Language::JavaScript,
+            Language::Go,
+            Language::C,
+            Language::Cpp,
+            Language::Ruby,
+            Language::Java,
+        ] {
+            assert!(
+                language_config(lang).is_some(),
+                "should have config for {lang:?}"
+            );
+        }
     }
 
     #[test]
-    fn test_compiled_queries_unsupported() {
-        let cache = compiled_queries();
-        assert!(!cache.contains_key(&Language::Unknown));
+    fn test_language_config_unsupported() {
+        use crate::grammar::language_config;
+        assert!(language_config(Language::Unknown).is_none());
     }
 
     #[test]

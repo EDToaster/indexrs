@@ -35,6 +35,8 @@ pub mod symbol_extractor;
 #[cfg(feature = "symbols")]
 pub mod symbol_index;
 pub mod tombstone;
+#[cfg(feature = "symbols")]
+pub mod tree_sitter_process;
 pub mod trigram;
 pub mod types;
 pub mod verify;
@@ -59,7 +61,7 @@ pub use git_diff::GitChangeDetector;
 pub use hash_diff::hash_diff;
 pub use highlight::{
     FileHighlight, HighlightStoreReader, HighlightStoreWriter, Token, TokenKind,
-    build_file_highlight, decode_rle, encode_rle, tokenize_file,
+    build_file_highlight, decode_rle, encode_rle,
 };
 pub use hybrid_detector::HybridDetector;
 pub use index_reader::TrigramIndexReader;
