@@ -1,4 +1,4 @@
-.PHONY: check clippy test fmt lint-css lint-html lint lint-all
+.PHONY: check clippy test fmt lint-css lint-html lint lint-all kill
 
 check:
 	cargo check --workspace
@@ -21,3 +21,8 @@ lint-html:
 lint: clippy fmt lint-css lint-html
 
 lint-all: check lint test
+
+kill:
+	@pids=$$(ps aux | grep 'ferret daemon-start --repo' | grep -v grep | awk '{ print $$2 }'); \
+	if [ -n "$$pids" ]; then kill $$pids; echo "Killed: $$pids"; else echo "No ferret daemons running"; fi
+
