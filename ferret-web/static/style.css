@@ -1379,13 +1379,13 @@ mark {
     border: 1px solid var(--border);
 }
 
-.symbol-kind--fn, .symbol-kind--method { color: var(--tok-function); border-color: color-mix(in srgb, var(--tok-function) 40%, transparent); background: color-mix(in srgb, var(--tok-function) 8%, transparent); }
-.symbol-kind--struct, .symbol-kind--class { color: var(--tok-type); border-color: color-mix(in srgb, var(--tok-type) 40%, transparent); background: color-mix(in srgb, var(--tok-type) 8%, transparent); }
-.symbol-kind--trait, .symbol-kind--interface { color: var(--tok-macro); border-color: color-mix(in srgb, var(--tok-macro) 40%, transparent); background: color-mix(in srgb, var(--tok-macro) 8%, transparent); }
-.symbol-kind--enum { color: var(--tok-number); border-color: color-mix(in srgb, var(--tok-number) 40%, transparent); background: color-mix(in srgb, var(--tok-number) 8%, transparent); }
-.symbol-kind--const { color: var(--tok-constant); border-color: color-mix(in srgb, var(--tok-constant) 40%, transparent); background: color-mix(in srgb, var(--tok-constant) 8%, transparent); }
+.symbol-kind--fn, .symbol-kind--method { color: var(--tok-function); border-color: color-mix(in sRGB, var(--tok-function) 40%, transparent); background: color-mix(in sRGB, var(--tok-function) 8%, transparent); }
+.symbol-kind--struct, .symbol-kind--class { color: var(--tok-type); border-color: color-mix(in sRGB, var(--tok-type) 40%, transparent); background: color-mix(in sRGB, var(--tok-type) 8%, transparent); }
+.symbol-kind--trait, .symbol-kind--interface { color: var(--tok-macro); border-color: color-mix(in sRGB, var(--tok-macro) 40%, transparent); background: color-mix(in sRGB, var(--tok-macro) 8%, transparent); }
+.symbol-kind--enum { color: var(--tok-number); border-color: color-mix(in sRGB, var(--tok-number) 40%, transparent); background: color-mix(in sRGB, var(--tok-number) 8%, transparent); }
+.symbol-kind--const { color: var(--tok-constant); border-color: color-mix(in sRGB, var(--tok-constant) 40%, transparent); background: color-mix(in sRGB, var(--tok-constant) 8%, transparent); }
 .symbol-kind--var, .symbol-kind--mod { color: var(--tok-module); }
-.symbol-kind--type { color: var(--tok-type); border-color: color-mix(in srgb, var(--tok-type) 40%, transparent); background: color-mix(in srgb, var(--tok-type) 8%, transparent); }
+.symbol-kind--type { color: var(--tok-type); border-color: color-mix(in sRGB, var(--tok-type) 40%, transparent); background: color-mix(in sRGB, var(--tok-type) 8%, transparent); }
 
 .symbol-name {
     font-weight: 700;
@@ -1628,7 +1628,7 @@ mark {
     line-height: 1;
 }
 
-@media (max-width: 768px) {
+@media (width <= 768px) {
     .sidebar-toggle {
         display: inline-flex;
         align-items: center;
@@ -1653,6 +1653,7 @@ mark {
 
     .file-header {
         flex-wrap: wrap;
+        padding: 0.4rem 0.75rem;
     }
 
     .search-bar {
@@ -1662,10 +1663,6 @@ mark {
     .stats-line {
         padding: 0.35rem 0.75rem;
         font-size: 0.75rem;
-    }
-
-    .file-header {
-        padding: 0.4rem 0.75rem;
     }
 
     .line-content {
