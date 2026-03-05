@@ -1214,6 +1214,16 @@ mark {
     background: var(--bg-secondary);
 }
 
+.segments-table thead th:first-child,
+.segments-table tbody td:first-child {
+    padding-left: 1rem;
+}
+
+.segments-table thead th:last-child,
+.segments-table tbody td:last-child {
+    padding-right: 1rem;
+}
+
 .segments-table tbody td {
     padding: 0.36rem 0.6rem;
     border-bottom: 1px solid var(--border-subtle);
