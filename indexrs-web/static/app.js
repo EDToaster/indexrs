@@ -295,11 +295,11 @@
         }
     }
 
-    document.addEventListener("click", function(e) {
+    document.addEventListener("mousedown", function(e) {
         var btn = e.target.closest(".mode-btn");
-        if (btn && btn.dataset.mode) {
-            setSearchMode(btn.dataset.mode);
-        }
+        if (!btn || !btn.dataset.mode) return;
+        e.preventDefault(); // prevent focus steal from search input
+        setSearchMode(btn.dataset.mode);
     });
 
     // Sidebar repo selection
