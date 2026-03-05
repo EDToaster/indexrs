@@ -340,6 +340,56 @@
         });
     }
 
+    // Preserve search state in URL for back-navigation
+    document.addEventListener("htmx:afterSwap", function(e) {
+        if (e.target && e.target.id === "results") {
+            var input = document.querySelector(".search-input");
+            var radio = document.querySelector(".sidebar-repo-radio:checked");
+            var mode = document.getElementById("search-mode");
+            if (input) {
+                var params = new URLSearchParams();
+                if (input.value) params.set("q", input.value);
+                if (radio) params.set("repo", radio.value);
+                if (mode && mode.value !== "text") params.set("mode", mode.value);
+                var url = params.toString() ? "/?" + params.toString() : "/";
+                history.replaceState(null, "", url);
+            }
+        }
+    });
+
+    // Restore search state from URL on page load
+    (function() {
+        var params = new URLSearchParams(window.location.search);
+        var q = params.get("q");
+        var repo = params.get("repo");
+        var mode = params.get("mode");
+        if (!q) return;
+        var input = document.querySelector(".search-input");
+        if (!input) return;
+        input.value = q;
+        if (repo) {
+            var radio = document.querySelector('.sidebar-repo-radio[value="' + CSS.escape(repo) + '"]');
+            if (radio) {
+                radio.checked = true;
+                var repoDiv = radio.closest(".sidebar-repo");
+                if (repoDiv) {
+                    document.querySelectorAll(".sidebar-repo").forEach(function(el) { el.classList.remove("sidebar-repo--active"); });
+                    repoDiv.classList.add("sidebar-repo--active");
+                }
+            }
+        }
+        if (mode && mode === "symbol") {
+            var modeInput = document.getElementById("search-mode");
+            if (modeInput) modeInput.value = mode;
+            var symBtn = document.getElementById("mode-symbol");
+            var textBtn = document.getElementById("mode-text");
+            if (symBtn) symBtn.classList.add("mode-btn--active");
+            if (textBtn) textBtn.classList.remove("mode-btn--active");
+        }
+        // Trigger the search to restore results
+        htmx.trigger(input, "search");
+    })();
+
     // Outline click-to-scroll
     document.addEventListener("click", function(e) {
         var item = e.target.closest(".outline-item");
