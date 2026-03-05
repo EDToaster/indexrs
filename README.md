@@ -194,10 +194,10 @@ cargo fmt --all -- --check                      # Format check
 
 | Crate | Description |
 |---|---|
-| `ferret-indexer-core` | Library with all indexing, search, query parsing, and change detection logic |
-| `ferret-indexer-cli` | CLI binary with daemon-backed search, file listing, index management, MCP server, and web interface |
-| `ferret-indexer-daemon` | Daemon protocol library — TLV wire format, Unix socket client helpers, structured JSON response types |
-| `ferret-indexer-web` | Web interface library — axum server, htmx frontend, JSON API, SSE streaming, daemon proxy |
+| `ferret-core` | Library with all indexing, search, query parsing, and change detection logic |
+| `ferret-cli` | CLI binary with daemon-backed search, file listing, index management, MCP server, and web interface |
+| `ferret-daemon` | Daemon protocol library — TLV wire format, Unix socket client helpers, structured JSON response types |
+| `ferret-web` | Web interface library — axum server, htmx frontend, JSON API, SSE streaming, daemon proxy |
 
 ## Architecture
 
