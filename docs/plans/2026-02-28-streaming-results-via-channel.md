@@ -19,7 +19,7 @@
 ### Task 1: Add `search_segments_streaming` function to `multi_search.rs`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 **Step 1: Write the failing test**
 
@@ -29,7 +29,7 @@ Add to the `tests` module in `multi_search.rs`:
 #[test]
 fn test_search_segments_streaming_basic() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -144,14 +144,14 @@ pub fn search_segments_streaming(
 
 **Step 3: Verify**
 
-Run `cargo test -p indexrs-core -- test_search_segments_streaming_basic` to confirm the test passes.
+Run `cargo test -p ferret-indexer-core -- test_search_segments_streaming_basic` to confirm the test passes.
 
 ---
 
 ### Task 2: Add streaming cancellation test
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 **Step 1: Write the test**
 
@@ -161,7 +161,7 @@ Add a test that verifies early cancellation when the receiver is dropped:
 #[test]
 fn test_search_segments_streaming_cancellation() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Build a segment with many matching files
@@ -197,14 +197,14 @@ fn test_search_segments_streaming_cancellation() {
 
 **Step 2: Verify**
 
-Run `cargo test -p indexrs-core -- test_search_segments_streaming_cancellation`.
+Run `cargo test -p ferret-indexer-core -- test_search_segments_streaming_cancellation`.
 
 ---
 
 ### Task 3: Add streaming deduplication test
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 **Step 1: Write the test**
 
@@ -214,7 +214,7 @@ Add a test that verifies dedup across segments (newest wins):
 #[test]
 fn test_search_segments_streaming_dedup_newest_wins() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Segment 0: old version of main.rs
@@ -256,14 +256,14 @@ fn test_search_segments_streaming_dedup_newest_wins() {
 
 **Step 2: Verify**
 
-Run `cargo test -p indexrs-core -- test_search_segments_streaming_dedup`.
+Run `cargo test -p ferret-indexer-core -- test_search_segments_streaming_dedup`.
 
 ---
 
 ### Task 4: Add streaming max_results test
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 **Step 1: Write the test**
 
@@ -271,7 +271,7 @@ Run `cargo test -p indexrs-core -- test_search_segments_streaming_dedup`.
 #[test]
 fn test_search_segments_streaming_max_results() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let files: Vec<InputFile> = (0..10)
@@ -300,14 +300,14 @@ fn test_search_segments_streaming_max_results() {
 
 **Step 2: Verify**
 
-Run `cargo test -p indexrs-core -- test_search_segments_streaming_max_results`.
+Run `cargo test -p ferret-indexer-core -- test_search_segments_streaming_max_results`.
 
 ---
 
 ### Task 5: Export `search_segments_streaming` from `lib.rs`
 
 **Files:**
-- Modify: `indexrs-core/src/lib.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 **Step 1: Update the public API**
 
@@ -329,7 +329,7 @@ Run `cargo check --workspace` to confirm compilation.
 ### Task 6: Wire streaming search into CLI `search_cmd.rs`
 
 **Files:**
-- Modify: `indexrs-cli/src/search_cmd.rs`
+- Modify: `ferret-indexer-cli/src/search_cmd.rs`
 
 **Step 1: Add `run_search_streaming` function**
 
@@ -365,7 +365,7 @@ pub fn run_search_streaming<W: std::io::Write>(
     // Run the search on a background thread so we can consume results on this thread
     let snapshot_clone = Arc::clone(snapshot);
     let search_handle = std::thread::spawn(move || {
-        indexrs_core::multi_search::search_segments_streaming(
+        ferret_indexer_core::multi_search::search_segments_streaming(
             &snapshot_clone,
             &pattern,
             &search_opts,
@@ -476,14 +476,14 @@ fn test_search_streaming_vimgrep_format() {
 
 **Step 4: Verify**
 
-Run `cargo test -p indexrs-cli -- test_search_streaming_vimgrep_format`.
+Run `cargo test -p ferret-indexer-cli -- test_search_streaming_vimgrep_format`.
 
 ---
 
 ### Task 7: Wire streaming search into daemon handler
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs`
+- Modify: `ferret-indexer-cli/src/daemon.rs`
 
 **Step 1: Update `handle_search_request` to use streaming**
 
@@ -522,7 +522,7 @@ fn handle_search_request(
 
 **Step 2: Verify**
 
-Run `cargo test -p indexrs-cli -- test_daemon_search_returns_results`.
+Run `cargo test -p ferret-indexer-cli -- test_daemon_search_returns_results`.
 
 ---
 

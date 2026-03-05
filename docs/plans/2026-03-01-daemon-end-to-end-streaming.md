@@ -15,22 +15,22 @@
 This is the core change. We replace the batch `handle_search_request` with a new function that streams results over the socket as they arrive.
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:250-280` (replace `handle_search_request`)
+- Modify: `ferret-indexer-cli/src/daemon.rs:250-280` (replace `handle_search_request`)
 
 **Step 1: Write the failing test**
 
 Add a new test that verifies streaming behavior by checking that results arrive before the `Done` message, reusing the existing daemon test pattern.
 
-Add to the bottom of the `#[cfg(test)] mod tests` block in `indexrs-cli/src/daemon.rs`:
+Add to the bottom of the `#[cfg(test)] mod tests` block in `ferret-indexer-cli/src/daemon.rs`:
 
 ```rust
 #[tokio::test]
 async fn test_daemon_search_streams_results() {
-    use indexrs_core::segment::InputFile;
+    use ferret_indexer_core::segment::InputFile;
 
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
     // Write source files to disk so background catch-up doesn't tombstone them.
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
@@ -45,7 +45,7 @@ async fn test_daemon_search_streams_results() {
     )
     .unwrap();
 
-    let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = ferret_indexer_core::SegmentManager::new(&ferret_dir).unwrap();
     manager
         .index_files(vec![
             InputFile {
@@ -138,7 +138,7 @@ async fn test_daemon_search_streams_results() {
 
 This test should pass with the existing batch implementation too (it tests the protocol contract, not internal streaming). Run it to establish the baseline:
 
-Run: `cargo test -p indexrs-cli test_daemon_search_streams_results -- --nocapture`
+Run: `cargo test -p ferret-indexer-cli test_daemon_search_streams_results -- --nocapture`
 Expected: PASS
 
 **Step 3: Write `handle_search_streaming` to replace `handle_search_request`**
@@ -153,7 +153,7 @@ Replace the entire `handle_search_request` function and its call site in `handle
 /// Format a FileMatch into vimgrep-style output lines and send each as a
 /// DaemonResponse::Line JSON string through the channel.
 fn format_and_send_file_match(
-    file_match: &indexrs_core::search::FileMatch,
+    file_match: &ferret_indexer_core::search::FileMatch,
     color: &ColorConfig,
     path_rewriter: &PathRewriter,
     glob_matcher: &Option<globset::GlobMatcher>,
@@ -250,7 +250,7 @@ DaemonRequest::Search {
     let color_config = ColorConfig::new(color);
     let start = Instant::now();
     let snapshot = manager.snapshot();
-    let search_opts = indexrs_core::search::SearchOptions {
+    let search_opts = ferret_indexer_core::search::SearchOptions {
         context_lines,
         max_results: Some(limit),
     };
@@ -264,7 +264,7 @@ DaemonRequest::Search {
 
     // Spawn blocking search thread (same pattern as run_search_streaming).
     let search_handle = tokio::task::spawn_blocking(move || {
-        indexrs_core::multi_search::search_segments_streaming(
+        ferret_indexer_core::multi_search::search_segments_streaming(
             &snapshot,
             &pattern_clone,
             &search_opts,
@@ -336,10 +336,10 @@ DaemonRequest::Search {
 Add `globset` to the imports at the top of `daemon.rs`. The `use` block needs:
 
 ```rust
-use indexrs_core::search::MatchPattern;  // already present
+use ferret_indexer_core::search::MatchPattern;  // already present
 ```
 
-Verify `globset` is already a dependency of `indexrs-cli` (it is, used by `search_cmd.rs`).
+Verify `globset` is already a dependency of `ferret-indexer-cli` (it is, used by `search_cmd.rs`).
 
 **Step 5: Remove dead code**
 
@@ -347,7 +347,7 @@ Delete the old `handle_search_request` function (the one that collected into `Ve
 
 **Step 6: Run the test suite**
 
-Run: `cargo test -p indexrs-cli -- --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- --nocapture`
 Expected: All tests pass, including `test_daemon_search_streams_results`, `test_daemon_search_returns_results`, `test_daemon_search_invalid_regex_returns_error`, `test_run_via_daemon_search`, and `test_daemon_search_with_color`.
 
 **Step 7: Run clippy and fmt**
@@ -358,7 +358,7 @@ Expected: Clean
 **Step 8: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat: stream search results end-to-end through daemon
 
 Replace the batch handle_search_request (which buffered all results into
@@ -382,7 +382,7 @@ enables proper early termination when piped to head/fzf."
 After Task 1, `handle_search_request` is gone. Verify nothing else references it and clean up any orphaned imports.
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs` (top-level imports)
+- Modify: `ferret-indexer-cli/src/daemon.rs` (top-level imports)
 
 **Step 1: Check for dead imports**
 
@@ -402,7 +402,7 @@ Expected: All tests pass
 **Step 4: Commit if changes were needed**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "chore: clean up unused imports after streaming refactor"
 ```
 
@@ -417,7 +417,7 @@ Expected: Clean build
 
 **Step 2: Index a directory and search via daemon**
 
-Run the CLI against the indexrs repo itself to verify streaming works in practice:
+Run the CLI against the ferret repo itself to verify streaming works in practice:
 
 ```bash
 # Index the repo

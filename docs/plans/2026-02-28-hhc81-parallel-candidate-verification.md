@@ -4,9 +4,9 @@
 
 **Goal:** Parallelize candidate verification in the single-segment search functions using `rayon::par_iter()` to utilize multiple CPU cores during content decompression and matching.
 
-**Architecture:** The current search loop in `search_single_segment_with_context` and `search_single_segment_with_pattern` processes candidates sequentially. Each candidate requires zstd decompression + substring/regex matching -- CPU-bound work that parallelizes well. We add `rayon` as a dependency to `indexrs-core`, convert the candidate verification loops to use `rayon::par_iter()`, and use `AtomicUsize` for the result budget so early termination still works across threads. The mmap-backed readers (`ContentStoreReader`, `TrigramIndexReader`, `MetadataReader`) are `Send + Sync` since `Mmap` is `Send + Sync`, so concurrent access is safe.
+**Architecture:** The current search loop in `search_single_segment_with_context` and `search_single_segment_with_pattern` processes candidates sequentially. Each candidate requires zstd decompression + substring/regex matching -- CPU-bound work that parallelizes well. We add `rayon` as a dependency to `ferret-indexer-core`, convert the candidate verification loops to use `rayon::par_iter()`, and use `AtomicUsize` for the result budget so early termination still works across threads. The mmap-backed readers (`ContentStoreReader`, `TrigramIndexReader`, `MetadataReader`) are `Send + Sync` since `Mmap` is `Send + Sync`, so concurrent access is safe.
 
-**Tech Stack:** Rust, `rayon` crate. Modifies `indexrs-core` only.
+**Tech Stack:** Rust, `rayon` crate. Modifies `ferret-indexer-core` only.
 
 **Key Design Decisions:**
 1. **AtomicUsize for budget:** Replace the sequential `max_file_results` counter with an `AtomicUsize` that threads decrement atomically. Threads check the budget before starting verification and skip work when exhausted.
@@ -15,13 +15,13 @@
 
 ---
 
-### Task 1: Add `rayon` dependency to `indexrs-core`
+### Task 1: Add `rayon` dependency to `ferret-indexer-core`
 
 **Files:**
-- Modify: `indexrs-core/Cargo.toml`
+- Modify: `ferret-indexer-core/Cargo.toml`
 
 **Steps:**
-1. Add `rayon = "1"` to `[dependencies]` in `indexrs-core/Cargo.toml`.
+1. Add `rayon = "1"` to `[dependencies]` in `ferret-indexer-core/Cargo.toml`.
 2. Run `cargo check --workspace` to confirm it compiles.
 
 ---
@@ -29,7 +29,7 @@
 ### Task 2: Parallelize `search_single_segment_with_context`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 **Step 1: Add imports**
 
@@ -148,14 +148,14 @@ fn search_single_segment_with_context_seq(
 
 **Step 4: Verify tests pass**
 
-Run: `cargo test -p indexrs-core -- search_single_segment`
+Run: `cargo test -p ferret-indexer-core -- search_single_segment`
 
 ---
 
 ### Task 3: Parallelize `search_single_segment_with_pattern`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 **Steps:**
 
@@ -232,14 +232,14 @@ fn search_single_segment_with_pattern(
 }
 ```
 
-**Verify:** `cargo test -p indexrs-core -- search_single_segment_with_pattern`
+**Verify:** `cargo test -p ferret-indexer-core -- search_single_segment_with_pattern`
 
 ---
 
 ### Task 4: Add parallel-specific tests
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs` (test module)
+- Modify: `ferret-indexer-core/src/multi_search.rs` (test module)
 
 **Tests to add:**
 
@@ -253,7 +253,7 @@ fn search_single_segment_with_pattern(
 #[test]
 fn test_parallel_search_many_candidates() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let files: Vec<InputFile> = (0..200)
@@ -273,7 +273,7 @@ fn test_parallel_search_many_candidates() {
 #[test]
 fn test_parallel_search_with_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let files: Vec<InputFile> = (0..200)

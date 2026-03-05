@@ -13,14 +13,14 @@
 ### Task 1: Add Serialize to SymbolMatch + JSON protocol types
 
 **Files:**
-- Modify: `indexrs-core/src/symbol_index.rs:451` (add Serialize derive)
-- Modify: `indexrs-daemon/src/json_protocol.rs` (add JsonSymbolsFrame, SymbolsStats)
-- Modify: `indexrs-daemon/src/types.rs` (add JsonSymbols variant)
-- Modify: `indexrs-daemon/src/lib.rs` (re-export new types)
+- Modify: `ferret-indexer-core/src/symbol_index.rs:451` (add Serialize derive)
+- Modify: `ferret-indexer-daemon/src/json_protocol.rs` (add JsonSymbolsFrame, SymbolsStats)
+- Modify: `ferret-indexer-daemon/src/types.rs` (add JsonSymbols variant)
+- Modify: `ferret-indexer-daemon/src/lib.rs` (re-export new types)
 
 **Step 1: Add Serialize/Deserialize to SymbolMatch**
 
-In `indexrs-core/src/symbol_index.rs`, change:
+In `ferret-indexer-core/src/symbol_index.rs`, change:
 ```rust
 #[derive(Debug, Clone)]
 pub struct SymbolMatch {
@@ -33,9 +33,9 @@ pub struct SymbolMatch {
 
 **Step 2: Add JsonSymbolsFrame and SymbolsStats to json_protocol.rs**
 
-Append to `indexrs-daemon/src/json_protocol.rs`:
+Append to `ferret-indexer-daemon/src/json_protocol.rs`:
 ```rust
-use indexrs_core::symbol_index::SymbolMatch;
+use ferret_indexer_core::symbol_index::SymbolMatch;
 
 /// Wrapper for JSON symbol search response frames.
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,7 +81,7 @@ pub struct SymbolsStats {
 
 **Step 3: Add DaemonRequest::JsonSymbols variant**
 
-In `indexrs-daemon/src/types.rs`, add after the `Symbols` variant:
+In `ferret-indexer-daemon/src/types.rs`, add after the `Symbols` variant:
 ```rust
 /// Structured symbol search returning JSON-serializable SymbolMatch objects.
 JsonSymbols {
@@ -96,7 +96,7 @@ JsonSymbols {
 
 **Step 4: Re-export new types in lib.rs**
 
-In `indexrs-daemon/src/lib.rs`, add to the `json_protocol` re-export:
+In `ferret-indexer-daemon/src/lib.rs`, add to the `json_protocol` re-export:
 ```rust
 pub use json_protocol::{
     FileResponse, HealthResponse, JsonSearchFrame, JsonSymbolsFrame, SearchStats,
@@ -106,7 +106,7 @@ pub use json_protocol::{
 
 **Step 5: Add roundtrip test for JsonSymbols**
 
-In `indexrs-daemon/src/types.rs` tests:
+In `ferret-indexer-daemon/src/types.rs` tests:
 ```rust
 #[test]
 fn test_json_symbols_roundtrip() {
@@ -164,8 +164,8 @@ fn test_json_symbols_frame_serialization() {
 **Step 6: Run tests**
 
 ```bash
-cargo test -p indexrs-daemon -- --include-ignored
-cargo test -p indexrs-core -- symbol
+cargo test -p ferret-indexer-daemon -- --include-ignored
+cargo test -p ferret-indexer-core -- symbol
 ```
 
 **Step 7: Run clippy + fmt**
@@ -178,7 +178,7 @@ cargo fmt --all -- --check
 **Step 8: Commit**
 
 ```bash
-git add indexrs-core/src/symbol_index.rs indexrs-daemon/src/json_protocol.rs indexrs-daemon/src/types.rs indexrs-daemon/src/lib.rs
+git add ferret-indexer-core/src/symbol_index.rs ferret-indexer-daemon/src/json_protocol.rs ferret-indexer-daemon/src/types.rs ferret-indexer-daemon/src/lib.rs
 git commit -m "feat(daemon): add JsonSymbols request variant and JSON protocol types"
 ```
 
@@ -187,11 +187,11 @@ git commit -m "feat(daemon): add JsonSymbols request variant and JSON protocol t
 ### Task 2: Daemon handler for JsonSymbols
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs` (add handler + match arm)
+- Modify: `ferret-indexer-cli/src/daemon.rs` (add handler + match arm)
 
 **Step 1: Add handle_json_symbols_request function**
 
-Add near the existing `handle_symbols_request` function in `indexrs-cli/src/daemon.rs`:
+Add near the existing `handle_symbols_request` function in `ferret-indexer-cli/src/daemon.rs`:
 
 ```rust
 fn handle_json_symbols_request(
@@ -202,9 +202,9 @@ fn handle_json_symbols_request(
     path_filter: Option<String>,
     max_results: Option<usize>,
     offset: Option<usize>,
-) -> Result<(Vec<indexrs_core::symbol_index::SymbolMatch>, std::time::Duration), String> {
-    use indexrs_core::symbol_index::{SymbolSearchOptions, search_symbols};
-    use indexrs_core::types::SymbolKind;
+) -> Result<(Vec<ferret_indexer_core::symbol_index::SymbolMatch>, std::time::Duration), String> {
+    use ferret_indexer_core::symbol_index::{SymbolSearchOptions, search_symbols};
+    use ferret_indexer_core::types::SymbolKind;
 
     let start = std::time::Instant::now();
 
@@ -224,7 +224,7 @@ fn handle_json_symbols_request(
     };
 
     let language_filter = match language {
-        Some(ref lang_str) => match indexrs_core::match_language(lang_str) {
+        Some(ref lang_str) => match ferret_indexer_core::match_language(lang_str) {
             Ok(lang) => Some(lang),
             Err(_) => return Err(format!("unknown language: \"{lang_str}\"")),
         },
@@ -266,7 +266,7 @@ DaemonRequest::JsonSymbols {
         Ok((matches, elapsed)) => {
             let total = matches.len();
             for m in matches {
-                let frame = indexrs_daemon::JsonSymbolsFrame::Symbol(m.into());
+                let frame = ferret_indexer_daemon::JsonSymbolsFrame::Symbol(m.into());
                 let payload = serde_json::to_string(&frame).unwrap();
                 wire::write_response(
                     &mut writer,
@@ -276,8 +276,8 @@ DaemonRequest::JsonSymbols {
                 .map_err(IndexError::Io)?;
             }
             // Send stats frame
-            let stats_frame = indexrs_daemon::JsonSymbolsFrame::Stats {
-                stats: indexrs_daemon::SymbolsStats {
+            let stats_frame = ferret_indexer_daemon::JsonSymbolsFrame::Stats {
+                stats: ferret_indexer_daemon::SymbolsStats {
                     total,
                     duration_ms: elapsed.as_millis() as u64,
                 },
@@ -321,7 +321,7 @@ cargo test --workspace
 **Step 4: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): add JsonSymbols handler for structured symbol search"
 ```
 
@@ -330,13 +330,13 @@ git commit -m "feat(daemon): add JsonSymbols handler for structured symbol searc
 ### Task 3: Web API endpoint + proxy
 
 **Files:**
-- Modify: `indexrs-web/src/proxy.rs` (add `symbols()` function)
-- Modify: `indexrs-web/src/api.rs` (add handler + params + response types)
-- Modify: `indexrs-web/src/lib.rs` (add route)
+- Modify: `ferret-indexer-web/src/proxy.rs` (add `symbols()` function)
+- Modify: `ferret-indexer-web/src/api.rs` (add handler + params + response types)
+- Modify: `ferret-indexer-web/src/lib.rs` (add route)
 
 **Step 1: Add proxy::symbols() function**
 
-In `indexrs-web/src/proxy.rs`:
+In `ferret-indexer-web/src/proxy.rs`:
 ```rust
 /// Send a JsonSymbols request to the daemon and return matched symbols + stats.
 pub async fn symbols(
@@ -348,7 +348,7 @@ pub async fn symbols(
     path_filter: Option<String>,
     max_results: Option<usize>,
     offset: Option<usize>,
-) -> Result<(Vec<indexrs_daemon::SymbolMatchResponse>, indexrs_daemon::SymbolsStats), ApiError> {
+) -> Result<(Vec<ferret_indexer_daemon::SymbolMatchResponse>, ferret_indexer_daemon::SymbolsStats), ApiError> {
     let request = DaemonRequest::JsonSymbols {
         query,
         kind,
@@ -364,15 +364,15 @@ pub async fn symbols(
     let mut stats = None;
 
     for payload in result.payloads {
-        let frame: indexrs_daemon::JsonSymbolsFrame = serde_json::from_str(&payload)
+        let frame: ferret_indexer_daemon::JsonSymbolsFrame = serde_json::from_str(&payload)
             .map_err(|e| ApiError::internal(format!("failed to parse symbols frame: {e}")))?;
         match frame {
-            indexrs_daemon::JsonSymbolsFrame::Symbol(m) => symbols.push(m),
-            indexrs_daemon::JsonSymbolsFrame::Stats { stats: s } => stats = Some(s),
+            ferret_indexer_daemon::JsonSymbolsFrame::Symbol(m) => symbols.push(m),
+            ferret_indexer_daemon::JsonSymbolsFrame::Stats { stats: s } => stats = Some(s),
         }
     }
 
-    let stats = stats.unwrap_or(indexrs_daemon::SymbolsStats {
+    let stats = stats.unwrap_or(ferret_indexer_daemon::SymbolsStats {
         total: symbols.len(),
         duration_ms: result.duration_ms,
     });
@@ -383,7 +383,7 @@ pub async fn symbols(
 
 **Step 2: Add API handler + types**
 
-In `indexrs-web/src/api.rs`, add params and response structs:
+In `ferret-indexer-web/src/api.rs`, add params and response structs:
 ```rust
 #[derive(Deserialize)]
 pub struct SymbolParams {
@@ -403,8 +403,8 @@ fn default_symbol_limit() -> usize {
 
 #[derive(Serialize)]
 pub struct SymbolSearchResponse {
-    pub symbols: Vec<indexrs_daemon::SymbolMatchResponse>,
-    pub stats: indexrs_daemon::SymbolsStats,
+    pub symbols: Vec<ferret_indexer_daemon::SymbolMatchResponse>,
+    pub stats: ferret_indexer_daemon::SymbolsStats,
 }
 ```
 
@@ -443,14 +443,14 @@ pub async fn symbols(
 
 **Step 3: Add route**
 
-In `indexrs-web/src/lib.rs`, add to the `api` router:
+In `ferret-indexer-web/src/lib.rs`, add to the `api` router:
 ```rust
 .route("/repos/{name}/symbols", get(api::symbols))
 ```
 
 **Step 4: Add unit test**
 
-In `indexrs-web/src/api.rs` tests:
+In `ferret-indexer-web/src/api.rs` tests:
 ```rust
 #[tokio::test]
 async fn test_symbols_unknown_repo_returns_404() {
@@ -481,13 +481,13 @@ async fn test_symbols_no_params_returns_400() {
 ```bash
 cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
-cargo test -p indexrs-web
+cargo test -p ferret-indexer-web
 ```
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-web/src/proxy.rs indexrs-web/src/api.rs indexrs-web/src/lib.rs
+git add ferret-indexer-web/src/proxy.rs ferret-indexer-web/src/api.rs ferret-indexer-web/src/lib.rs
 git commit -m "feat(web): add /api/v1/repos/{name}/symbols JSON endpoint"
 ```
 
@@ -496,16 +496,16 @@ git commit -m "feat(web): add /api/v1/repos/{name}/symbols JSON endpoint"
 ### Task 4: Symbol Search Mode UI
 
 **Files:**
-- Create: `indexrs-web/templates/symbol_results.html`
-- Modify: `indexrs-web/templates/index.html` (add mode toggle)
-- Modify: `indexrs-web/src/ui.rs` (add symbol search fragment handler + types)
-- Modify: `indexrs-web/src/lib.rs` (add route)
-- Modify: `indexrs-web/static/style.css` (add symbol result styles)
-- Modify: `indexrs-web/static/app.js` (add mode switching logic)
+- Create: `ferret-indexer-web/templates/symbol_results.html`
+- Modify: `ferret-indexer-web/templates/index.html` (add mode toggle)
+- Modify: `ferret-indexer-web/src/ui.rs` (add symbol search fragment handler + types)
+- Modify: `ferret-indexer-web/src/lib.rs` (add route)
+- Modify: `ferret-indexer-web/static/style.css` (add symbol result styles)
+- Modify: `ferret-indexer-web/static/app.js` (add mode switching logic)
 
 **Step 1: Create symbol_results.html template**
 
-Create `indexrs-web/templates/symbol_results.html`:
+Create `ferret-indexer-web/templates/symbol_results.html`:
 ```html
 {% if !symbols.is_empty() %}
 <div class="stats-line">
@@ -537,7 +537,7 @@ Create `indexrs-web/templates/symbol_results.html`:
 
 **Step 2: Add ui handler + template struct**
 
-In `indexrs-web/src/ui.rs`, add the template and handler:
+In `ferret-indexer-web/src/ui.rs`, add the template and handler:
 ```rust
 /// A symbol result entry for the template.
 pub struct SymbolItem {
@@ -602,7 +602,7 @@ pub async fn symbol_results_fragment(
         }
     };
 
-    let stream = match indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path).await {
+    let stream = match ferret_indexer_daemon::ensure_daemon(state.daemon_bin(), &repo_path).await {
         Ok(s) => s,
         Err(e) => {
             tracing::error!("daemon connect error: {e}");
@@ -610,7 +610,7 @@ pub async fn symbol_results_fragment(
         }
     };
 
-    let request = indexrs_daemon::DaemonRequest::JsonSymbols {
+    let request = ferret_indexer_daemon::DaemonRequest::JsonSymbols {
         query: Some(query.clone()),
         kind,
         language: None,
@@ -619,7 +619,7 @@ pub async fn symbol_results_fragment(
         offset: None,
     };
 
-    match indexrs_daemon::send_json_request(stream, &request).await {
+    match ferret_indexer_daemon::send_json_request(stream, &request).await {
         Ok(result) => {
             let mut symbols = Vec::new();
             let mut total = 0usize;
@@ -627,10 +627,10 @@ pub async fn symbol_results_fragment(
 
             for payload in &result.payloads {
                 if let Ok(frame) =
-                    serde_json::from_str::<indexrs_daemon::JsonSymbolsFrame>(payload)
+                    serde_json::from_str::<ferret_indexer_daemon::JsonSymbolsFrame>(payload)
                 {
                     match frame {
-                        indexrs_daemon::JsonSymbolsFrame::Symbol(m) => {
+                        ferret_indexer_daemon::JsonSymbolsFrame::Symbol(m) => {
                             symbols.push(SymbolItem {
                                 name: m.name,
                                 kind: m.kind,
@@ -639,7 +639,7 @@ pub async fn symbol_results_fragment(
                                 score: m.score,
                             });
                         }
-                        indexrs_daemon::JsonSymbolsFrame::Stats { stats } => {
+                        ferret_indexer_daemon::JsonSymbolsFrame::Stats { stats } => {
                             total = stats.total;
                             duration_ms = stats.duration_ms;
                         }
@@ -669,14 +669,14 @@ pub async fn symbol_results_fragment(
 
 **Step 3: Add route**
 
-In `indexrs-web/src/lib.rs`, add UI route:
+In `ferret-indexer-web/src/lib.rs`, add UI route:
 ```rust
 .route("/symbol-results", get(ui::symbol_results_fragment))
 ```
 
 **Step 4: Update index.html — add mode toggle**
 
-In `indexrs-web/templates/index.html`, replace the search bar div with:
+In `ferret-indexer-web/templates/index.html`, replace the search bar div with:
 ```html
 <div class="search-bar">
     <div class="search-mode-toggle">
@@ -701,7 +701,7 @@ Also add `@` shortcut to the help overlay:
 
 **Step 5: Add CSS for symbol results and mode toggle**
 
-Append to `indexrs-web/static/style.css`:
+Append to `ferret-indexer-web/static/style.css`:
 ```css
 /* Search mode toggle */
 .search-mode-toggle {
@@ -817,7 +817,7 @@ Append to `indexrs-web/static/style.css`:
 
 **Step 6: Add JS for mode switching**
 
-In `indexrs-web/static/app.js`, add inside the IIFE (before the closing `})();`):
+In `ferret-indexer-web/static/app.js`, add inside the IIFE (before the closing `})();`):
 
 ```javascript
 // Search mode toggle (text vs symbols)
@@ -862,13 +862,13 @@ document.addEventListener("click", function(e) {
 ```bash
 cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
-cargo test -p indexrs-web
+cargo test -p ferret-indexer-web
 ```
 
 **Step 8: Commit**
 
 ```bash
-git add indexrs-web/templates/symbol_results.html indexrs-web/templates/index.html indexrs-web/src/ui.rs indexrs-web/src/lib.rs indexrs-web/static/style.css indexrs-web/static/app.js
+git add ferret-indexer-web/templates/symbol_results.html ferret-indexer-web/templates/index.html ferret-indexer-web/src/ui.rs ferret-indexer-web/src/lib.rs ferret-indexer-web/static/style.css ferret-indexer-web/static/app.js
 git commit -m "feat(web): add symbol search mode with toggle in search bar"
 ```
 
@@ -877,16 +877,16 @@ git commit -m "feat(web): add symbol search mode with toggle in search bar"
 ### Task 5: Symbol Outline in File Preview
 
 **Files:**
-- Create: `indexrs-web/templates/symbol_outline.html`
-- Modify: `indexrs-web/templates/file_preview.html` (add outline panel)
-- Modify: `indexrs-web/src/ui.rs` (add outline handler)
-- Modify: `indexrs-web/src/lib.rs` (add route)
-- Modify: `indexrs-web/static/style.css` (outline panel styles)
-- Modify: `indexrs-web/static/app.js` (outline toggle)
+- Create: `ferret-indexer-web/templates/symbol_outline.html`
+- Modify: `ferret-indexer-web/templates/file_preview.html` (add outline panel)
+- Modify: `ferret-indexer-web/src/ui.rs` (add outline handler)
+- Modify: `ferret-indexer-web/src/lib.rs` (add route)
+- Modify: `ferret-indexer-web/static/style.css` (outline panel styles)
+- Modify: `ferret-indexer-web/static/app.js` (outline toggle)
 
 **Step 1: Create symbol_outline.html template fragment**
 
-Create `indexrs-web/templates/symbol_outline.html`:
+Create `ferret-indexer-web/templates/symbol_outline.html`:
 ```html
 {% if !symbols.is_empty() %}
 <div class="outline-header">
@@ -909,7 +909,7 @@ Create `indexrs-web/templates/symbol_outline.html`:
 
 **Step 2: Add outline handler**
 
-In `indexrs-web/src/ui.rs`, add:
+In `ferret-indexer-web/src/ui.rs`, add:
 ```rust
 #[derive(Template)]
 #[template(path = "symbol_outline.html")]
@@ -934,13 +934,13 @@ pub async fn symbol_outline_fragment(
         None => return render_template(SymbolOutlineTemplate { symbols: vec![] }),
     };
 
-    let stream = match indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_path).await {
+    let stream = match ferret_indexer_daemon::ensure_daemon(state.daemon_bin(), &repo_path).await {
         Ok(s) => s,
         Err(_) => return render_template(SymbolOutlineTemplate { symbols: vec![] }),
     };
 
     // Empty query + path_filter = return all symbols in file
-    let request = indexrs_daemon::DaemonRequest::JsonSymbols {
+    let request = ferret_indexer_daemon::DaemonRequest::JsonSymbols {
         query: None,
         kind: None,
         language: None,
@@ -949,11 +949,11 @@ pub async fn symbol_outline_fragment(
         offset: None,
     };
 
-    match indexrs_daemon::send_json_request(stream, &request).await {
+    match ferret_indexer_daemon::send_json_request(stream, &request).await {
         Ok(result) => {
             let mut symbols: Vec<SymbolItem> = Vec::new();
             for payload in &result.payloads {
-                if let Ok(indexrs_daemon::JsonSymbolsFrame::Symbol(m)) =
+                if let Ok(ferret_indexer_daemon::JsonSymbolsFrame::Symbol(m)) =
                     serde_json::from_str(payload)
                 {
                     symbols.push(SymbolItem {
@@ -976,7 +976,7 @@ pub async fn symbol_outline_fragment(
 
 **Step 3: Add route**
 
-In `indexrs-web/src/lib.rs`:
+In `ferret-indexer-web/src/lib.rs`:
 ```rust
 .route("/symbol-outline", get(ui::symbol_outline_fragment))
 ```
@@ -1213,13 +1213,13 @@ Add the highlight flash CSS:
 ```bash
 cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
-cargo test -p indexrs-web
+cargo test -p ferret-indexer-web
 ```
 
 **Step 8: Commit**
 
 ```bash
-git add indexrs-web/templates/symbol_outline.html indexrs-web/templates/file_preview.html indexrs-web/src/ui.rs indexrs-web/src/lib.rs indexrs-web/static/style.css indexrs-web/static/app.js
+git add ferret-indexer-web/templates/symbol_outline.html ferret-indexer-web/templates/file_preview.html ferret-indexer-web/src/ui.rs ferret-indexer-web/src/lib.rs ferret-indexer-web/static/style.css ferret-indexer-web/static/app.js
 git commit -m "feat(web): add symbol outline panel to file preview"
 ```
 
@@ -1228,9 +1228,9 @@ git commit -m "feat(web): add symbol outline panel to file preview"
 ### Task 6: Go-to-Symbol Quick-Open Modal
 
 **Files:**
-- Modify: `indexrs-web/templates/index.html` (add modal markup)
-- Modify: `indexrs-web/static/style.css` (modal styles)
-- Modify: `indexrs-web/static/app.js` (modal behavior)
+- Modify: `ferret-indexer-web/templates/index.html` (add modal markup)
+- Modify: `ferret-indexer-web/static/style.css` (modal styles)
+- Modify: `ferret-indexer-web/static/app.js` (modal behavior)
 
 **Step 1: Add modal HTML to index.html**
 
@@ -1435,7 +1435,7 @@ cargo fmt --all -- --check
 **Step 5: Commit**
 
 ```bash
-git add indexrs-web/templates/index.html indexrs-web/static/style.css indexrs-web/static/app.js
+git add ferret-indexer-web/templates/index.html ferret-indexer-web/static/style.css ferret-indexer-web/static/app.js
 git commit -m "feat(web): add Go-to-Symbol quick-open modal (@ shortcut)"
 ```
 
@@ -1443,13 +1443,13 @@ git commit -m "feat(web): add Go-to-Symbol quick-open modal (@ shortcut)"
 
 ### Task 7: E2E Testing with Playwright
 
-**Prerequisites:** A running `indexrs web` server on port 4040 with at least one indexed repo. Set up with:
+**Prerequisites:** A running `ferret web` server on port 4040 with at least one indexed repo. Set up with:
 ```bash
 cargo build --workspace --release
-cargo run -p indexrs-cli -- init
-cargo run -p indexrs-cli -- repos add . --name test-repo
+cargo run -p ferret-indexer-cli -- init
+cargo run -p ferret-indexer-cli -- repos add . --name test-repo
 # Start server in background
-cargo run -p indexrs-cli -- web --port 4040 &
+cargo run -p ferret-indexer-cli -- web --port 4040 &
 ```
 
 **Step 1: Install Playwright browser**
@@ -1477,7 +1477,7 @@ Verify results only contain symbols with `kind: "struct"`.
 **Step 4: Test Symbol Search API — file outline mode**
 
 ```
-browser_navigate: http://localhost:4040/api/v1/repos/test-repo/symbols?path=indexrs-core/src/types.rs
+browser_navigate: http://localhost:4040/api/v1/repos/test-repo/symbols?path=ferret-indexer-core/src/types.rs
 ```
 Verify returns all symbols defined in types.rs (SymbolKind, Language, FileId, etc.).
 
@@ -1518,7 +1518,7 @@ Verify search input placeholder changes back to code search.
 
 Navigate to a file that has symbols:
 ```
-browser_navigate: http://localhost:4040/file/test-repo/indexrs-core/src/types.rs
+browser_navigate: http://localhost:4040/file/test-repo/ferret-indexer-core/src/types.rs
 browser_snapshot
 ```
 Verify:

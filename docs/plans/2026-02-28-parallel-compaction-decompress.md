@@ -13,7 +13,7 @@
 ### Task 1: Parallelize decompression in compact_with_budget
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs:519-609` (the `compact_with_budget` method)
+- Modify: `ferret-indexer-core/src/segment_manager.rs:519-609` (the `compact_with_budget` method)
 
 **Step 1: Modify compact_with_budget to collect metadata first, then decompress in parallel**
 
@@ -120,7 +120,7 @@ Add `use rayon::prelude::*;` to the imports.
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-core -- compact`
+Run: `cargo test -p ferret-indexer-core -- compact`
 Expected: All existing compact tests pass (the behavior is identical, only the execution strategy changed).
 
 **Step 4: Run clippy and fmt**
@@ -131,7 +131,7 @@ Expected: No warnings or formatting issues.
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "perf: parallelize compaction decompression with rayon"
 ```
 

@@ -1,0 +1,294 @@
+mod args;
+mod color;
+mod daemon;
+mod estimate;
+mod files;
+mod init;
+#[cfg(feature = "mcp")]
+mod mcp;
+mod output;
+mod paths;
+mod preview;
+mod reindex_display;
+mod repo;
+mod repos;
+mod search_cmd;
+mod status;
+mod symbols;
+mod web;
+mod wire;
+
+use std::io::IsTerminal;
+
+use args::{Cli, ColorMode, Command, ReposAction};
+use clap::Parser;
+use color::ColorConfig;
+use output::{ExitCode, StreamingWriter};
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    output::setup_sigpipe();
+
+    let cli = Cli::parse();
+
+    let color_enabled = match cli.color {
+        ColorMode::Always => true,
+        ColorMode::Never => false,
+        ColorMode::Auto => std::io::stdout().is_terminal(),
+    };
+    let color = ColorConfig::new(color_enabled);
+
+    let exit_code = match run(cli, &color).await {
+        Ok(code) => code as i32,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::Error as i32
+        }
+    };
+
+    std::process::exit(exit_code);
+}
+
+async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, ferret_indexer_core::IndexError> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+
+    match cli.command {
+        Command::Search {
+            query,
+            query_mode,
+            regex,
+            case_sensitive,
+            ignore_case,
+            smart_case,
+            language,
+            path,
+            limit,
+            context,
+            stats: _,
+        } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+
+            if !repo_root.join(".ferret_index").join("segments").exists() {
+                eprintln!("error: no index found. Run 'ferret init' first.");
+                return Ok(ExitCode::Error);
+            }
+
+            // --query mode: validate mutual exclusion and dispatch.
+            if query_mode {
+                let mut conflicts = Vec::new();
+                if regex {
+                    conflicts.push("--regex");
+                }
+                if case_sensitive {
+                    conflicts.push("--case-sensitive");
+                }
+                if ignore_case {
+                    conflicts.push("--ignore-case");
+                }
+                if smart_case {
+                    conflicts.push("--smart-case");
+                }
+                if language.is_some() {
+                    conflicts.push("--language");
+                }
+                if path.is_some() {
+                    conflicts.push("--path");
+                }
+                if !conflicts.is_empty() {
+                    eprintln!(
+                        "error: --query cannot be combined with {}",
+                        conflicts.join(", ")
+                    );
+                    return Ok(ExitCode::Error);
+                }
+
+                let request = daemon::DaemonRequest::QuerySearch {
+                    query,
+                    limit,
+                    context_lines: context.unwrap_or(0),
+                    color: color.enabled,
+                    cwd: cwd.clone(),
+                };
+                let stdout = std::io::stdout();
+                let mut writer = StreamingWriter::new(stdout.lock());
+                return daemon::run_via_daemon(&repo_root, request, &mut writer).await;
+            }
+
+            // Resolve case mode from CLI flags.
+            let case_mode = if case_sensitive {
+                ferret_indexer_daemon::CaseMode::Sensitive
+            } else if ignore_case {
+                ferret_indexer_daemon::CaseMode::Insensitive
+            } else {
+                // Default: smart case (auto-detect from query content).
+                ferret_indexer_daemon::CaseMode::Smart
+            };
+
+            // Trigram search requires at least 3 characters for non-regex queries.
+            if !regex && query.len() < 3 {
+                eprintln!(
+                    "warning: search query must be at least 3 characters (got {})",
+                    query.len()
+                );
+                return Ok(ExitCode::NoResults);
+            }
+
+            let request = daemon::DaemonRequest::Search {
+                query,
+                regex,
+                case_mode,
+                limit,
+                context_lines: context.unwrap_or(0),
+                language,
+                path_glob: path,
+                color: color.enabled,
+                cwd: cwd.clone(),
+            };
+
+            let stdout = std::io::stdout();
+            let mut writer = StreamingWriter::new(stdout.lock());
+            daemon::run_via_daemon(&repo_root, request, &mut writer).await
+        }
+        Command::Files {
+            query: _,
+            language,
+            path,
+            limit,
+            sort,
+        } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+
+            if !repo_root.join(".ferret_index").join("segments").exists() {
+                eprintln!("error: no index found. Run 'ferret init' first.");
+                return Ok(ExitCode::Error);
+            }
+
+            let sort_str = match sort {
+                args::SortOrder::Path => "path",
+                args::SortOrder::Modified => "modified",
+                args::SortOrder::Size => "size",
+            };
+
+            let request = daemon::DaemonRequest::Files {
+                language,
+                path_glob: path,
+                sort: sort_str.to_string(),
+                limit,
+                color: color.enabled,
+                cwd: cwd.clone(),
+            };
+
+            let stdout = std::io::stdout();
+            let mut writer = StreamingWriter::new(stdout.lock());
+            daemon::run_via_daemon(&repo_root, request, &mut writer).await
+        }
+        Command::Preview {
+            file,
+            line,
+            context,
+            highlight_line,
+        } => {
+            let opts = preview::PreviewOptions {
+                file,
+                line,
+                context,
+                highlight_line,
+                color_enabled: color.enabled,
+            };
+            preview::run_preview(&opts)?;
+            Ok(ExitCode::Success)
+        }
+        Command::Symbols {
+            query,
+            kind,
+            language,
+            limit,
+        } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+
+            if !repo_root.join(".ferret_index").join("segments").exists() {
+                eprintln!("error: no index found. Run 'ferret init' first.");
+                return Ok(ExitCode::Error);
+            }
+
+            let request = daemon::DaemonRequest::Symbols {
+                query,
+                kind,
+                language,
+                limit,
+                color: color.enabled,
+                cwd: cwd.clone(),
+            };
+
+            let stdout = std::io::stdout();
+            let mut writer = StreamingWriter::new(stdout.lock());
+            daemon::run_via_daemon(&repo_root, request, &mut writer).await
+        }
+        Command::Status => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            status::run_status(&repo_root)?;
+            Ok(ExitCode::Success)
+        }
+        Command::Reindex { full, compact } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            if full {
+                // Full rebuild — same as init --force.
+                init::run_init(&repo_root, true)?;
+            } else {
+                reindex_display::run_reindex_with_progress(&repo_root, compact).await?;
+            }
+            Ok(ExitCode::Success)
+        }
+        Command::Estimate {
+            directory,
+            segment_budget_mb,
+        } => {
+            let dir = match directory {
+                Some(d) => d,
+                None => repo::find_repo_root(cli.repo.as_deref())?,
+            };
+            estimate::run_estimate(&dir, segment_budget_mb)?;
+            Ok(ExitCode::Success)
+        }
+        Command::Init { force } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            init::run_init(&repo_root, force)?;
+            Ok(ExitCode::Success)
+        }
+        Command::Repos { action } => {
+            match action {
+                ReposAction::List => repos::run_list()?,
+                ReposAction::Add { path, name } => repos::run_add(&path, name.as_deref())?,
+                ReposAction::Remove { name } => repos::run_remove(&name)?,
+            }
+            Ok(ExitCode::Success)
+        }
+        Command::Web { port } => {
+            web::run_web(port).await?;
+            Ok(ExitCode::Success)
+        }
+        Command::DaemonStart { skip_catchup } => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            daemon::start_daemon(&repo_root, skip_catchup).await?;
+            Ok(ExitCode::Success)
+        }
+        #[cfg(feature = "mcp")]
+        Command::Mcp => {
+            let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
+            mcp::run_mcp(repo_root)
+                .await
+                .map_err(|e| ferret_indexer_core::IndexError::Io(std::io::Error::other(e)))?;
+            Ok(ExitCode::Success)
+        }
+    }
+}

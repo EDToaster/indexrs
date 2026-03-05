@@ -13,7 +13,7 @@
 ### Task 1: Add New Progress Event Variants
 
 **Files:**
-- Modify: `indexrs-core/src/reindex_progress.rs:9-40`
+- Modify: `ferret-indexer-core/src/reindex_progress.rs:9-40`
 
 **Step 1: Add the four new variants to `ReindexProgress`**
 
@@ -95,13 +95,13 @@ fn test_serde_roundtrip_compaction_complete() {
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-core -- reindex_progress`
+Run: `cargo test -p ferret-indexer-core -- reindex_progress`
 Expected: All tests pass including new serde roundtrip tests.
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/reindex_progress.rs
+git add ferret-indexer-core/src/reindex_progress.rs
 git commit -m "feat(progress): add compaction progress event variants"
 ```
 
@@ -110,7 +110,7 @@ git commit -m "feat(progress): add compaction progress event variants"
 ### Task 2: Add `compact_with_progress` to `SegmentManager`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs:845-947`
+- Modify: `ferret-indexer-core/src/segment_manager.rs:845-947`
 
 **Step 1: Add `compact_with_progress` method**
 
@@ -274,13 +274,13 @@ use crate::reindex_progress::ReindexProgress;
 
 **Step 3: Run clippy and tests**
 
-Run: `cargo clippy -p indexrs-core -- -D warnings && cargo test -p indexrs-core -- segment_manager`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings && cargo test -p ferret-indexer-core -- segment_manager`
 Expected: No warnings, all tests pass.
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat(compact): add compact_with_progress method"
 ```
 
@@ -289,7 +289,7 @@ git commit -m "feat(compact): add compact_with_progress method"
 ### Task 3: Wire Compaction Progress Into Catchup
 
 **Files:**
-- Modify: `indexrs-core/src/catchup.rs:70-112`
+- Modify: `ferret-indexer-core/src/catchup.rs:70-112`
 
 **Step 1: Replace fire-and-forget compaction with synchronous progress-reporting compaction**
 
@@ -336,13 +336,13 @@ use crate::segment_manager::DEFAULT_COMPACTION_BUDGET;
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-core -- catchup`
+Run: `cargo test -p ferret-indexer-core -- catchup`
 Expected: All existing tests pass. The `test_catchup_force_compact_emits_compacting_event` test should now also see `CompactingCollected` and `CompactionComplete` events (though it only asserts `CompactingSegments`).
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs indexrs-core/src/catchup.rs
+git add ferret-indexer-core/src/segment_manager.rs ferret-indexer-core/src/catchup.rs
 git commit -m "feat(catchup): use synchronous compact_with_progress during reindex"
 ```
 
@@ -351,7 +351,7 @@ git commit -m "feat(catchup): use synchronous compact_with_progress during reind
 ### Task 4: Handle New Events in CLI Progress Renderer
 
 **Files:**
-- Modify: `indexrs-cli/src/reindex_display.rs:190-210`
+- Modify: `ferret-indexer-cli/src/reindex_display.rs:190-210`
 
 **Step 1: Add handlers for new compaction events in `ProgressRenderer::handle`**
 
@@ -430,7 +430,7 @@ Expected: No formatting issues.
 **Step 4: Commit**
 
 ```bash
-git add indexrs-cli/src/reindex_display.rs
+git add ferret-indexer-cli/src/reindex_display.rs
 git commit -m "feat(cli): render compaction progress bar and stats"
 ```
 
@@ -439,7 +439,7 @@ git commit -m "feat(cli): render compaction progress bar and stats"
 ### Task 5: Add Integration Test for Compaction Progress Events
 
 **Files:**
-- Modify: `indexrs-core/src/catchup.rs` (test module at bottom)
+- Modify: `ferret-indexer-core/src/catchup.rs` (test module at bottom)
 
 **Step 1: Add a test that verifies compaction progress events are emitted**
 
@@ -452,22 +452,22 @@ async fn test_catchup_force_compact_emits_detailed_compaction_events() {
     let repo = dir.path();
     init_git_repo(repo);
 
-    let indexrs_dir = repo.join(".indexrs");
-    fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-    let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+    let ferret_dir = repo.join(".ferret_index");
+    fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+    let manager = Arc::new(SegmentManager::new(&ferret_dir).unwrap());
 
     // Write checkpoint at current HEAD.
     let git = GitChangeDetector::new(repo.to_path_buf());
     let head = git.get_head_sha().unwrap();
     let cp = Checkpoint::new(Some(head), 0);
-    write_checkpoint(&indexrs_dir, &cp).unwrap();
+    write_checkpoint(&ferret_dir, &cp).unwrap();
 
     // Create two files so there's something to compact.
     fs::write(repo.join("a.rs"), "fn a() { let x = 1; }").unwrap();
     fs::write(repo.join("b.rs"), "fn b() { let y = 2; }").unwrap();
 
     let events = std::sync::Mutex::new(Vec::new());
-    let _changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, true, |ev| {
+    let _changes = run_catchup_with_progress(repo, &ferret_dir, &manager, true, |ev| {
         events.lock().unwrap().push(ev);
     })
     .unwrap();
@@ -511,7 +511,7 @@ async fn test_catchup_force_compact_emits_detailed_compaction_events() {
 
 **Step 2: Run the test**
 
-Run: `cargo test -p indexrs-core -- test_catchup_force_compact_emits_detailed_compaction_events`
+Run: `cargo test -p ferret-indexer-core -- test_catchup_force_compact_emits_detailed_compaction_events`
 Expected: PASS
 
 **Step 3: Run full test suite**
@@ -522,7 +522,7 @@ Expected: All tests pass.
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/catchup.rs
+git add ferret-indexer-core/src/catchup.rs
 git commit -m "test(catchup): verify detailed compaction progress events"
 ```
 

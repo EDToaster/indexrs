@@ -13,11 +13,11 @@
 ### Task 1: Add `memchr` dependency
 
 **Files:**
-- Modify: `indexrs-core/Cargo.toml`
+- Modify: `ferret-indexer-core/Cargo.toml`
 
 **Step 1: Add the memchr dependency**
 
-Add `memchr = "2"` to `[dependencies]` in `indexrs-core/Cargo.toml`, after the `blake3` line:
+Add `memchr = "2"` to `[dependencies]` in `ferret-indexer-core/Cargo.toml`, after the `blake3` line:
 
 ```toml
 memchr = "2"
@@ -25,13 +25,13 @@ memchr = "2"
 
 **Step 2: Verify it compiles**
 
-Run: `cargo check -p indexrs-core`
+Run: `cargo check -p ferret-indexer-core`
 Expected: compiles successfully
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/Cargo.toml
+git add ferret-indexer-core/Cargo.toml
 git commit -m "chore: add memchr dependency for SIMD-accelerated byte search"
 ```
 
@@ -42,8 +42,8 @@ git commit -m "chore: add memchr dependency for SIMD-accelerated byte search"
 The `LineIndex::new()` in `verify.rs:23-29` uses `.iter().enumerate().filter().map().collect()` to find newlines — generic iterator overhead. `memchr::memchr_iter(b'\n', content)` uses SIMD (AVX2/NEON) and is significantly faster.
 
 **Files:**
-- Modify: `indexrs-core/src/verify.rs:1-34`
-- Test: existing tests in `indexrs-core/src/verify.rs` (no new tests needed — behavior is identical)
+- Modify: `ferret-indexer-core/src/verify.rs:1-34`
+- Test: existing tests in `ferret-indexer-core/src/verify.rs` (no new tests needed — behavior is identical)
 
 **Step 1: Write a micro-benchmark test to confirm behavior parity**
 
@@ -82,7 +82,7 @@ fn test_line_index_memchr_parity() {
 
 **Step 2: Run the test to verify it passes with current code**
 
-Run: `cargo test -p indexrs-core -- test_line_index_memchr_parity`
+Run: `cargo test -p ferret-indexer-core -- test_line_index_memchr_parity`
 Expected: PASS
 
 **Step 3: Replace the iterator chain with memchr**
@@ -107,13 +107,13 @@ Then replace the `LineIndex::new()` body (lines 23-34):
 
 **Step 4: Run all verify tests**
 
-Run: `cargo test -p indexrs-core -- verify`
+Run: `cargo test -p ferret-indexer-core -- verify`
 Expected: all PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/verify.rs
+git add ferret-indexer-core/src/verify.rs
 git commit -m "perf: use memchr SIMD for newline scanning in LineIndex"
 ```
 
@@ -124,7 +124,7 @@ git commit -m "perf: use memchr SIMD for newline scanning in LineIndex"
 Currently `verify()` builds a `LineIndex` (line 145), then `verify_with_context()` calls `verify()` and builds a **second** `LineIndex` (line 259). Fix: extract `verify_inner()` that returns both the matches and the `LineIndex`, share it between the two methods.
 
 **Files:**
-- Modify: `indexrs-core/src/verify.rs:140-326`
+- Modify: `ferret-indexer-core/src/verify.rs:140-326`
 - Test: existing tests cover this (behavior is identical)
 
 **Step 1: Refactor verify() to share the LineIndex**
@@ -183,18 +183,18 @@ Keep the rest of `verify_with_context` unchanged — just delete the two lines t
 
 **Step 2: Run all verify tests**
 
-Run: `cargo test -p indexrs-core -- verify`
+Run: `cargo test -p ferret-indexer-core -- verify`
 Expected: all PASS
 
 **Step 3: Run all multi_search tests too (they use ContentVerifier)**
 
-Run: `cargo test -p indexrs-core -- multi_search`
+Run: `cargo test -p ferret-indexer-core -- multi_search`
 Expected: all PASS
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/verify.rs
+git add ferret-indexer-core/src/verify.rs
 git commit -m "perf: eliminate double LineIndex construction in verify_with_context"
 ```
 
@@ -207,8 +207,8 @@ Every call to `Segment::get_metadata()` and `get_size_bytes()` creates a new `Me
 The simplest approach: add a `metadata_reader_unchecked()` private helper that builds a `MetadataReader` without validation (since we already validated in `open()`), then use it in `get_metadata()` and `get_size_bytes()`.
 
 **Files:**
-- Modify: `indexrs-core/src/metadata.rs:212-253` — add `new_unchecked()` constructor
-- Modify: `indexrs-core/src/segment.rs:147-171` — use unchecked reader
+- Modify: `ferret-indexer-core/src/metadata.rs:212-253` — add `new_unchecked()` constructor
+- Modify: `ferret-indexer-core/src/segment.rs:147-171` — use unchecked reader
 - Test: existing tests cover this (behavior is identical)
 
 **Step 1: Add `MetadataReader::new_unchecked()` constructor**
@@ -275,7 +275,7 @@ Expected: no warnings
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/metadata.rs indexrs-core/src/segment.rs indexrs-core/src/segment_manager.rs indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/metadata.rs ferret-indexer-core/src/segment.rs ferret-indexer-core/src/segment_manager.rs ferret-indexer-core/src/recovery.rs
 git commit -m "perf: skip MetadataReader header re-validation on every lookup"
 ```
 
@@ -286,8 +286,8 @@ git commit -m "perf: skip MetadataReader header re-validation on every lookup"
 `ContentStoreReader::read_content()` starts with `Vec::new()` which grows dynamically during decompression. The `size_bytes` field from metadata is the original uncompressed size — use it as a capacity hint to eliminate reallocation.
 
 **Files:**
-- Modify: `indexrs-core/src/content.rs:181-212` — add `read_content_with_hint()`
-- Modify: `indexrs-core/src/multi_search.rs` — pass size hint at call sites
+- Modify: `ferret-indexer-core/src/content.rs:181-212` — add `read_content_with_hint()`
+- Modify: `ferret-indexer-core/src/multi_search.rs` — pass size hint at call sites
 - Test: existing tests cover this (behavior is identical)
 
 **Step 1: Add `read_content_with_size_hint()` method**
@@ -365,7 +365,7 @@ Expected: all PASS
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/content.rs indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/content.rs ferret-indexer-core/src/multi_search.rs
 git commit -m "perf: pre-allocate zstd decompression buffer from known file size"
 ```
 
@@ -376,7 +376,7 @@ git commit -m "perf: pre-allocate zstd decompression buffer from known file size
 Both are computed inside the per-candidate loop. `SystemTime::now()` is a syscall per file; `RankingConfig::default()` allocates per file. Fix: compute both once and pass them through.
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs` — hoist to call sites, pass through
+- Modify: `ferret-indexer-core/src/multi_search.rs` — hoist to call sites, pass through
 
 **Step 1: Hoist in `search_single_segment_with_context` (parallel path)**
 
@@ -433,7 +433,7 @@ Expected: no warnings
 **Step 6: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "perf: hoist SystemTime::now() and RankingConfig out of per-file loops"
 ```
 
@@ -444,8 +444,8 @@ git commit -m "perf: hoist SystemTime::now() and RankingConfig out of per-file l
 Replace both `find_substring()` implementations (naive `windows().position()`) with `memchr::memmem::find()` which uses SIMD-accelerated search (Two-Way + SSE/AVX2/NEON). This is the single highest-impact change: 10-100x faster for the verification hot path.
 
 **Files:**
-- Modify: `indexrs-core/src/verify.rs:330-337` — replace `find_substring()`
-- Modify: `indexrs-core/src/multi_search.rs:136-144` — replace `find_substring()`
+- Modify: `ferret-indexer-core/src/verify.rs:330-337` — replace `find_substring()`
+- Modify: `ferret-indexer-core/src/multi_search.rs:136-144` — replace `find_substring()`
 - Test: existing tests cover both (behavior is identical)
 
 **Step 1: Replace `find_substring` in `verify.rs`**
@@ -493,7 +493,7 @@ Expected: no warnings
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/verify.rs indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/verify.rs ferret-indexer-core/src/multi_search.rs
 git commit -m "perf: use memchr::memmem SIMD for substring search (10-100x faster)"
 ```
 
@@ -504,7 +504,7 @@ git commit -m "perf: use memchr::memmem SIMD for substring search (10-100x faste
 The `verify_content_matches()` function in `multi_search.rs` calls `find_substring()` in a loop per line. Each call to `memmem::find()` re-initializes the searcher. Pre-building a `memmem::Finder` once per query amortizes the setup cost across all lines.
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs:42-134` — use `Finder` in `verify_content_matches`
+- Modify: `ferret-indexer-core/src/multi_search.rs:42-134` — use `Finder` in `verify_content_matches`
 
 **Step 1: Refactor verify_content_matches to use Finder**
 
@@ -570,7 +570,7 @@ Expected: all PASS
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "perf: pre-build memmem::Finder for amortized SIMD search setup"
 ```
 
@@ -595,5 +595,5 @@ Expected: no changes needed
 
 **Step 4: Run the demo to smoke-test**
 
-Run: `cargo run -p indexrs-core --example demo -- indexrs-core/src "find_substring"`
+Run: `cargo run -p ferret-indexer-core --example demo -- ferret-indexer-core/src "find_substring"`
 Expected: search results appear, no errors

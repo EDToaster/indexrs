@@ -13,12 +13,12 @@
 ### Task 1: Create `hybrid_detector.rs` with struct definition and `new()`
 
 **Files:**
-- Create: `indexrs-core/src/hybrid_detector.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/hybrid_detector.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 **Step 1: Write the failing test**
 
-In `indexrs-core/src/hybrid_detector.rs`, create the module with a test:
+In `ferret-indexer-core/src/hybrid_detector.rs`, create the module with a test:
 
 ```rust
 //! Hybrid change detector combining file watcher and git-based detection.
@@ -107,13 +107,13 @@ Add `pub mod hybrid_detector;` and `pub use hybrid_detector::HybridDetector;` to
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-core -- test_new_creates_successfully -v`
+Run: `cargo test -p ferret-indexer-core -- test_new_creates_successfully -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/hybrid_detector.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/hybrid_detector.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(HHC-39): add HybridDetector struct with new() constructor"
 ```
 
@@ -122,7 +122,7 @@ git commit -m "feat(HHC-39): add HybridDetector struct with new() constructor"
 ### Task 2: Implement `set_git_poll_interval()` and `stop()`
 
 **Files:**
-- Modify: `indexrs-core/src/hybrid_detector.rs`
+- Modify: `ferret-indexer-core/src/hybrid_detector.rs`
 
 **Step 1: Write the failing tests**
 
@@ -173,13 +173,13 @@ pub fn stop(&mut self) {
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-core -- test_set_git_poll_interval test_stop_before_start test_double_stop -v`
+Run: `cargo test -p ferret-indexer-core -- test_set_git_poll_interval test_stop_before_start test_double_stop -v`
 Expected: PASS
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/hybrid_detector.rs
+git add ferret-indexer-core/src/hybrid_detector.rs
 git commit -m "feat(HHC-39): add set_git_poll_interval() and stop() methods"
 ```
 
@@ -188,7 +188,7 @@ git commit -m "feat(HHC-39): add set_git_poll_interval() and stop() methods"
 ### Task 3: Implement dedup helper
 
 **Files:**
-- Modify: `indexrs-core/src/hybrid_detector.rs`
+- Modify: `ferret-indexer-core/src/hybrid_detector.rs`
 
 **Step 1: Write the failing test**
 
@@ -243,13 +243,13 @@ fn dedup_events(events: Vec<ChangeEvent>) -> Vec<ChangeEvent> {
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-core -- test_dedup -v`
+Run: `cargo test -p ferret-indexer-core -- test_dedup -v`
 Expected: PASS
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/hybrid_detector.rs
+git add ferret-indexer-core/src/hybrid_detector.rs
 git commit -m "feat(HHC-39): add dedup_events helper for path-based deduplication"
 ```
 
@@ -258,7 +258,7 @@ git commit -m "feat(HHC-39): add dedup_events helper for path-based deduplicatio
 ### Task 4: Implement `start()` and `reindex()`
 
 **Files:**
-- Modify: `indexrs-core/src/hybrid_detector.rs`
+- Modify: `ferret-indexer-core/src/hybrid_detector.rs`
 
 **Step 1: Write the tests**
 
@@ -446,18 +446,18 @@ pub fn reindex(&self) {
 
 **Step 3: Run all tests**
 
-Run: `cargo test -p indexrs-core -- hybrid_detector -v`
+Run: `cargo test -p ferret-indexer-core -- hybrid_detector -v`
 Expected: PASS (ignored tests skipped)
 
 **Step 4: Run clippy**
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 Expected: No warnings
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/hybrid_detector.rs
+git add ferret-indexer-core/src/hybrid_detector.rs
 git commit -m "feat(HHC-39): implement start(), stop(), and reindex() for HybridDetector"
 ```
 
@@ -467,12 +467,12 @@ git commit -m "feat(HHC-39): implement start(), stop(), and reindex() for Hybrid
 
 **Step 1: Run full test suite**
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 Expected: All non-ignored tests PASS
 
 **Step 2: Run clippy**
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 Expected: No warnings
 
 **Step 3: Run fmt check**

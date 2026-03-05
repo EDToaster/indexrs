@@ -6,14 +6,14 @@
 
 **Architecture:** The `SearchOptions.max_results` field already exists but is treated as post-hoc truncation. We'll thread a "remaining budget" through the two single-segment search functions (`search_single_segment_with_context` and `search_single_segment_with_pattern`) so they break out of their candidate loops early. Multi-segment functions will subtract found results from the budget before searching the next segment. Default remains `None` (unlimited) so CLI/daemon behavior is unchanged unless callers explicitly set a limit.
 
-**Tech Stack:** Rust, existing `indexrs-core` crate. No new dependencies.
+**Tech Stack:** Rust, existing `ferret-indexer-core` crate. No new dependencies.
 
 ---
 
 ### Task 1: Add early termination to `search_single_segment_with_context`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs:231-292` (the `search_single_segment_with_context` fn)
+- Modify: `ferret-indexer-core/src/multi_search.rs:231-292` (the `search_single_segment_with_context` fn)
 
 **Step 1: Write the failing test**
 
@@ -23,7 +23,7 @@ Add to the `tests` module in `multi_search.rs`:
 #[test]
 fn test_search_single_segment_early_termination() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Build a segment with 5 files, all containing "println"
@@ -51,7 +51,7 @@ fn test_search_single_segment_early_termination() {
 
 **Step 2: Run the test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_search_single_segment_early_termination -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_single_segment_early_termination -v`
 Expected: FAIL — `search_single_segment_with_context` doesn't accept 5 args yet.
 
 **Step 3: Write minimal implementation**
@@ -98,13 +98,13 @@ Update the two call sites in the same file:
 
 **Step 4: Run the test to verify it passes**
 
-Run: `cargo test -p indexrs-core -- test_search_single_segment -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_single_segment -v`
 Expected: ALL `search_single_segment` tests PASS, including the new early termination test.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): add early termination to search_single_segment_with_context"
 ```
 
@@ -113,7 +113,7 @@ git commit -m "feat(multi_search): add early termination to search_single_segmen
 ### Task 2: Add early termination to `search_single_segment_with_pattern`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs:335-450` (the `search_single_segment_with_pattern` fn)
+- Modify: `ferret-indexer-core/src/multi_search.rs:335-450` (the `search_single_segment_with_pattern` fn)
 
 **Step 1: Write the failing test**
 
@@ -123,7 +123,7 @@ Add to the `tests` module in `multi_search.rs`:
 #[test]
 fn test_search_single_segment_pattern_early_termination() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let files: Vec<InputFile> = (0..5)
@@ -151,7 +151,7 @@ fn test_search_single_segment_pattern_early_termination() {
 
 **Step 2: Run the test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_search_single_segment_pattern_early_termination -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_single_segment_pattern_early_termination -v`
 Expected: FAIL — wrong number of arguments.
 
 **Step 3: Write minimal implementation**
@@ -197,13 +197,13 @@ Update all call sites to pass `None`:
 
 **Step 4: Run the test to verify it passes**
 
-Run: `cargo test -p indexrs-core -- test_search_single_segment_pattern -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_single_segment_pattern -v`
 Expected: ALL pattern-related tests PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): add early termination to search_single_segment_with_pattern"
 ```
 
@@ -212,7 +212,7 @@ git commit -m "feat(multi_search): add early termination to search_single_segmen
 ### Task 3: Wire budget through `search_segments_with_options`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs:166-228` (the `search_segments_with_options` fn)
+- Modify: `ferret-indexer-core/src/multi_search.rs:166-228` (the `search_segments_with_options` fn)
 
 **Step 1: Write the failing test**
 
@@ -220,7 +220,7 @@ git commit -m "feat(multi_search): add early termination to search_single_segmen
 #[test]
 fn test_search_segments_with_options_max_results_early_termination() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Segment 0: 3 files with "println"
@@ -280,7 +280,7 @@ fn test_search_segments_with_options_max_results_early_termination() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_search_segments_with_options_max_results_early_termination -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_with_options_max_results_early_termination -v`
 Expected: FAIL — `total_file_count` will be 6 not 2 (budget not wired).
 
 Note: this test may actually pass at the merge level since `search_segments_with_options` already has a `break` at line 202-206. But the budget isn't passed into the per-segment function, so it still does too much work. The test needs to verify via `total_file_count` reflecting the early-stopped count (not all 6).
@@ -333,13 +333,13 @@ The `total_file_count` and `total_match_count` are computed from the `files` vec
 
 **Step 4: Run tests**
 
-Run: `cargo test -p indexrs-core -- test_search_segments -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments -v`
 Expected: ALL `search_segments` tests PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): wire result budget through search_segments_with_options"
 ```
 
@@ -348,7 +348,7 @@ git commit -m "feat(multi_search): wire result budget through search_segments_wi
 ### Task 4: Wire budget through pattern-aware multi-segment functions
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs:460-575` (`search_segments_with_pattern` and `search_segments_with_pattern_and_options`)
+- Modify: `ferret-indexer-core/src/multi_search.rs:460-575` (`search_segments_with_pattern` and `search_segments_with_pattern_and_options`)
 
 **Step 1: Write the failing test**
 
@@ -356,7 +356,7 @@ git commit -m "feat(multi_search): wire result budget through search_segments_wi
 #[test]
 fn test_search_segments_with_pattern_and_options_early_termination() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -403,7 +403,7 @@ fn test_search_segments_with_pattern_and_options_early_termination() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_search_segments_with_pattern_and_options_early_termination -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_with_pattern_and_options_early_termination -v`
 Expected: FAIL — `total_file_count` is 5, not 2 (currently uses post-hoc truncation).
 
 **Step 3: Wire the budget**
@@ -472,7 +472,7 @@ This replaces the entire existing body of `search_segments_with_pattern` (lines 
 
 **Step 4: Run all tests**
 
-Run: `cargo test -p indexrs-core -- multi_search -v`
+Run: `cargo test -p ferret-indexer-core -- multi_search -v`
 Expected: ALL tests PASS.
 
 **Step 5: Run clippy and fmt**
@@ -483,7 +483,7 @@ Expected: Clean.
 **Step 6: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): wire result budget through pattern-aware search functions"
 ```
 

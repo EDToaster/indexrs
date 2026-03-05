@@ -1,6 +1,6 @@
-# indexrs: Risks, Tradeoffs, and Devil's Advocate Analysis
+# ferret: Risks, Tradeoffs, and Devil's Advocate Analysis
 
-This document challenges the assumptions behind indexrs - a local code indexing
+This document challenges the assumptions behind ferret - a local code indexing
 service written in Rust with MCP server, web server, and fzf-compatible CLI
 interfaces. The goal is to identify real risks early, prevent scope creep, and
 ensure the project delivers genuine value over existing tools.
@@ -11,97 +11,97 @@ ensure the project delivers genuine value over existing tools.
 
 ### ripgrep + fzf
 
-**The case against indexrs:** ripgrep searches the Linux kernel (~1.1GB of
+**The case against ferret:** ripgrep searches the Linux kernel (~1.1GB of
 source) in under 100ms. For most repos (< 500MB of source), ripgrep + fzf
 already provides sub-second interactive search with zero setup, zero daemon,
 zero disk overhead, and zero stale-index risk. The combination is already
 installed on most developer machines and requires no background process. For
 symbol search, add universal-ctags and you get `ctags -R && fzf < tags`.
 
-**What indexrs would offer:** ripgrep rescans the entire file tree on every
+**What ferret would offer:** ripgrep rescans the entire file tree on every
 query. For truly large monorepos (5GB+), queries that match rare patterns still
 pay the full scan cost. An index inverts this: rare queries become fastest.
-indexrs could also provide structured results (symbol-aware search, language
+ferret could also provide structured results (symbol-aware search, language
 filtering, file-type facets) that raw ripgrep+fzf cannot. The MCP interface
 enables AI agents to search code without shelling out to ripgrep and parsing
 unstructured output.
 
 **Verdict:** For repos under ~1GB, ripgrep + fzf is genuinely hard to beat.
-indexrs only justifies itself for large repos, multi-repo search, or structured
+ferret only justifies itself for large repos, multi-repo search, or structured
 query needs (symbols, language filtering). If the target user has a single
 medium-sized repo, this project may be solving a problem they don't have.
 
 ### zoekt (Sourcegraph's fork)
 
-**The case against indexrs:** zoekt is a production-grade trigram-based code
+**The case against ferret:** zoekt is a production-grade trigram-based code
 search engine maintained by Sourcegraph, battle-tested on thousands of
 repositories at scale. It has 1.4k+ stars, 105+ contributors, 1,881 commits,
 and powers real code search infrastructure. It supports regex, boolean queries,
 symbol search (with universal-ctags), file filtering, and has a web UI. It
 already works.
 
-**What indexrs would offer:** zoekt is designed for server-side deployment
+**What ferret would offer:** zoekt is designed for server-side deployment
 searching many repos, not as a lightweight local tool. It has no MCP interface,
 no fzf-compatible CLI output, and running it locally means managing a Go service
 that was designed for a different use case. zoekt's index files are optimized
-for server workloads, not for a single developer's laptop. indexrs could be
+for server workloads, not for a single developer's laptop. ferret could be
 purpose-built for the local developer workflow.
 
 **Verdict:** zoekt is the strongest competitor. If the goal is "just code
-search," wrapping zoekt with an MCP adapter would be faster to ship. indexrs
+search," wrapping zoekt with an MCP adapter would be faster to ship. ferret
 must differentiate on developer experience, local-first design, and interface
 diversity (MCP + fzf).
 
 ### Sourcegraph
 
-**The case against indexrs:** Sourcegraph is the most feature-complete code
+**The case against ferret:** Sourcegraph is the most feature-complete code
 search platform. It supports regex, boolean operators, commit search, language
 filtering, repository patterns, and more. It has VS Code and JetBrains
 extensions. Sourcegraph also has Cody (their AI assistant) which likely has or
 will have MCP capabilities for code search.
 
-**What indexrs would offer:** Sourcegraph requires an Enterprise plan for full
+**What ferret would offer:** Sourcegraph requires an Enterprise plan for full
 code search features. It is a heavy platform designed for organizations, not a
 lightweight local tool. Self-hosting requires significant infrastructure.
 Sourcegraph does not have a local single-binary mode suitable for individual
-developers. indexrs would be zero-config, zero-infrastructure, local-only.
+developers. ferret would be zero-config, zero-infrastructure, local-only.
 
 **Verdict:** Different target audience. Sourcegraph is for teams with
-infrastructure budgets. indexrs is for individual developers who want local,
+infrastructure budgets. ferret is for individual developers who want local,
 private, fast code search.
 
 ### ctags + fzf (symbol search)
 
-**The case against indexrs:** universal-ctags supports 100+ languages, generates
+**The case against ferret:** universal-ctags supports 100+ languages, generates
 tag files that fzf can consume directly, and the combination has been solving
 symbol navigation for decades. Editors (vim, emacs, VS Code) already consume
 ctags output natively.
 
-**What indexrs would offer:** ctags only does symbol extraction, not full-text
+**What ferret would offer:** ctags only does symbol extraction, not full-text
 search. The tag file must be manually regenerated (or hooked into file watchers
-separately). indexrs would unify full-text search and symbol search in one index
+separately). ferret would unify full-text search and symbol search in one index
 with automatic incremental updates. tree-sitter-based parsing would provide
 more accurate symbol extraction than ctags' regex-based approach for supported
 languages.
 
 **Verdict:** ctags solves symbol search well but doesn't solve full-text code
 search. The combination of ctags + ripgrep + fzf + manual glue scripts is what
-indexrs aims to replace with a single integrated tool.
+ferret aims to replace with a single integrated tool.
 
 ### AI assistants (GitHub Copilot, Claude Code)
 
-**The case against indexrs:** Claude Code already has Grep and Glob tools.
+**The case against ferret:** Claude Code already has Grep and Glob tools.
 Copilot has `@workspace` search. These AI assistants can search code, understand
 context, and answer questions about codebases. They get better every month.
 
-**What indexrs would offer:** AI assistants' code search is a means to an end
+**What ferret would offer:** AI assistants' code search is a means to an end
 (answering questions), not a standalone search tool. They are slow for
 interactive browsing, cannot replace the tight feedback loop of fzf-style
-interactive search, and their search is often imprecise. indexrs via MCP would
+interactive search, and their search is often imprecise. ferret via MCP would
 actually make AI assistants better at code search by giving them a fast,
 accurate index to query instead of slow filesystem scans.
 
-**Verdict:** Not competitors - complementary. indexrs as an MCP server would
+**Verdict:** Not competitors - complementary. ferret as an MCP server would
 improve AI assistant code search capabilities.
 
 ---
@@ -216,7 +216,7 @@ with RAM but the disk footprint is the harder constraint.
 
 **Mitigation:** Support configurable indexing scope (specific directories,
 exclude patterns). Implement index compression (posting list compression can
-reduce trigram index size by 40-60%). Provide `indexrs status` showing disk
+reduce trigram index size by 40-60%). Provide `ferret status` showing disk
 usage. Set hard limits with user-configurable caps.
 
 ### Stale index issues
@@ -233,7 +233,7 @@ the index says so, when really the index is stale, leads to real bugs.
 
 **Mitigation:** Store file checksums/mtimes in the index. On query, optionally
 spot-check a sample of results against the filesystem. Provide clear staleness
-indicators in results. Support `indexrs reindex` for manual full rebuild.
+indicators in results. Support `ferret reindex` for manual full rebuild.
 Consider showing "index last updated: 5 minutes ago" in results.
 
 ### Race conditions: query during reindex
@@ -257,7 +257,7 @@ provides MVCC.
 - Indexing a 500 MB binary blob wastes disk and produces garbage results
 
 **Mitigation:** Use the same heuristics as ripgrep (check for null bytes in
-the first 8KB). Default to skipping binary files. Support `.indexrsignore` for
+the first 8KB). Default to skipping binary files. Support `.ferretignore` for
 explicit exclusions. For encoding, default to UTF-8 and fall back gracefully.
 
 ### Symlinks, submodules, sparse checkouts
@@ -321,7 +321,7 @@ dynamically to avoid compile-time explosion.
 
 ### Compile times as dependencies grow
 
-Rust compile times are a real concern. A typical dependency set for indexrs:
+Rust compile times are a real concern. A typical dependency set for ferret:
 
 | Dependency | Estimated compile contribution |
 |---|---|
@@ -361,7 +361,7 @@ differences. Have CI test on both platforms.
 
 ### Daemon management
 
-indexrs as a service needs answers to:
+ferret as a service needs answers to:
 - How does it start? (manual? login item? systemd/launchd?)
 - How does it stop? (SIGTERM? graceful shutdown with index flush?)
 - How does it restart after crash? (supervision? auto-restart?)
@@ -369,10 +369,10 @@ indexrs as a service needs answers to:
 - How does it handle multiple instances? (pid file? socket lock?)
 
 Getting daemon management right is a project in itself. Getting it wrong means
-users have zombie indexrs processes, orphaned lock files, or the service
+users have zombie ferret processes, orphaned lock files, or the service
 silently not running when they think it is.
 
-**Mitigation:** For MVP, do not run as a daemon. Start indexrs on-demand: when
+**Mitigation:** For MVP, do not run as a daemon. Start ferret on-demand: when
 a query comes in (via CLI or MCP), start the indexer if not running, build/load
 the index, and serve the query. Use a Unix domain socket for IPC. Only add
 persistent daemon mode if on-demand startup is too slow (it might be fine for
@@ -386,7 +386,7 @@ mechanism.
 
 **Mitigation:** For MVP, skip the web server entirely. For later versions, use
 a Unix domain socket (no port conflicts) or write the chosen port to a
-well-known file (`~/.indexrs/port`).
+well-known file (`~/.ferret_index/port`).
 
 ### CPU and battery impact of file watching
 
@@ -395,7 +395,7 @@ Continuous file watching and re-indexing on every save can cause:
 - Increased battery drain on laptops
 - SSD write amplification from frequent index updates
 
-A developer running `cargo watch` (which triggers rebuilds) alongside indexrs
+A developer running `cargo watch` (which triggers rebuilds) alongside ferret
 (which triggers reindexing) alongside their editor's LSP (which re-analyzes)
 means three separate processes all responding to every file save.
 
@@ -405,11 +405,11 @@ when on battery. Rate-limit reindexing (at most once per N seconds).
 
 ### Disk usage growth over time
 
-If indexrs maintains index segments over time without compaction, disk usage
+If ferret maintains index segments over time without compaction, disk usage
 will grow. Old index data for deleted files could accumulate.
 
 **Mitigation:** Implement segment merging/compaction. Periodically rebuild the
-index from scratch (e.g., weekly). Show disk usage in `indexrs status`.
+index from scratch (e.g., weekly). Show disk usage in `ferret status`.
 
 ### Security: web server exposing code on a port
 
@@ -439,7 +439,7 @@ restrictions and consider authentication. For MVP, skip the web server.
 | Memory usage | MEDIUM | Memory-mapped index files. Streaming query execution. |
 | Daemon management | MEDIUM | On-demand startup for MVP. No persistent daemon initially. |
 | CPU/battery impact | MEDIUM | Aggressive debouncing. Rate-limited reindexing. Low-power mode. |
-| Binary file handling | LOW | Null-byte detection (ripgrep heuristic). `.indexrsignore` support. |
+| Binary file handling | LOW | Null-byte detection (ripgrep heuristic). `.ferretignore` support. |
 | .gitignore parsing | LOW | Use the `ignore` crate. Do not reimplement. |
 | Compile times | LOW | Cargo workspaces. Optional features for heavy deps. |
 | Web server security | LOW | Defer web server. When built, bind localhost only. |
@@ -465,7 +465,7 @@ actual repo.
 4. **Path filtering** (glob patterns on file paths)
 5. **Language filtering** (based on file extension, not parsing)
 6. **fzf-compatible CLI** output (simple newline-delimited format, works with
-   `indexrs search "pattern" | fzf`)
+   `ferret search "pattern" | fzf`)
 7. **MCP server** with a single `search` tool (query string in, results out)
 8. **Respect .gitignore** via the `ignore` crate
 9. **On-demand startup** (no daemon - start when queried, keep running until
@@ -482,8 +482,8 @@ actual repo.
 
 #### Success criteria for v0.1
 
-indexrs v0.1 is successful if:
-1. For a repo of 500MB+ source, `indexrs search` returns results noticeably
+ferret v0.1 is successful if:
+1. For a repo of 500MB+ source, `ferret search` returns results noticeably
    faster than `rg` for the same pattern
 2. The MCP tool works in Claude Code and returns useful, structured results
 3. The index updates automatically when files change, without manual intervention
@@ -509,6 +509,6 @@ unique value proposition - no existing tool provides a fast, local code search
 index exposed via MCP. If AI-assisted development continues to grow (and it
 will), this becomes increasingly valuable.
 
-**The best reason to build indexrs is not that ripgrep is slow. It is that AI
+**The best reason to build ferret is not that ripgrep is slow. It is that AI
 agents need structured, fast, local code search, and nothing provides that
 today.**

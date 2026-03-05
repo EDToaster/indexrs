@@ -6,14 +6,14 @@
 
 **Architecture:** The current `build_inner()` loop processes each file sequentially: hash, detect language, count lines, extract trigrams, compress content, record metadata. The CPU-bound work (hash, trigram extraction, compression) is independent per file and can run in parallel. The key constraint is that `ContentStoreWriter` writes sequentially to a file, so compressed blobs must be written in order. The solution: use `rayon::par_iter()` to compute per-file results (hash, language, line count, unique trigrams, compressed bytes) in parallel, collect into a Vec, then iterate sequentially to write compressed content and feed the posting list builder and metadata builder.
 
-**Tech Stack:** Rust, `rayon` crate (already a dependency of `indexrs-core`).
+**Tech Stack:** Rust, `rayon` crate (already a dependency of `ferret-indexer-core`).
 
 ---
 
 ### Task 1: Refactor build_inner to use a two-phase approach
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs:276-352` (the `build_inner` method)
+- Modify: `ferret-indexer-core/src/segment.rs:276-352` (the `build_inner` method)
 
 **Step 1: Define a struct for per-file processed results**
 
@@ -157,7 +157,7 @@ pub fn add_raw(&mut self, compressed: &[u8]) -> std::io::Result<(u64, u32)> {
 
 **Step 4: Run tests to verify correctness**
 
-Run: `cargo test -p indexrs-core -- segment`
+Run: `cargo test -p ferret-indexer-core -- segment`
 Expected: All existing segment tests pass — the refactor is behavior-preserving.
 
 **Step 5: Run clippy and fmt**
@@ -168,7 +168,7 @@ Expected: No warnings, formatting clean.
 **Step 6: Commit**
 
 ```bash
-git add indexrs-core/src/segment.rs indexrs-core/src/content.rs
+git add ferret-indexer-core/src/segment.rs ferret-indexer-core/src/content.rs
 git commit -m "perf: parallelize segment build with rayon
 
 Use rayon to parallelize per-file blake3 hashing and zstd compression

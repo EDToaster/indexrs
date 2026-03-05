@@ -4,7 +4,7 @@
 
 **Goal:** CLI commands (`search`, `files`) connect to a running daemon or auto-start one, routing queries through the Unix socket instead of loading the index directly each time.
 
-**Architecture:** The daemon process is the same `indexrs` binary invoked with a hidden `daemon-start` subcommand. When the CLI handles `search` or `files`, it tries `try_connect()` first. If no daemon is running, it spawns one via `std::process::Command` (detached background process), polls until the socket is ready, then sends the request as JSON-over-newline and streams `DaemonResponse::Line` content to stdout. The daemon keeps the `SegmentManager` loaded in memory across requests, eliminating per-query index load overhead. Non-daemon commands (`preview`, `status`, `symbols`, `reindex`) are unchanged.
+**Architecture:** The daemon process is the same `ferret` binary invoked with a hidden `daemon-start` subcommand. When the CLI handles `search` or `files`, it tries `try_connect()` first. If no daemon is running, it spawns one via `std::process::Command` (detached background process), polls until the socket is ready, then sends the request as JSON-over-newline and streams `DaemonResponse::Line` content to stdout. The daemon keeps the `SegmentManager` loaded in memory across requests, eliminating per-query index load overhead. Non-daemon commands (`preview`, `status`, `symbols`, `reindex`) are unchanged.
 
 **Tech Stack:** Rust, tokio, clap (hidden subcommand), serde_json, Unix domain sockets
 
@@ -13,16 +13,16 @@
 ### Task 1: Add hidden `daemon-start` subcommand and make `run()` async
 
 **Files:**
-- Modify: `indexrs-cli/src/args.rs`
-- Modify: `indexrs-cli/src/main.rs`
+- Modify: `ferret-indexer-cli/src/args.rs`
+- Modify: `ferret-indexer-cli/src/main.rs`
 
 **Step 1: Write the failing test**
 
-No unit test needed for this step — the test is: `cargo build -p indexrs-cli` must compile, and the hidden subcommand must not appear in `--help`.
+No unit test needed for this step — the test is: `cargo build -p ferret-indexer-cli` must compile, and the hidden subcommand must not appear in `--help`.
 
 **Step 2: Add `DaemonStart` variant to `Command` enum**
 
-In `indexrs-cli/src/args.rs`, add a hidden variant at the end of the `Command` enum:
+In `ferret-indexer-cli/src/args.rs`, add a hidden variant at the end of the `Command` enum:
 
 ```rust
     /// Internal: run as daemon process (hidden from help)
@@ -32,9 +32,9 @@ In `indexrs-cli/src/args.rs`, add a hidden variant at the end of the `Command` e
 
 **Step 3: Make `run()` async and wire up `DaemonStart`**
 
-In `indexrs-cli/src/main.rs`:
+In `ferret-indexer-cli/src/main.rs`:
 
-1. Change `fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::IndexError>` to `async fn run(...)`.
+1. Change `fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, ferret_indexer_core::IndexError>` to `async fn run(...)`.
 2. Update the call site in `main()`: change `match run(cli, &color)` to `match run(cli, &color).await`.
 3. Add the `DaemonStart` match arm:
 
@@ -48,19 +48,19 @@ Command::DaemonStart => {
 
 **Step 4: Verify it builds and existing tests pass**
 
-Run: `cargo build -p indexrs-cli`
-Run: `cargo test -p indexrs-cli`
+Run: `cargo build -p ferret-indexer-cli`
+Run: `cargo test -p ferret-indexer-cli`
 Expected: All pass. No behavior change for existing commands.
 
 **Step 5: Verify hidden from help**
 
-Run: `cargo run -p indexrs-cli -- --help`
+Run: `cargo run -p ferret-indexer-cli -- --help`
 Expected: `daemon-start` does NOT appear in the subcommand list.
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-cli/src/args.rs indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/args.rs ferret-indexer-cli/src/main.rs
 git commit -m "feat(cli): add hidden daemon-start subcommand, make run() async"
 ```
 
@@ -69,7 +69,7 @@ git commit -m "feat(cli): add hidden daemon-start subcommand, make run() async"
 ### Task 2: Add `spawn_daemon` and `ensure_daemon` functions
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs`
+- Modify: `ferret-indexer-cli/src/daemon.rs`
 
 **Step 1: Write the failing test**
 
@@ -78,14 +78,14 @@ Add an integration test that verifies `ensure_daemon` returns a working connecti
 ```rust
 #[tokio::test]
 async fn test_ensure_daemon_spawns_and_connects() {
-    use indexrs_core::segment::InputFile;
+    use ferret_indexer_core::segment::InputFile;
 
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
     // Build a minimal index so the daemon can load it.
-    let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = ferret_indexer_core::SegmentManager::new(&ferret_dir).unwrap();
     manager
         .index_files(vec![InputFile {
             path: "test.rs".to_string(),
@@ -124,7 +124,7 @@ async fn test_ensure_daemon_spawns_and_connects() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-cli -- test_ensure_daemon_spawns_and_connects --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_ensure_daemon_spawns_and_connects --nocapture`
 Expected: FAIL — `ensure_daemon` doesn't exist yet.
 
 **Step 3: Implement `spawn_daemon` and `ensure_daemon`**
@@ -187,10 +187,10 @@ pub async fn ensure_daemon(repo_root: &Path) -> Result<UnixStream, IndexError> {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-cli -- test_ensure_daemon_spawns_and_connects --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_ensure_daemon_spawns_and_connects --nocapture`
 Expected: PASS
 
-**Important note:** This test spawns a real daemon process. It requires the `indexrs` binary to be built first. If the test fails because the binary isn't found, run `cargo build -p indexrs-cli` first, or restructure the test to start the daemon in-process (like the existing ping/pong test). If in-process is preferred, use `tokio::spawn(start_daemon(...))` instead of `spawn_daemon_process`:
+**Important note:** This test spawns a real daemon process. It requires the `ferret` binary to be built first. If the test fails because the binary isn't found, run `cargo build -p ferret-indexer-cli` first, or restructure the test to start the daemon in-process (like the existing ping/pong test). If in-process is preferred, use `tokio::spawn(start_daemon(...))` instead of `spawn_daemon_process`:
 
 ```rust
 // Alternative: in-process test (doesn't test spawn_daemon_process, but tests ensure_daemon logic)
@@ -207,13 +207,13 @@ Write **both** tests: one that tests `ensure_daemon` connecting to an already-ru
 
 **Step 5: Run all tests**
 
-Run: `cargo test -p indexrs-cli`
+Run: `cargo test -p ferret-indexer-cli`
 Expected: All pass.
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): add spawn_daemon and ensure_daemon for on-demand startup"
 ```
 
@@ -222,7 +222,7 @@ git commit -m "feat(daemon): add spawn_daemon and ensure_daemon for on-demand st
 ### Task 3: Add `run_via_daemon` client function
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs`
+- Modify: `ferret-indexer-cli/src/daemon.rs`
 
 **Step 1: Write the failing test**
 
@@ -231,13 +231,13 @@ Test that `run_via_daemon` sends a Search request and captures the output correc
 ```rust
 #[tokio::test]
 async fn test_run_via_daemon_search() {
-    use indexrs_core::segment::InputFile;
+    use ferret_indexer_core::segment::InputFile;
 
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
-    let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = ferret_indexer_core::SegmentManager::new(&ferret_dir).unwrap();
     manager
         .index_files(vec![InputFile {
             path: "src/main.rs".to_string(),
@@ -294,7 +294,7 @@ async fn test_run_via_daemon_search() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-cli -- test_run_via_daemon_search --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_run_via_daemon_search --nocapture`
 Expected: FAIL — `run_via_daemon` doesn't exist yet.
 
 **Step 3: Implement `run_via_daemon`**
@@ -366,18 +366,18 @@ pub async fn run_via_daemon<W: std::io::Write>(
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-cli -- test_run_via_daemon_search --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_run_via_daemon_search --nocapture`
 Expected: PASS
 
 **Step 5: Run all tests**
 
-Run: `cargo test -p indexrs-cli`
+Run: `cargo test -p ferret-indexer-cli`
 Expected: All pass.
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): add run_via_daemon client function"
 ```
 
@@ -386,7 +386,7 @@ git commit -m "feat(daemon): add run_via_daemon client function"
 ### Task 4: Wire Search and Files commands through daemon
 
 **Files:**
-- Modify: `indexrs-cli/src/main.rs`
+- Modify: `ferret-indexer-cli/src/main.rs`
 
 **Step 1: Update the `Search` match arm**
 
@@ -481,20 +481,20 @@ After replacing the Search/Files arms, the following imports in `main.rs` are no
 - Remove `use crate::search_cmd` if only used in the Search arm
 - Remove `use crate::files` if only used in the Files arm
 
-Check with `cargo clippy -p indexrs-cli -- -D warnings` to identify any dead imports.
+Check with `cargo clippy -p ferret-indexer-cli -- -D warnings` to identify any dead imports.
 
 **Note:** Keep the `repo` module import — it's still used by other commands (`Preview`, `Status`, `Reindex`). Keep `search_cmd` and `files` modules declared (they're used by `daemon.rs`).
 
 **Step 4: Verify all tests pass**
 
-Run: `cargo test -p indexrs-cli`
-Run: `cargo clippy -p indexrs-cli -- -D warnings`
+Run: `cargo test -p ferret-indexer-cli`
+Run: `cargo clippy -p ferret-indexer-cli -- -D warnings`
 Expected: All pass, no warnings.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/main.rs
 git commit -m "feat(cli): route search and files commands through daemon"
 ```
 
@@ -503,7 +503,7 @@ git commit -m "feat(cli): route search and files commands through daemon"
 ### Task 5: Remove `#![allow(dead_code)]` and clean up
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs`
+- Modify: `ferret-indexer-cli/src/daemon.rs`
 
 **Step 1: Remove the attribute**
 
@@ -511,7 +511,7 @@ Remove `#![allow(dead_code)]` from line 1 of `daemon.rs`.
 
 **Step 2: Run clippy**
 
-Run: `cargo clippy -p indexrs-cli -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-cli -- -D warnings`
 Expected: PASS — all daemon functions are now used (either by `main.rs` calling `run_via_daemon`/`start_daemon`, or internally by the daemon module).
 
 If there are dead code warnings for items only used in tests (e.g., `socket_path` if it's only used in tests and `ensure_daemon`), add `#[cfg(test)]` or `pub(crate)` as appropriate rather than a blanket `allow`.
@@ -525,6 +525,6 @@ Expected: All pass.
 **Step 4: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "chore: remove allow(dead_code) from daemon module"
 ```

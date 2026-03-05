@@ -13,7 +13,7 @@
 ### Task 1: Add `get_size_bytes()` to `MetadataReader`
 
 **Files:**
-- Modify: `indexrs-core/src/metadata.rs` (add method + tests)
+- Modify: `ferret-indexer-core/src/metadata.rs` (add method + tests)
 
 **Step 1: Write the failing test**
 
@@ -42,7 +42,7 @@ fn test_reader_get_size_bytes() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_reader_get_size_bytes`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_reader_get_size_bytes`
 Expected: FAIL with compilation error (method does not exist)
 
 **Step 3: Write minimal implementation**
@@ -97,13 +97,13 @@ pub fn get_size_bytes(&self, file_id: FileId) -> Result<Option<u32>, IndexError>
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_reader_get_size_bytes`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_reader_get_size_bytes`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/metadata.rs
+git add ferret-indexer-core/src/metadata.rs
 git commit -m "feat(metadata): add get_size_bytes() for lightweight file size lookup"
 ```
 
@@ -112,7 +112,7 @@ git commit -m "feat(metadata): add get_size_bytes() for lightweight file size lo
 ### Task 2: Add `get_size_bytes()` to `Segment`
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs` (add delegating method)
+- Modify: `ferret-indexer-core/src/segment.rs` (add delegating method)
 
 **Step 1: Write the failing test**
 
@@ -122,7 +122,7 @@ Add to the `mod tests` block in `segment.rs`:
 #[test]
 fn test_segment_get_size_bytes() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![
@@ -149,7 +149,7 @@ fn test_segment_get_size_bytes() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_segment_get_size_bytes`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_segment_get_size_bytes`
 Expected: FAIL with compilation error (method does not exist)
 
 **Step 3: Write minimal implementation**
@@ -170,13 +170,13 @@ pub fn get_size_bytes(&self, file_id: FileId) -> Result<Option<u32>, IndexError>
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_segment_get_size_bytes`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_segment_get_size_bytes`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/segment.rs
+git add ferret-indexer-core/src/segment.rs
 git commit -m "feat(segment): add get_size_bytes() delegate for lightweight size lookup"
 ```
 
@@ -185,7 +185,7 @@ git commit -m "feat(segment): add get_size_bytes() delegate for lightweight size
 ### Task 3: Add candidate ordering helper function
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs` (add helper + tests)
+- Modify: `ferret-indexer-core/src/multi_search.rs` (add helper + tests)
 
 **Step 1: Write the failing test**
 
@@ -195,7 +195,7 @@ Add to the `mod tests` block in `multi_search.rs`:
 #[test]
 fn test_sort_candidates_by_size() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Create files of varying sizes; IDs assigned in order: 0=medium, 1=small, 2=large
@@ -231,7 +231,7 @@ fn test_sort_candidates_by_size() {
 #[test]
 fn test_sort_candidates_by_size_preserves_order_for_equal_sizes() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Two files with the same size
@@ -262,7 +262,7 @@ fn test_sort_candidates_by_size_preserves_order_for_equal_sizes() {
 #[test]
 fn test_sort_candidates_by_size_empty() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -282,7 +282,7 @@ fn test_sort_candidates_by_size_empty() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_sort_candidates_by_size`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_sort_candidates_by_size`
 Expected: FAIL with compilation error (function does not exist)
 
 **Step 3: Write minimal implementation**
@@ -331,13 +331,13 @@ Note: We use an index-based sort rather than `sort_by_key` directly on `candidat
 
 **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_sort_candidates_by_size`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_sort_candidates_by_size`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): add sort_candidates_by_size helper"
 ```
 
@@ -346,7 +346,7 @@ git commit -m "feat(multi_search): add sort_candidates_by_size helper"
 ### Task 4: Wire candidate ordering into `search_single_segment_with_context`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs` (two lines added to existing function)
+- Modify: `ferret-indexer-core/src/multi_search.rs` (two lines added to existing function)
 
 **Step 1: Write the failing test**
 
@@ -358,7 +358,7 @@ fn test_search_single_segment_prefers_smaller_files() {
     // Verify that with early termination (max_file_results=1), the smaller file
     // is returned first (proving candidates were sorted by size).
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // File 0 is large (5000 bytes), file 1 is small (30 bytes).
@@ -401,7 +401,7 @@ fn test_search_single_segment_prefers_smaller_files() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_search_single_segment_prefers_smaller_files`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_search_single_segment_prefers_smaller_files`
 Expected: FAIL — currently returns "large.rs" because FileId(0) comes first in candidate order.
 
 **Step 3: Wire ordering into `search_single_segment_with_context`**
@@ -421,16 +421,16 @@ let candidates = sort_candidates_by_size(segment, candidates);
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_search_single_segment_prefers_smaller_files`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_search_single_segment_prefers_smaller_files`
 Expected: PASS
 
-Also run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core`
+Also run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core`
 Expected: All existing tests PASS (ordering doesn't break correctness, only changes verification order).
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): sort candidates by file size in search_single_segment_with_context"
 ```
 
@@ -439,7 +439,7 @@ git commit -m "feat(multi_search): sort candidates by file size in search_single
 ### Task 5: Wire candidate ordering into `search_single_segment_with_pattern`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs` (two lines added to existing function)
+- Modify: `ferret-indexer-core/src/multi_search.rs` (two lines added to existing function)
 
 **Step 1: Write the failing test**
 
@@ -449,7 +449,7 @@ Add to the `mod tests` block in `multi_search.rs`:
 #[test]
 fn test_search_single_segment_with_pattern_prefers_smaller_files() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -488,7 +488,7 @@ fn test_search_single_segment_with_pattern_prefers_smaller_files() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_search_single_segment_with_pattern_prefers_smaller_files`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_search_single_segment_with_pattern_prefers_smaller_files`
 Expected: FAIL — returns "large.rs"
 
 **Step 3: Wire ordering into `search_single_segment_with_pattern`**
@@ -501,16 +501,16 @@ let candidates = sort_candidates_by_size(segment, candidates);
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core -- test_search_single_segment_with_pattern_prefers_smaller_files`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core -- test_search_single_segment_with_pattern_prefers_smaller_files`
 Expected: PASS
 
-Also run: `cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering && cargo test -p indexrs-core`
+Also run: `cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering && cargo test -p ferret-indexer-core`
 Expected: All tests PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): sort candidates by file size in search_single_segment_with_pattern"
 ```
 
@@ -521,7 +521,7 @@ git commit -m "feat(multi_search): sort candidates by file size in search_single
 **Step 1: Run full workspace checks**
 
 ```bash
-cd /Users/howard/src/indexrs/.claude/worktrees/hhc-82-ordering
+cd /Users/howard/src/ferret/.claude/worktrees/hhc-82-ordering
 cargo check --workspace
 cargo test --workspace
 cargo clippy --workspace -- -D warnings

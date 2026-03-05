@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Create a `binary` module in `indexrs-core` that detects and filters binary files by content inspection, file extension, and file size so the indexer only processes text files.
+**Goal:** Create a `binary` module in `ferret-indexer-core` that detects and filters binary files by content inspection, file extension, and file size so the indexer only processes text files.
 
-**Architecture:** A single module (`indexrs-core/src/binary.rs`) with four public functions and one constant. Content detection uses the null-byte heuristic (check first 8KB) matching ripgrep's approach. Extension detection uses a hardcoded set of known binary extensions. A combined `should_index_file` function orchestrates all checks. Debug-level tracing logs explain why files are skipped.
+**Architecture:** A single module (`ferret-indexer-core/src/binary.rs`) with four public functions and one constant. Content detection uses the null-byte heuristic (check first 8KB) matching ripgrep's approach. Extension detection uses a hardcoded set of known binary extensions. A combined `should_index_file` function orchestrates all checks. Debug-level tracing logs explain why files are skipped.
 
 **Tech Stack:** Rust, `tracing` crate (already a dependency), `std::path::Path`
 
@@ -13,11 +13,11 @@
 ### Task 1: Create binary.rs with failing tests for `is_binary_content`
 
 **Files:**
-- Create: `indexrs-core/src/binary.rs`
+- Create: `ferret-indexer-core/src/binary.rs`
 
 **Step 1: Write the failing tests**
 
-Create `indexrs-core/src/binary.rs` with only the test module and stubs:
+Create `ferret-indexer-core/src/binary.rs` with only the test module and stubs:
 
 ```rust
 //! Binary file detection and filtering.
@@ -84,7 +84,7 @@ mod tests {
 
 **Step 2: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-core binary -- --nocapture`
+Run: `cargo test -p ferret-indexer-core binary -- --nocapture`
 Expected: all 5 tests PASS (we wrote both code and tests together here because the function is trivial)
 
 ---
@@ -92,7 +92,7 @@ Expected: all 5 tests PASS (we wrote both code and tests together here because t
 ### Task 2: Add `is_binary_extension` with tests
 
 **Files:**
-- Modify: `indexrs-core/src/binary.rs`
+- Modify: `ferret-indexer-core/src/binary.rs`
 
 **Step 1: Add extension detection function and tests**
 
@@ -176,7 +176,7 @@ Add these tests inside the `mod tests` block:
 
 **Step 2: Run tests**
 
-Run: `cargo test -p indexrs-core binary -- --nocapture`
+Run: `cargo test -p ferret-indexer-core binary -- --nocapture`
 Expected: all tests PASS
 
 ---
@@ -184,7 +184,7 @@ Expected: all tests PASS
 ### Task 3: Add `should_index_file` with tracing and tests
 
 **Files:**
-- Modify: `indexrs-core/src/binary.rs`
+- Modify: `ferret-indexer-core/src/binary.rs`
 
 **Step 1: Add the combined check function**
 
@@ -270,7 +270,7 @@ Add these tests:
 
 **Step 2: Run tests**
 
-Run: `cargo test -p indexrs-core binary -- --nocapture`
+Run: `cargo test -p ferret-indexer-core binary -- --nocapture`
 Expected: all tests PASS
 
 ---
@@ -278,7 +278,7 @@ Expected: all tests PASS
 ### Task 4: Integrate into lib.rs and run final checks
 
 **Files:**
-- Modify: `indexrs-core/src/lib.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 **Step 1: Add module declaration and re-exports to lib.rs**
 
@@ -293,17 +293,17 @@ pub use binary::{
 
 **Step 2: Run full test suite**
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 Expected: all tests PASS
 
 **Step 3: Run clippy**
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 Expected: no warnings
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/binary.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/binary.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(core): add binary file detection and exclusion module (HHC-40)"
 ```

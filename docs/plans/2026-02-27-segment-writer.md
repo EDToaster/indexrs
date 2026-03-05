@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement the segment storage layer that organizes index data into immutable segment directories under `.indexrs/segments/seg_NNNN/`, each containing trigrams.bin, meta.bin, paths.bin, content.zst, and tombstones.bin. Provide a `SegmentWriter` to atomically build new segments from input files, and a `Segment` struct to load and query them.
+**Goal:** Implement the segment storage layer that organizes index data into immutable segment directories under `.ferret_index/segments/seg_NNNN/`, each containing trigrams.bin, meta.bin, paths.bin, content.zst, and tombstones.bin. Provide a `SegmentWriter` to atomically build new segments from input files, and a `Segment` struct to load and query them.
 
-**Architecture:** A single `segment.rs` module in `indexrs-core` containing three items: `InputFile` (describes a file to be indexed), `SegmentWriter` (orchestrates the existing M1 writers to build a complete segment directory atomically), and `Segment` (loads a segment from disk by opening all readers/mmaps, exposes trigram reader, content reader, and on-demand metadata reader). The writer reuses `PostingListBuilder`, `TrigramIndexWriter`, `MetadataBuilder`, and `ContentStoreWriter` directly -- no reimplementation. The `Segment` struct owns `Mmap`s for meta.bin and paths.bin and creates ephemeral `MetadataReader` references on demand, because `MetadataReader` borrows `&[u8]`. Crash safety comes from building in a temp directory and atomically renaming to the final `seg_NNNN/` path.
+**Architecture:** A single `segment.rs` module in `ferret-indexer-core` containing three items: `InputFile` (describes a file to be indexed), `SegmentWriter` (orchestrates the existing M1 writers to build a complete segment directory atomically), and `Segment` (loads a segment from disk by opening all readers/mmaps, exposes trigram reader, content reader, and on-demand metadata reader). The writer reuses `PostingListBuilder`, `TrigramIndexWriter`, `MetadataBuilder`, and `ContentStoreWriter` directly -- no reimplementation. The `Segment` struct owns `Mmap`s for meta.bin and paths.bin and creates ephemeral `MetadataReader` references on demand, because `MetadataReader` borrows `&[u8]`. Crash safety comes from building in a temp directory and atomically renaming to the final `seg_NNNN/` path.
 
 **Tech Stack:** Rust 2024, memmap2, blake3, zstd (via existing ContentStoreWriter), tempfile (dev), existing M1 modules
 
@@ -13,12 +13,12 @@
 ## Task 1: Add InputFile struct and segment module skeleton
 
 **Files:**
-- Create: `indexrs-core/src/segment.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/segment.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing test
 
-Add `indexrs-core/src/segment.rs` with the `InputFile` struct and a test that constructs one:
+Add `ferret-indexer-core/src/segment.rs` with the `InputFile` struct and a test that constructs one:
 
 ```rust
 //! Segment storage layout and writer.
@@ -30,7 +30,7 @@ Add `indexrs-core/src/segment.rs` with the `InputFile` struct and a test that co
 //! - `content.zst` — zstd-compressed file contents
 //! - `tombstones.bin` — bitmap of deleted file_ids (empty initially)
 //!
-//! Segments live under `.indexrs/segments/seg_NNNN/` where NNNN is the segment ID
+//! Segments live under `.ferret_index/segments/seg_NNNN/` where NNNN is the segment ID
 //! zero-padded to 4 digits.
 
 use std::path::{Path, PathBuf};
@@ -77,7 +77,7 @@ mod tests {
 
 ### Step 2: Register the module in lib.rs
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod segment;
@@ -91,7 +91,7 @@ pub use segment::InputFile;
 
 ### Step 3: Run test to verify it passes
 
-Run: `cargo test -p indexrs-core -- test_input_file_construction -v`
+Run: `cargo test -p ferret-indexer-core -- test_input_file_construction -v`
 
 Expected: PASS
 
@@ -104,7 +104,7 @@ Expected: No errors or warnings.
 ### Step 5: Commit
 
 ```bash
-git add indexrs-core/src/segment.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/segment.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(segment): add segment module skeleton with InputFile struct"
 ```
 
@@ -113,7 +113,7 @@ git commit -m "feat(segment): add segment module skeleton with InputFile struct"
 ## Task 2: Implement SegmentWriter with build method
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs`
+- Modify: `ferret-indexer-core/src/segment.rs`
 
 This is the core task. The `SegmentWriter` orchestrates all M1 writers to build a complete segment directory.
 
@@ -125,7 +125,7 @@ Add the test to the `tests` module in `segment.rs`. This test creates a SegmentW
 #[test]
 fn test_segment_writer_creates_all_files() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let segment_id = SegmentId(0);
@@ -166,7 +166,7 @@ fn test_segment_writer_creates_all_files() {
 
 ### Step 2: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_segment_writer_creates_all_files -v`
+Run: `cargo test -p ferret-indexer-core -- test_segment_writer_creates_all_files -v`
 
 Expected: FAIL — `SegmentWriter` does not exist yet.
 
@@ -206,7 +206,7 @@ impl SegmentWriter {
     ///
     /// # Arguments
     ///
-    /// * `base_dir` - The segments directory (e.g. `.indexrs/segments/`).
+    /// * `base_dir` - The segments directory (e.g. `.ferret_index/segments/`).
     ///   The segment will be created as a subdirectory named `seg_NNNN`.
     /// * `segment_id` - The ID for this segment.
     pub fn new(base_dir: &Path, segment_id: SegmentId) -> Self {
@@ -331,7 +331,7 @@ impl SegmentWriter {
 
 ### Step 4: Run test to verify it fails (Segment::open not implemented yet)
 
-Run: `cargo test -p indexrs-core -- test_segment_writer_creates_all_files -v`
+Run: `cargo test -p ferret-indexer-core -- test_segment_writer_creates_all_files -v`
 
 Expected: FAIL — `Segment` struct and `Segment::open` do not exist yet. (This is expected; Task 3 implements it.)
 
@@ -344,8 +344,8 @@ Wait -- do not commit yet. Continue to Task 3 first so the code compiles.
 ## Task 3: Implement Segment struct with open and accessors
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs`
-- Modify: `indexrs-core/src/lib.rs` (add re-exports)
+- Modify: `ferret-indexer-core/src/segment.rs`
+- Modify: `ferret-indexer-core/src/lib.rs` (add re-exports)
 
 ### Step 1: Write failing tests for Segment
 
@@ -355,7 +355,7 @@ Add these tests to the `tests` module in `segment.rs`:
 #[test]
 fn test_segment_open_reads_trigrams() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![
@@ -385,7 +385,7 @@ fn test_segment_open_reads_trigrams() {
 #[test]
 fn test_segment_get_metadata() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![InputFile {
@@ -411,7 +411,7 @@ fn test_segment_get_metadata() {
 #[test]
 fn test_segment_read_content() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let original_content = b"fn main() { println!(\"hello world\"); }";
@@ -436,7 +436,7 @@ fn test_segment_read_content() {
 #[test]
 fn test_segment_dir_path() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![InputFile {
@@ -455,7 +455,7 @@ fn test_segment_dir_path() {
 #[test]
 fn test_segment_writer_empty_files() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let writer = SegmentWriter::new(&base_dir, SegmentId(0));
@@ -468,7 +468,7 @@ fn test_segment_writer_empty_files() {
 #[test]
 fn test_segment_writer_no_temp_dir_left() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![InputFile {
@@ -492,7 +492,7 @@ fn test_segment_writer_no_temp_dir_left() {
 #[test]
 fn test_segment_content_hash_is_blake3() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let content = b"fn main() {}";
@@ -560,7 +560,7 @@ impl Segment {
     ///
     /// # Arguments
     ///
-    /// * `dir_path` - Path to the segment directory (e.g. `.indexrs/segments/seg_0000/`).
+    /// * `dir_path` - Path to the segment directory (e.g. `.ferret_index/segments/seg_0000/`).
     /// * `segment_id` - The segment's ID.
     ///
     /// # Errors
@@ -633,7 +633,7 @@ impl Segment {
 
 ### Step 3: Update lib.rs re-exports
 
-Add to the re-exports in `indexrs-core/src/lib.rs`:
+Add to the re-exports in `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub use segment::{InputFile, Segment, SegmentWriter};
@@ -641,7 +641,7 @@ pub use segment::{InputFile, Segment, SegmentWriter};
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- segment -v`
+Run: `cargo test -p ferret-indexer-core -- segment -v`
 
 Expected: All segment tests PASS.
 
@@ -654,7 +654,7 @@ Expected: No errors, no warnings, formatting OK.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/segment.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/segment.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(segment): implement SegmentWriter and Segment for on-disk segment layout"
 ```
 
@@ -663,7 +663,7 @@ git commit -m "feat(segment): implement SegmentWriter and Segment for on-disk se
 ## Task 4: Add segment reopening test (open existing segment from disk)
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs`
+- Modify: `ferret-indexer-core/src/segment.rs`
 
 This test verifies that `Segment::open` can independently load a segment that was previously built and is already on disk (simulating a process restart).
 
@@ -675,7 +675,7 @@ Add to the `tests` module:
 #[test]
 fn test_segment_reopen_from_disk() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let content_a = b"fn alpha() { let x = 1; }";
@@ -739,14 +739,14 @@ fn test_segment_reopen_from_disk() {
 
 ### Step 2: Run the test
 
-Run: `cargo test -p indexrs-core -- test_segment_reopen_from_disk -v`
+Run: `cargo test -p ferret-indexer-core -- test_segment_reopen_from_disk -v`
 
 Expected: PASS (no new implementation needed, this exercises existing code paths).
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/segment.rs
+git add ferret-indexer-core/src/segment.rs
 git commit -m "test(segment): add segment reopen-from-disk test"
 ```
 
@@ -755,7 +755,7 @@ git commit -m "test(segment): add segment reopen-from-disk test"
 ## Task 5: Add edge case tests and error handling
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs`
+- Modify: `ferret-indexer-core/src/segment.rs`
 
 ### Step 1: Write edge case tests
 
@@ -766,7 +766,7 @@ Add to the `tests` module:
 fn test_segment_writer_single_file_short_content() {
     // Content shorter than 3 bytes produces no trigrams — should still work
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![InputFile {
@@ -798,7 +798,7 @@ fn test_segment_writer_single_file_short_content() {
 #[test]
 fn test_segment_writer_file_with_empty_content() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![InputFile {
@@ -825,7 +825,7 @@ fn test_segment_open_nonexistent_dir() {
 #[test]
 fn test_segment_writer_many_files() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     // Build a segment with 100 files
@@ -853,7 +853,7 @@ fn test_segment_writer_many_files() {
 #[test]
 fn test_segment_writer_language_detection() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![
@@ -898,14 +898,14 @@ fn test_segment_writer_language_detection() {
 
 ### Step 2: Run all segment tests
 
-Run: `cargo test -p indexrs-core -- segment -v`
+Run: `cargo test -p ferret-indexer-core -- segment -v`
 
 Expected: All tests PASS.
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/segment.rs
+git add ferret-indexer-core/src/segment.rs
 git commit -m "test(segment): add edge case and error handling tests"
 ```
 
@@ -927,7 +927,7 @@ Expected: No warnings, formatting OK.
 
 ### Step 3: Verify the module structure
 
-At this point, `indexrs-core/src/segment.rs` should contain:
+At this point, `ferret-indexer-core/src/segment.rs` should contain:
 - `InputFile` struct — input for the segment writer
 - `Segment` struct — loaded segment with all readers
   - `Segment::open(dir_path, segment_id)` — opens existing segment from disk
@@ -965,7 +965,7 @@ These are the exact M1 module APIs that `SegmentWriter::build` and `Segment::ope
 ## Reference: On-Disk Layout
 
 ```
-.indexrs/
+.ferret_index/
   segments/
     seg_0000/
       trigrams.bin    # Trigram posting lists (written by TrigramIndexWriter)

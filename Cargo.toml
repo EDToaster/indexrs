@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "indexrs-core",
-    "indexrs-cli",
-    "indexrs-daemon",
-    "indexrs-web",
+    "ferret-core",
+    "ferret-cli",
+    "ferret-daemon",
+    "ferret-web",
 ]

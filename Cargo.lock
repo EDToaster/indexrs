@@ -603,6 +603,97 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
+name = "ferret-indexer-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "ferret-indexer-core",
+ "ferret-indexer-daemon",
+ "ferret-indexer-web",
+ "glob",
+ "globset",
+ "indicatif",
+ "libc",
+ "nu-ansi-term",
+ "rayon",
+ "regex",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zstd",
+]
+
+[[package]]
+name = "ferret-indexer-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ignore",
+ "integer-encoding",
+ "memchr",
+ "memmap2",
+ "notify",
+ "notify-debouncer-full",
+ "rayon",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_json",
+ "streaming-iterator",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "zstd",
+]
+
+[[package]]
+name = "ferret-indexer-daemon"
+version = "0.1.0"
+dependencies = [
+ "ferret-indexer-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ferret-indexer-web"
+version = "0.1.0"
+dependencies = [
+ "askama",
+ "askama_web",
+ "async-stream",
+ "axum",
+ "ferret-indexer-core",
+ "ferret-indexer-daemon",
+ "futures",
+ "mime_guess",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
 name = "file-id"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -921,97 +1012,6 @@ checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
 dependencies = [
  "equivalent",
  "hashbrown",
-]
-
-[[package]]
-name = "indexrs-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "glob",
- "globset",
- "indexrs-core",
- "indexrs-daemon",
- "indexrs-web",
- "indicatif",
- "libc",
- "nu-ansi-term",
- "rayon",
- "regex",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "zstd",
-]
-
-[[package]]
-name = "indexrs-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ignore",
- "integer-encoding",
- "memchr",
- "memmap2",
- "notify",
- "notify-debouncer-full",
- "rayon",
- "regex",
- "regex-syntax",
- "serde",
- "serde_json",
- "streaming-iterator",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "tracing",
- "tree-sitter",
- "tree-sitter-c",
- "tree-sitter-go",
- "tree-sitter-java",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "zstd",
-]
-
-[[package]]
-name = "indexrs-daemon"
-version = "0.1.0"
-dependencies = [
- "indexrs-core",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "indexrs-web"
-version = "0.1.0"
-dependencies = [
- "askama",
- "askama_web",
- "async-stream",
- "axum",
- "futures",
- "indexrs-core",
- "indexrs-daemon",
- "mime_guess",
- "rust-embed",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tower",
- "tower-http",
- "tracing",
 ]
 
 [[package]]

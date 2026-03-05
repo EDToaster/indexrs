@@ -13,7 +13,7 @@
 ### Task 1: Write failing tests for `index_files_with_budget`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs` (tests module, after line ~1304)
+- Modify: `ferret-indexer-core/src/segment_manager.rs` (tests module, after line ~1304)
 
 **Step 1: Write the failing tests**
 
@@ -23,7 +23,7 @@ Add three tests to the existing `#[cfg(test)] mod tests` block:
 #[test]
 fn test_index_files_with_budget_splits_segments() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     // Each file is ~30 bytes of content
@@ -54,7 +54,7 @@ fn test_index_files_with_budget_splits_segments() {
 #[test]
 fn test_index_files_with_budget_zero_means_unlimited() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     let files: Vec<InputFile> = (0..5)
@@ -78,7 +78,7 @@ fn test_index_files_with_budget_searchable_across_segments() {
     use crate::multi_search::search_segments;
 
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     let files: Vec<InputFile> = (0..6)
@@ -104,13 +104,13 @@ fn test_index_files_with_budget_searchable_across_segments() {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-core -- test_index_files_with_budget -v`
+Run: `cargo test -p ferret-indexer-core -- test_index_files_with_budget -v`
 Expected: FAIL — `index_files_with_budget` method does not exist.
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "test: add failing tests for index_files_with_budget"
 ```
 
@@ -119,7 +119,7 @@ git commit -m "test: add failing tests for index_files_with_budget"
 ### Task 2: Implement `index_files_with_budget`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs:192-204`
+- Modify: `ferret-indexer-core/src/segment_manager.rs:192-204`
 
 **Step 1: Add `index_files_with_budget` and update `index_files` to delegate**
 
@@ -181,7 +181,7 @@ Replace the existing `index_files` method (lines 192-204) with:
 
 **Step 2: Run all tests to verify they pass**
 
-Run: `cargo test -p indexrs-core -- test_index_files -v`
+Run: `cargo test -p ferret-indexer-core -- test_index_files -v`
 Expected: All `test_index_files*` tests PASS (existing + new).
 
 **Step 3: Run the full test suite**
@@ -197,7 +197,7 @@ Expected: No warnings.
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat: add size-budgeted index_files_with_budget, cap index_files at 256MB/segment"
 ```
 
@@ -206,7 +206,7 @@ git commit -m "feat: add size-budgeted index_files_with_budget, cap index_files 
 ### Task 3: Simplify `build_index.rs` to drop manual batching
 
 **Files:**
-- Modify: `indexrs-core/examples/build_index.rs`
+- Modify: `ferret-indexer-core/examples/build_index.rs`
 
 **Step 1: Remove BATCH_SIZE constant and simplify `full_build`**
 
@@ -236,12 +236,12 @@ Remove the `BATCH_SIZE` constant (line 23: `const BATCH_SIZE: usize = 5000;`).
 
 **Step 2: Run the example to verify it still works**
 
-Run: `cargo run -p indexrs-core --example build_index --release -- .`
+Run: `cargo run -p ferret-indexer-core --example build_index --release -- .`
 Expected: Builds successfully, prints segment count.
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/examples/build_index.rs
+git add ferret-indexer-core/examples/build_index.rs
 git commit -m "refactor: simplify build_index example, rely on index_files budget splitting"
 ```

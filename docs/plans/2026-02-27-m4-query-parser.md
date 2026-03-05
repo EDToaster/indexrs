@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement a recursive descent parser for the indexrs query language. The parser turns a query string into a `Query` AST that downstream modules (trigram extraction, query planner, verification) consume.
+**Goal:** Implement a recursive descent parser for the ferret query language. The parser turns a query string into a `Query` AST that downstream modules (trigram extraction, query planner, verification) consume.
 
-**Architecture:** A single `query.rs` module in `indexrs-core` containing the `Query` AST enum, supporting structs (`LiteralQuery`, `RegexQuery`, `PhraseQuery`), a `parse_query()` public entry point, and internal parser helpers. The parser is hand-written recursive descent (~250 lines), no parser combinator library. The `regex` crate (already a dependency) is used to validate `/pattern/` syntax at parse time.
+**Architecture:** A single `query.rs` module in `ferret-indexer-core` containing the `Query` AST enum, supporting structs (`LiteralQuery`, `RegexQuery`, `PhraseQuery`), a `parse_query()` public entry point, and internal parser helpers. The parser is hand-written recursive descent (~250 lines), no parser combinator library. The `regex` crate (already a dependency) is used to validate `/pattern/` syntax at parse time.
 
 **Tech Stack:** Rust 2024, regex crate (already in Cargo.toml), existing `Language` enum and `IndexError::QueryParse` variant
 
@@ -34,15 +34,15 @@ primary    = "/" REGEX_BODY "/"       // regex
 ## Task 1: Add query module skeleton with AST types
 
 **Files:**
-- Create: `indexrs-core/src/query.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/query.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing test
 
-Create `indexrs-core/src/query.rs` with AST types and a test that constructs them:
+Create `ferret-indexer-core/src/query.rs` with AST types and a test that constructs them:
 
 ```rust
-//! Query parser for the indexrs search query language.
+//! Query parser for the ferret search query language.
 //!
 //! Parses a query string into a [`Query`] AST using recursive descent.
 //! The grammar supports literal text, regex patterns, exact phrases,
@@ -172,7 +172,7 @@ mod tests {
 
 ### Step 2: Register the module in lib.rs
 
-Add to `indexrs-core/src/lib.rs` (in the module list, alphabetically):
+Add to `ferret-indexer-core/src/lib.rs` (in the module list, alphabetically):
 
 ```rust
 pub mod query;
@@ -186,7 +186,7 @@ pub use query::{LiteralQuery, PhraseQuery, Query, RegexQuery};
 
 ### Step 3: Run test to verify it passes
 
-Run: `cargo test -p indexrs-core -- test_ast_construction -v`
+Run: `cargo test -p ferret-indexer-core -- test_ast_construction -v`
 
 Expected: PASS
 
@@ -199,7 +199,7 @@ Expected: No errors or warnings.
 ### Step 5: Commit
 
 ```bash
-git add indexrs-core/src/query.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/query.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(query): add query module skeleton with AST types"
 ```
 
@@ -208,7 +208,7 @@ git commit -m "feat(query): add query module skeleton with AST types"
 ## Task 2: Implement the parser tokenizer / character-level helpers
 
 **Files:**
-- Modify: `indexrs-core/src/query.rs`
+- Modify: `ferret-indexer-core/src/query.rs`
 
 The parser operates directly on the input string using a cursor-based approach (byte position into the string). No separate lexer/tokenizer phase -- the parser peeks/consumes characters directly.
 
@@ -254,8 +254,8 @@ Add above the `tests` module:
 /// # Examples
 ///
 /// ```
-/// use indexrs_core::query::parse_query;
-/// use indexrs_core::query::{Query, LiteralQuery};
+/// use ferret_indexer_core::query::parse_query;
+/// use ferret_indexer_core::query::{Query, LiteralQuery};
 ///
 /// let q = parse_query("hello").unwrap();
 /// assert_eq!(q, Query::Literal(LiteralQuery {
@@ -641,7 +641,7 @@ fn match_language(s: &str) -> Result<Language, IndexError> {
 
 ### Step 3: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_parse_single_literal test_parse_empty_query test_parse_whitespace_only -v`
+Run: `cargo test -p ferret-indexer-core -- test_parse_single_literal test_parse_empty_query test_parse_whitespace_only -v`
 
 Expected: PASS
 
@@ -654,7 +654,7 @@ Expected: No errors or warnings.
 ### Step 5: Commit
 
 ```bash
-git add indexrs-core/src/query.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/query.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(query): implement recursive descent query parser"
 ```
 
@@ -663,7 +663,7 @@ git commit -m "feat(query): implement recursive descent query parser"
 ## Task 3: Add comprehensive tests for all syntax variants
 
 **Files:**
-- Modify: `indexrs-core/src/query.rs`
+- Modify: `ferret-indexer-core/src/query.rs`
 
 ### Step 1: Write tests for phrase and regex parsing
 
@@ -1164,7 +1164,7 @@ fn test_parse_complex_query() {
 
 ### Step 6: Run all query tests
 
-Run: `cargo test -p indexrs-core -- query -v`
+Run: `cargo test -p ferret-indexer-core -- query -v`
 
 Expected: All tests PASS.
 
@@ -1177,7 +1177,7 @@ Expected: No errors, no warnings, formatting OK.
 ### Step 8: Commit
 
 ```bash
-git add indexrs-core/src/query.rs
+git add ferret-indexer-core/src/query.rs
 git commit -m "test(query): add comprehensive tests for all query syntax variants"
 ```
 
@@ -1186,7 +1186,7 @@ git commit -m "test(query): add comprehensive tests for all query syntax variant
 ## Task 4: Add Display impl and edge case tests
 
 **Files:**
-- Modify: `indexrs-core/src/query.rs`
+- Modify: `ferret-indexer-core/src/query.rs`
 
 ### Step 1: Implement Display for Query
 
@@ -1352,7 +1352,7 @@ fn test_parse_multiple_spaces_between_terms() {
 
 ### Step 4: Run all tests
 
-Run: `cargo test -p indexrs-core -- query -v`
+Run: `cargo test -p ferret-indexer-core -- query -v`
 
 Expected: All tests PASS.
 
@@ -1365,7 +1365,7 @@ Expected: No errors, no warnings, formatting OK.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/query.rs
+git add ferret-indexer-core/src/query.rs
 git commit -m "feat(query): add Display impl and edge case tests"
 ```
 
@@ -1374,7 +1374,7 @@ git commit -m "feat(query): add Display impl and edge case tests"
 ## Task 5: Update lib.rs re-exports and run final verification
 
 **Files:**
-- Modify: `indexrs-core/src/lib.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Ensure lib.rs has all re-exports
 
@@ -1401,7 +1401,7 @@ Expected: No warnings, formatting OK.
 
 ### Step 4: Verify the module structure
 
-At this point, `indexrs-core/src/query.rs` should contain (~250 lines):
+At this point, `ferret-indexer-core/src/query.rs` should contain (~250 lines):
 - `Query` enum — the shared AST type for all downstream M4 modules
   - `Literal(LiteralQuery)` — bare text substring match
   - `Regex(RegexQuery)` — `/pattern/` regex match

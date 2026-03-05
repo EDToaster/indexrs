@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement the content store for indexrs — stores raw file contents compressed with zstd, retrievable by (offset, compressed_len).
+**Goal:** Implement the content store for ferret — stores raw file contents compressed with zstd, retrievable by (offset, compressed_len).
 
-**Architecture:** A single `content.rs` module in `indexrs-core` containing `ContentStoreWriter` (appends zstd-compressed blocks to a file) and `ContentStoreReader` (mmap-based random access with on-demand decompression). Each file is independently compressed for random access. The (offset, compressed_len) tuple returned by the writer is stored externally in the metadata index.
+**Architecture:** A single `content.rs` module in `ferret-indexer-core` containing `ContentStoreWriter` (appends zstd-compressed blocks to a file) and `ContentStoreReader` (mmap-based random access with on-demand decompression). Each file is independently compressed for random access. The (offset, compressed_len) tuple returned by the writer is stored externally in the metadata index.
 
 **Tech Stack:** Rust 2024, zstd (level 3), memmap2
 
@@ -12,7 +12,7 @@
 
 ## Task 1: Add content module with failing tests
 
-**File:** `indexrs-core/src/content.rs` (NEW)
+**File:** `ferret-indexer-core/src/content.rs` (NEW)
 
 Create the module with struct definitions and empty/unimplemented method stubs. Write all required tests:
 
@@ -24,15 +24,15 @@ Create the module with struct definitions and empty/unimplemented method stubs. 
 - `test_binary_content` — write non-UTF8 bytes, read back, verify
 - `test_reader_file_not_found` — open nonexistent path returns proper error
 
-**File:** `indexrs-core/src/lib.rs` (UPDATE) — add `pub mod content;` and re-exports.
+**File:** `ferret-indexer-core/src/lib.rs` (UPDATE) — add `pub mod content;` and re-exports.
 
-**Test:** `cargo test -p indexrs-core -- content` — all tests fail (unimplemented).
+**Test:** `cargo test -p ferret-indexer-core -- content` — all tests fail (unimplemented).
 
 ---
 
 ## Task 2: Implement ContentStoreWriter
 
-**File:** `indexrs-core/src/content.rs` (UPDATE)
+**File:** `ferret-indexer-core/src/content.rs` (UPDATE)
 
 Implement:
 - `ContentStoreWriter::new(path)` — create file with BufWriter
@@ -50,7 +50,7 @@ Key details:
 
 ## Task 3: Implement ContentStoreReader
 
-**File:** `indexrs-core/src/content.rs` (UPDATE)
+**File:** `ferret-indexer-core/src/content.rs` (UPDATE)
 
 Implement:
 - `ContentStoreReader::open(path)` — open file, create mmap
@@ -62,12 +62,12 @@ Key details:
 - Use `zstd::bulk::decompress()` for decompression (need upper bound or use streaming)
 - Use `zstd::stream::decode_all()` for decompression (handles unknown output size)
 
-**Test:** `cargo test -p indexrs-core -- content` — all tests pass.
+**Test:** `cargo test -p ferret-indexer-core -- content` — all tests pass.
 
 ---
 
 ## Task 4: Final verification and commit
 
-- `cargo test -p indexrs-core` — all tests pass
+- `cargo test -p ferret-indexer-core` — all tests pass
 - `cargo check --workspace` — no errors
 - Commit with descriptive message

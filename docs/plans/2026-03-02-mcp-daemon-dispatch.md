@@ -4,31 +4,31 @@
 
 **Goal:** Route MCP `search_code`, `search_files`, and `reindex` through the existing CLI daemon for warm-index TTFB, while keeping `get_file` and `index_status` client-side.
 
-**Architecture:** Extract the daemon client protocol (types, wire format, connection helpers) into a new `indexrs-daemon` crate shared by both CLI and MCP. The MCP server connects to the daemon on startup via `ensure_daemon()`, sends requests over the Unix socket, collects `Line` response frames, and returns the plain-text output as MCP tool responses. The daemon's `color: false` plain-text formatting replaces the MCP's own search formatter for daemon-routed tools. `get_file` and `index_status` continue to read directly from the on-disk index via `IndexState`.
+**Architecture:** Extract the daemon client protocol (types, wire format, connection helpers) into a new `ferret-indexer-daemon` crate shared by both CLI and MCP. The MCP server connects to the daemon on startup via `ensure_daemon()`, sends requests over the Unix socket, collects `Line` response frames, and returns the plain-text output as MCP tool responses. The daemon's `color: false` plain-text formatting replaces the MCP's own search formatter for daemon-routed tools. `get_file` and `index_status` continue to read directly from the on-disk index via `IndexState`.
 
 **Tech Stack:** Rust, tokio, serde/serde_json, Unix domain sockets (tokio::net::UnixStream)
 
 ---
 
-### Task 1: Create `indexrs-daemon` crate with shared types
+### Task 1: Create `ferret-indexer-daemon` crate with shared types
 
 **Files:**
-- Create: `indexrs-daemon/Cargo.toml`
-- Create: `indexrs-daemon/src/lib.rs`
-- Create: `indexrs-daemon/src/types.rs`
+- Create: `ferret-indexer-daemon/Cargo.toml`
+- Create: `ferret-indexer-daemon/src/lib.rs`
+- Create: `ferret-indexer-daemon/src/types.rs`
 - Modify: `Cargo.toml` (workspace members)
 
 **Step 1: Create the crate directory**
 
 ```bash
-mkdir -p indexrs-daemon/src
+mkdir -p ferret-indexer-daemon/src
 ```
 
-**Step 2: Write `indexrs-daemon/Cargo.toml`**
+**Step 2: Write `ferret-indexer-daemon/Cargo.toml`**
 
 ```toml
 [package]
-name = "indexrs-daemon"
+name = "ferret-indexer-daemon"
 version = "0.1.0"
 edition = "2024"
 
@@ -36,12 +36,12 @@ edition = "2024"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["net", "io-util", "time", "process"] }
-indexrs-core = { path = "../indexrs-core" }
+ferret-indexer-core = { path = "../ferret-indexer-core" }
 ```
 
-**Step 3: Write `indexrs-daemon/src/types.rs`**
+**Step 3: Write `ferret-indexer-daemon/src/types.rs`**
 
-Move `DaemonRequest` and `DaemonResponse` from `indexrs-cli/src/daemon.rs:37-87`. Keep the same definitions exactly. `DaemonRequest` already derives `Serialize, Deserialize`. `DaemonResponse` currently only derives `Debug, PartialEq` (it uses TLV not serde) — keep it that way.
+Move `DaemonRequest` and `DaemonResponse` from `ferret-indexer-cli/src/daemon.rs:37-87`. Keep the same definitions exactly. `DaemonRequest` already derives `Serialize, Deserialize`. `DaemonResponse` currently only derives `Debug, PartialEq` (it uses TLV not serde) — keep it that way.
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -91,7 +91,7 @@ pub enum DaemonResponse {
 }
 ```
 
-**Step 4: Write `indexrs-daemon/src/lib.rs`**
+**Step 4: Write `ferret-indexer-daemon/src/lib.rs`**
 
 ```rust
 pub mod types;
@@ -99,62 +99,62 @@ pub mod types;
 pub use types::{DaemonRequest, DaemonResponse};
 ```
 
-**Step 5: Add `indexrs-daemon` to workspace**
+**Step 5: Add `ferret-indexer-daemon` to workspace**
 
-In root `Cargo.toml`, add `"indexrs-daemon"` to the workspace members list.
+In root `Cargo.toml`, add `"ferret-indexer-daemon"` to the workspace members list.
 
-**Step 6: Run `cargo check -p indexrs-daemon`**
+**Step 6: Run `cargo check -p ferret-indexer-daemon`**
 
 Expected: compiles cleanly.
 
 **Step 7: Commit**
 
 ```bash
-git add indexrs-daemon/ Cargo.toml
-git commit -m "feat(daemon): create indexrs-daemon crate with shared request/response types"
+git add ferret-indexer-daemon/ Cargo.toml
+git commit -m "feat(daemon): create ferret-indexer-daemon crate with shared request/response types"
 ```
 
 ---
 
-### Task 2: Move wire protocol into `indexrs-daemon`
+### Task 2: Move wire protocol into `ferret-indexer-daemon`
 
 **Files:**
-- Move: `indexrs-cli/src/wire.rs` → `indexrs-daemon/src/wire.rs`
-- Modify: `indexrs-daemon/src/lib.rs` (add `pub mod wire`)
-- Modify: `indexrs-cli/src/wire.rs` (replace with re-export or thin wrapper)
-- Modify: `indexrs-cli/src/daemon.rs` (update `wire::` imports)
+- Move: `ferret-indexer-cli/src/wire.rs` → `ferret-indexer-daemon/src/wire.rs`
+- Modify: `ferret-indexer-daemon/src/lib.rs` (add `pub mod wire`)
+- Modify: `ferret-indexer-cli/src/wire.rs` (replace with re-export or thin wrapper)
+- Modify: `ferret-indexer-cli/src/daemon.rs` (update `wire::` imports)
 
-**Step 1: Copy `indexrs-cli/src/wire.rs` to `indexrs-daemon/src/wire.rs`**
+**Step 1: Copy `ferret-indexer-cli/src/wire.rs` to `ferret-indexer-daemon/src/wire.rs`**
 
 Copy the file as-is. Change the `use crate::daemon::DaemonResponse` import to `use crate::types::DaemonResponse`.
 
-**Step 2: Export from `indexrs-daemon/src/lib.rs`**
+**Step 2: Export from `ferret-indexer-daemon/src/lib.rs`**
 
 Add `pub mod wire;` to lib.rs.
 
-**Step 3: Add `indexrs-daemon` dependency to `indexrs-cli/Cargo.toml`**
+**Step 3: Add `ferret-indexer-daemon` dependency to `ferret-indexer-cli/Cargo.toml`**
 
 ```toml
-indexrs-daemon = { path = "../indexrs-daemon" }
+ferret-indexer-daemon = { path = "../ferret-indexer-daemon" }
 ```
 
-**Step 4: Update `indexrs-cli/src/wire.rs` to re-export**
+**Step 4: Update `ferret-indexer-cli/src/wire.rs` to re-export**
 
 Replace the entire file with:
 
 ```rust
-pub use indexrs_daemon::wire::*;
+pub use ferret_indexer_daemon::wire::*;
 ```
 
-**Step 5: Update `indexrs-cli/src/daemon.rs` imports**
+**Step 5: Update `ferret-indexer-cli/src/daemon.rs` imports**
 
-Change `DaemonRequest` and `DaemonResponse` imports to come from `indexrs_daemon` instead of being defined locally. Remove the local enum definitions. Add:
+Change `DaemonRequest` and `DaemonResponse` imports to come from `ferret_indexer_daemon` instead of being defined locally. Remove the local enum definitions. Add:
 
 ```rust
-use indexrs_daemon::{DaemonRequest, DaemonResponse};
+use ferret_indexer_daemon::{DaemonRequest, DaemonResponse};
 ```
 
-**Step 6: Run `cargo test -p indexrs-cli`**
+**Step 6: Run `cargo test -p ferret-indexer-cli`**
 
 Expected: all existing tests pass (wire roundtrip tests, daemon tests).
 
@@ -165,35 +165,35 @@ Expected: clean.
 **Step 8: Commit**
 
 ```bash
-git add indexrs-daemon/ indexrs-cli/
-git commit -m "refactor(daemon): move wire protocol and types into shared indexrs-daemon crate"
+git add ferret-indexer-daemon/ ferret-indexer-cli/
+git commit -m "refactor(daemon): move wire protocol and types into shared ferret-indexer-daemon crate"
 ```
 
 ---
 
-### Task 3: Move daemon client helpers into `indexrs-daemon`
+### Task 3: Move daemon client helpers into `ferret-indexer-daemon`
 
 **Files:**
-- Create: `indexrs-daemon/src/client.rs`
-- Modify: `indexrs-daemon/src/lib.rs`
-- Modify: `indexrs-cli/src/daemon.rs` (use shared client helpers)
+- Create: `ferret-indexer-daemon/src/client.rs`
+- Modify: `ferret-indexer-daemon/src/lib.rs`
+- Modify: `ferret-indexer-cli/src/daemon.rs` (use shared client helpers)
 
-**Step 1: Write `indexrs-daemon/src/client.rs`**
+**Step 1: Write `ferret-indexer-daemon/src/client.rs`**
 
-Extract from `indexrs-cli/src/daemon.rs`: `socket_path()`, `try_connect()`, `spawn_daemon_process()`, `ensure_daemon()`. Modify `spawn_daemon_process()` to accept the binary path as a parameter instead of using `current_exe()`, so the MCP can pass the `indexrs` CLI binary path.
+Extract from `ferret-indexer-cli/src/daemon.rs`: `socket_path()`, `try_connect()`, `spawn_daemon_process()`, `ensure_daemon()`. Modify `spawn_daemon_process()` to accept the binary path as a parameter instead of using `current_exe()`, so the MCP can pass the `ferret` CLI binary path.
 
 ```rust
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::net::UnixStream;
-use indexrs_core::error::IndexError;
+use ferret_indexer_core::error::IndexError;
 
 const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Return the Unix socket path for a given repo root.
 pub fn socket_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(".indexrs").join("sock")
+    repo_root.join(".ferret_index").join("sock")
 }
 
 /// Try to connect to a running daemon. Returns None if no daemon is running.
@@ -204,7 +204,7 @@ pub async fn try_connect(repo_root: &Path) -> Option<UnixStream> {
 
 /// Spawn a daemon as a detached background process.
 ///
-/// `daemon_bin` is the path to the `indexrs` CLI binary that has the
+/// `daemon_bin` is the path to the `ferret` CLI binary that has the
 /// `daemon-start` subcommand.
 pub fn spawn_daemon_process(daemon_bin: &Path, repo_root: &Path) -> Result<(), IndexError> {
     std::process::Command::new(daemon_bin)
@@ -245,16 +245,16 @@ pub async fn ensure_daemon(daemon_bin: &Path, repo_root: &Path) -> Result<UnixSt
     }
 }
 
-/// Find the `indexrs` CLI binary.
+/// Find the `ferret` CLI binary.
 ///
 /// Checks:
 /// 1. Sibling of the current executable (same directory)
 /// 2. `INDEXRS_BIN` environment variable
-/// 3. `indexrs` in PATH
+/// 3. `ferret` in PATH
 pub fn find_daemon_binary() -> Result<PathBuf, IndexError> {
     // 1. Sibling of current executable
     if let Ok(current) = std::env::current_exe() {
-        let sibling = current.with_file_name("indexrs");
+        let sibling = current.with_file_name("ferret");
         if sibling.exists() {
             return Ok(sibling);
         }
@@ -270,7 +270,7 @@ pub fn find_daemon_binary() -> Result<PathBuf, IndexError> {
 
     // 3. Search PATH via `which`
     let output = std::process::Command::new("which")
-        .arg("indexrs")
+        .arg("ferret")
         .output()
         .map_err(IndexError::Io)?;
     if output.status.success() {
@@ -282,12 +282,12 @@ pub fn find_daemon_binary() -> Result<PathBuf, IndexError> {
 
     Err(IndexError::Io(std::io::Error::new(
         std::io::ErrorKind::NotFound,
-        "could not find 'indexrs' binary (install it or set INDEXRS_BIN)",
+        "could not find 'ferret' binary (install it or set INDEXRS_BIN)",
     )))
 }
 ```
 
-**Step 2: Export from `indexrs-daemon/src/lib.rs`**
+**Step 2: Export from `ferret-indexer-daemon/src/lib.rs`**
 
 ```rust
 pub mod client;
@@ -298,24 +298,24 @@ pub use types::{DaemonRequest, DaemonResponse};
 pub use client::{socket_path, try_connect, ensure_daemon, find_daemon_binary};
 ```
 
-**Step 3: Update `indexrs-cli/src/daemon.rs`**
+**Step 3: Update `ferret-indexer-cli/src/daemon.rs`**
 
-Replace the local `socket_path`, `try_connect`, `spawn_daemon_process`, and `ensure_daemon` functions with calls to `indexrs_daemon::client`. The CLI's `spawn_daemon_process` uses `current_exe()`, so the CLI's `ensure_daemon` wrapper should call:
+Replace the local `socket_path`, `try_connect`, `spawn_daemon_process`, and `ensure_daemon` functions with calls to `ferret_indexer_daemon::client`. The CLI's `spawn_daemon_process` uses `current_exe()`, so the CLI's `ensure_daemon` wrapper should call:
 
 ```rust
 pub async fn ensure_daemon(repo_root: &Path) -> Result<UnixStream, IndexError> {
     let bin = std::env::current_exe().map_err(IndexError::Io)?;
-    indexrs_daemon::client::ensure_daemon(&bin, repo_root).await
+    ferret_indexer_daemon::client::ensure_daemon(&bin, repo_root).await
 }
 ```
 
 Keep this as a local thin wrapper so the CLI's existing call sites don't change.
 
-**Step 4: Run `cargo test -p indexrs-cli`**
+**Step 4: Run `cargo test -p ferret-indexer-cli`**
 
 Expected: all existing tests pass.
 
-**Step 5: Run `cargo test -p indexrs-daemon`**
+**Step 5: Run `cargo test -p ferret-indexer-daemon`**
 
 Expected: compiles, any wire tests pass.
 
@@ -326,33 +326,33 @@ Expected: clean.
 **Step 7: Commit**
 
 ```bash
-git add indexrs-daemon/ indexrs-cli/
+git add ferret-indexer-daemon/ ferret-indexer-cli/
 git commit -m "refactor(daemon): move client helpers (ensure_daemon, socket_path) into shared crate"
 ```
 
 ---
 
-### Task 4: Add `indexrs-daemon` dependency to MCP and create daemon client module
+### Task 4: Add `ferret-indexer-daemon` dependency to MCP and create daemon client module
 
 **Files:**
-- Modify: `indexrs-mcp/Cargo.toml`
-- Create: `indexrs-mcp/src/daemon_client.rs`
-- Modify: `indexrs-mcp/src/main.rs` (add module declaration)
+- Modify: `ferret-mcp/Cargo.toml`
+- Create: `ferret-mcp/src/daemon_client.rs`
+- Modify: `ferret-mcp/src/main.rs` (add module declaration)
 
-**Step 1: Add dependency to `indexrs-mcp/Cargo.toml`**
+**Step 1: Add dependency to `ferret-mcp/Cargo.toml`**
 
 ```toml
-indexrs-daemon = { path = "../indexrs-daemon" }
+ferret-indexer-daemon = { path = "../ferret-indexer-daemon" }
 ```
 
 **Step 2: Write the failing test for `daemon_client.rs`**
 
-Create `indexrs-mcp/src/daemon_client.rs` with a test that validates the client can build and send a request:
+Create `ferret-mcp/src/daemon_client.rs` with a test that validates the client can build and send a request:
 
 ```rust
 //! Daemon client for MCP tool dispatch.
 //!
-//! Handles connecting to the indexrs daemon and sending requests for
+//! Handles connecting to the ferret daemon and sending requests for
 //! search_code, search_files, and reindex. Returns collected plain-text
 //! response lines for the MCP server to wrap in CallToolResult.
 
@@ -362,7 +362,7 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
-use indexrs_daemon::{DaemonRequest, DaemonResponse};
+use ferret_indexer_daemon::{DaemonRequest, DaemonResponse};
 
 /// Daemon connection state for the MCP server.
 ///
@@ -419,7 +419,7 @@ impl DaemonClient {
         // Read responses until Done or Error.
         let mut lines = Vec::new();
         loop {
-            let resp = indexrs_daemon::wire::read_response(reader)
+            let resp = ferret_indexer_daemon::wire::read_response(reader)
                 .await
                 .map_err(|e| format!("daemon read error: {e}"))?;
 
@@ -448,9 +448,9 @@ impl DaemonClient {
 
     /// Connect to daemon, spawning it if needed.
     async fn connect(&self) -> Result<UnixStream, String> {
-        let daemon_bin = indexrs_daemon::find_daemon_binary()
-            .map_err(|e| format!("cannot find indexrs binary: {e}"))?;
-        indexrs_daemon::ensure_daemon(&daemon_bin, &self.repo_root)
+        let daemon_bin = ferret_indexer_daemon::find_daemon_binary()
+            .map_err(|e| format!("cannot find ferret binary: {e}"))?;
+        ferret_indexer_daemon::ensure_daemon(&daemon_bin, &self.repo_root)
             .await
             .map_err(|e| format!("failed to connect to daemon: {e}"))
     }
@@ -468,19 +468,19 @@ mod tests {
 }
 ```
 
-**Step 3: Add module to `indexrs-mcp/src/main.rs`**
+**Step 3: Add module to `ferret-mcp/src/main.rs`**
 
 Add `pub mod daemon_client;` to the module declarations.
 
-**Step 4: Run `cargo check -p indexrs-mcp`**
+**Step 4: Run `cargo check -p ferret-mcp`**
 
 Expected: compiles cleanly.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-mcp/
-git commit -m "feat(mcp): add daemon client module for dispatching to indexrs daemon"
+git add ferret-mcp/
+git commit -m "feat(mcp): add daemon client module for dispatching to ferret daemon"
 ```
 
 ---
@@ -488,15 +488,15 @@ git commit -m "feat(mcp): add daemon client module for dispatching to indexrs da
 ### Task 5: Wire `search_code` to dispatch through daemon
 
 **Files:**
-- Modify: `indexrs-mcp/src/server.rs` (update `IndexrsServer` and `search_code`)
-- Modify: `indexrs-mcp/src/main.rs` (create `DaemonClient` and pass to server)
+- Modify: `ferret-mcp/src/server.rs` (update `FerretServer` and `search_code`)
+- Modify: `ferret-mcp/src/main.rs` (create `DaemonClient` and pass to server)
 
-**Step 1: Add `DaemonClient` to `IndexrsServer`**
+**Step 1: Add `DaemonClient` to `FerretServer`**
 
-Add a field to `IndexrsServer`:
+Add a field to `FerretServer`:
 
 ```rust
-pub struct IndexrsServer {
+pub struct FerretServer {
     pub index_state: Arc<IndexState>,
     pub root_path: Option<PathBuf>,
     start_time: Instant,
@@ -588,14 +588,14 @@ In `main.rs`, after finding `repo_root`, create the daemon client:
 
 ```rust
 let daemon = Arc::new(DaemonClient::new(repo_root.clone()));
-let server = IndexrsServer::new(index_state, Some(repo_root), Some(daemon));
+let server = FerretServer::new(index_state, Some(repo_root), Some(daemon));
 ```
 
-**Step 4: Run `cargo check -p indexrs-mcp`**
+**Step 4: Run `cargo check -p ferret-mcp`**
 
 Expected: compiles cleanly.
 
-**Step 5: Run `cargo test -p indexrs-mcp`**
+**Step 5: Run `cargo test -p ferret-mcp`**
 
 Expected: existing tests pass (they use `daemon: None` so they hit the fallback path).
 
@@ -606,7 +606,7 @@ Expected: clean.
 **Step 7: Commit**
 
 ```bash
-git add indexrs-mcp/
+git add ferret-mcp/
 git commit -m "feat(mcp): route search_code through daemon for warm-index TTFB"
 ```
 
@@ -615,7 +615,7 @@ git commit -m "feat(mcp): route search_code through daemon for warm-index TTFB"
 ### Task 6: Wire `search_files` to dispatch through daemon
 
 **Files:**
-- Modify: `indexrs-mcp/src/server.rs` (`search_files` method)
+- Modify: `ferret-mcp/src/server.rs` (`search_files` method)
 
 **Step 1: Rewrite `search_files` with daemon dispatch**
 
@@ -664,7 +664,7 @@ async fn search_files(
 
 Extract the current direct body into `search_files_direct()`.
 
-**Step 2: Run `cargo test -p indexrs-mcp`**
+**Step 2: Run `cargo test -p ferret-mcp`**
 
 Expected: existing tests pass (fallback path).
 
@@ -675,7 +675,7 @@ Expected: clean.
 **Step 4: Commit**
 
 ```bash
-git add indexrs-mcp/src/server.rs
+git add ferret-mcp/src/server.rs
 git commit -m "feat(mcp): route search_files through daemon"
 ```
 
@@ -684,7 +684,7 @@ git commit -m "feat(mcp): route search_files through daemon"
 ### Task 7: Wire `reindex` to dispatch through daemon
 
 **Files:**
-- Modify: `indexrs-mcp/src/server.rs` (`reindex` method)
+- Modify: `ferret-mcp/src/server.rs` (`reindex` method)
 
 **Step 1: Update `reindex` to send daemon request**
 
@@ -712,14 +712,14 @@ async fn reindex(
             "Reindex requested for {repo_label} ({mode})\n\
              \n\
              Reindexing is not yet available (no daemon connection).\n\
-             To reindex, use the CLI: indexrs reindex"
+             To reindex, use the CLI: ferret reindex"
         );
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 }
 ```
 
-**Step 2: Run `cargo test -p indexrs-mcp`**
+**Step 2: Run `cargo test -p ferret-mcp`**
 
 Expected: all tests pass.
 
@@ -730,7 +730,7 @@ Expected: clean.
 **Step 4: Commit**
 
 ```bash
-git add indexrs-mcp/src/server.rs
+git add ferret-mcp/src/server.rs
 git commit -m "feat(mcp): route reindex through daemon"
 ```
 
@@ -739,7 +739,7 @@ git commit -m "feat(mcp): route reindex through daemon"
 ### Task 8: Remove `IndexState` startup load from MCP main when daemon is available
 
 **Files:**
-- Modify: `indexrs-mcp/src/main.rs`
+- Modify: `ferret-mcp/src/main.rs`
 
 **Step 1: Simplify startup**
 
@@ -748,17 +748,17 @@ The MCP server no longer needs to load segments from disk for search — only fo
 No change needed to the recovery code — it still serves `get_file` and `index_status`. But update the startup log to indicate daemon mode:
 
 ```rust
-eprintln!("daemon mode: search tools will dispatch to indexrs daemon");
+eprintln!("daemon mode: search tools will dispatch to ferret daemon");
 ```
 
-**Step 2: Run `cargo test -p indexrs-mcp`**
+**Step 2: Run `cargo test -p ferret-mcp`**
 
 Expected: all tests pass.
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-mcp/src/main.rs
+git add ferret-mcp/src/main.rs
 git commit -m "feat(mcp): log daemon dispatch mode on startup"
 ```
 
@@ -767,8 +767,8 @@ git commit -m "feat(mcp): log daemon dispatch mode on startup"
 ### Task 9: Handle daemon connection errors gracefully with fallback
 
 **Files:**
-- Modify: `indexrs-mcp/src/daemon_client.rs`
-- Modify: `indexrs-mcp/src/server.rs`
+- Modify: `ferret-mcp/src/daemon_client.rs`
+- Modify: `ferret-mcp/src/server.rs`
 
 **Step 1: Add reconnection logic to `DaemonClient`**
 
@@ -797,7 +797,7 @@ Move the current `request` body into `request_inner`.
 
 Write a unit test that verifies the client clears its connection on error.
 
-**Step 3: Run `cargo test -p indexrs-mcp`**
+**Step 3: Run `cargo test -p ferret-mcp`**
 
 Expected: all tests pass.
 
@@ -808,7 +808,7 @@ Expected: clean.
 **Step 5: Commit**
 
 ```bash
-git add indexrs-mcp/
+git add ferret-mcp/
 git commit -m "fix(mcp): retry daemon request once on connection failure"
 ```
 

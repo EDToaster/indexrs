@@ -15,7 +15,7 @@
 ### Task 1: Add `color` field to DaemonRequest variants
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:31-49` (DaemonRequest enum)
+- Modify: `ferret-indexer-cli/src/daemon.rs:31-49` (DaemonRequest enum)
 
 **Step 1: Write the failing test**
 
@@ -63,7 +63,7 @@ fn test_request_serialize_files_with_color() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-cli -- test_request_serialize_search_with_color`
+Run: `cargo test -p ferret-indexer-cli -- test_request_serialize_search_with_color`
 Expected: FAIL — `color` field doesn't exist on the enum variants yet.
 
 **Step 3: Add `color` field to both variants**
@@ -103,13 +103,13 @@ Then fix all existing code that constructs these variants — add `color: false`
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- test_request_serialize`
+Run: `cargo test -p ferret-indexer-cli -- test_request_serialize`
 Expected: PASS — all serialization tests pass including the two new ones.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): add color field to Search and Files requests"
 ```
 
@@ -118,7 +118,7 @@ git commit -m "feat(daemon): add color field to Search and Files requests"
 ### Task 2: Use `color` field in daemon handlers
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:120-187` (handle_search_request, handle_files_request)
+- Modify: `ferret-indexer-cli/src/daemon.rs:120-187` (handle_search_request, handle_files_request)
 
 **Step 1: Write the failing test**
 
@@ -127,13 +127,13 @@ Add an integration test that sends a Search request with `color: true` and asser
 ```rust
 #[tokio::test]
 async fn test_daemon_search_with_color() {
-    use indexrs_core::segment::InputFile;
+    use ferret_indexer_core::segment::InputFile;
 
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
-    let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = ferret_indexer_core::SegmentManager::new(&ferret_dir).unwrap();
     manager
         .index_files(vec![InputFile {
             path: "src/main.rs".to_string(),
@@ -205,7 +205,7 @@ async fn test_daemon_search_with_color() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-cli -- test_daemon_search_with_color`
+Run: `cargo test -p ferret-indexer-cli -- test_daemon_search_with_color`
 Expected: FAIL — handlers still hardcode `ColorConfig::new(false)`.
 
 **Step 3: Thread `color` through daemon handlers**
@@ -256,13 +256,13 @@ match handle_files_request(manager, language, path_glob, sort, limit, color) {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- daemon`
+Run: `cargo test -p ferret-indexer-cli -- daemon`
 Expected: PASS — all daemon tests pass, including the new color test.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "fix(daemon): pass client color preference to search/files handlers"
 ```
 
@@ -271,7 +271,7 @@ git commit -m "fix(daemon): pass client color preference to search/files handler
 ### Task 3: Pass color preference from CLI to daemon requests
 
 **Files:**
-- Modify: `indexrs-cli/src/main.rs:73-112` (Search and Files request construction)
+- Modify: `ferret-indexer-cli/src/main.rs:73-112` (Search and Files request construction)
 
 **Step 1: Update Search request construction**
 
@@ -305,16 +305,16 @@ let request = daemon::DaemonRequest::Files {
 
 **Step 3: Run the full test suite**
 
-Run: `cargo test -p indexrs-cli`
+Run: `cargo test -p ferret-indexer-cli`
 Expected: PASS — all tests pass.
 
-Run: `cargo clippy -p indexrs-cli -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-cli -- -D warnings`
 Expected: No warnings.
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/main.rs
 git commit -m "fix(cli): forward color preference to daemon for search and files"
 ```
 
@@ -325,25 +325,25 @@ git commit -m "fix(cli): forward color preference to daemon for search and files
 **Step 1: Build and smoke test**
 
 ```bash
-cargo build -p indexrs-cli
+cargo build -p ferret-indexer-cli
 
 # Kill any running daemon
-rm -f .indexrs/sock
+rm -f .ferret_index/sock
 
 # Search with color (terminal)
-cargo run -p indexrs-cli -- search "trigram"
+cargo run -p ferret-indexer-cli -- search "trigram"
 # Should show colored output (magenta paths, green line numbers, red matches)
 
 # Search without color
-cargo run -p indexrs-cli -- --color never search "trigram"
+cargo run -p ferret-indexer-cli -- --color never search "trigram"
 # Should show plain text
 
 # Files with color
-cargo run -p indexrs-cli -- files
+cargo run -p ferret-indexer-cli -- files
 # Should show colored paths (dim dirs, bold filename, cyan extension)
 
 # Files piped (auto-detects no tty)
-cargo run -p indexrs-cli -- files | head -5
+cargo run -p ferret-indexer-cli -- files | head -5
 # Should show plain text (no ANSI codes)
 ```
 

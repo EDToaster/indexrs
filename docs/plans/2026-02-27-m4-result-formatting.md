@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Extend the existing search result types in `indexrs-core` to support file-grouped output with context lines around matches and offset-based pagination. These types serve as the shared result format consumed by CLI, MCP, and web interfaces -- each renders them differently but all share the same underlying data.
+**Goal:** Extend the existing search result types in `ferret-indexer-core` to support file-grouped output with context lines around matches and offset-based pagination. These types serve as the shared result format consumed by CLI, MCP, and web interfaces -- each renders them differently but all share the same underlying data.
 
 **Architecture:** This plan extends the existing types in `search.rs` rather than replacing them, preserving backward compatibility. Three changes: (1) Add `ContextLine` struct and extend `LineMatch` to carry optional context lines before/after each match. (2) Add `total_file_count` to `SearchResult` for pagination awareness and add a `paginate()` method for offset-based pagination (skip N files, return M files). (3) Add a `collect_context()` function in `multi_search.rs` that enriches `LineMatch` results with surrounding context lines by re-reading file content. The existing `verify_content_matches()` is extended with a `context_lines: usize` parameter. The `Display` impl on `SearchResult` is updated to render file-grouped output with context.
 
-**Tech Stack:** Rust 2024, existing `indexrs-core` modules (search, multi_search, types, error), `serde` (already a dependency for JSON serialization)
+**Tech Stack:** Rust 2024, existing `ferret-indexer-core` modules (search, multi_search, types, error), `serde` (already a dependency for JSON serialization)
 
 **Prerequisite:** ASCII case-fold trigrams plan (`2026-02-27-ascii-casefold-trigrams.md`) must be implemented first. No direct impact on result formatting, but the upstream search pipeline uses case-folded trigrams.
 
@@ -15,11 +15,11 @@
 ## Task 1: Add `ContextLine` struct and extend `LineMatch` with context fields
 
 **Files:**
-- Modify: `indexrs-core/src/search.rs`
+- Modify: `ferret-indexer-core/src/search.rs`
 
 ### Step 1: Write the failing test
 
-Add to the `#[cfg(test)] mod tests` section in `indexrs-core/src/search.rs`:
+Add to the `#[cfg(test)] mod tests` section in `ferret-indexer-core/src/search.rs`:
 
 ```rust
 #[test]
@@ -68,7 +68,7 @@ fn test_line_match_default_empty_context() {
 
 ### Step 2: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_context_line_construction -v`
+Run: `cargo test -p ferret-indexer-core -- test_context_line_construction -v`
 
 Expected: FAIL -- `ContextLine` struct does not exist, `context_before`/`context_after` fields do not exist on `LineMatch`.
 
@@ -120,13 +120,13 @@ Search for all `LineMatch {` across the workspace and add the two new fields to 
 
 ### Step 5: Run all tests
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 
 Expected: All tests pass, including the new context tests.
 
 ### Step 6: Update re-exports in lib.rs
 
-Add `ContextLine` to the re-exports in `indexrs-core/src/lib.rs`:
+Add `ContextLine` to the re-exports in `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub use search::{ContextLine, FileMatch, LineMatch, SearchResult};
@@ -137,8 +137,8 @@ pub use search::{ContextLine, FileMatch, LineMatch, SearchResult};
 ## Task 2: Add `total_file_count` to `SearchResult` and implement `paginate()`
 
 **Files:**
-- Modify: `indexrs-core/src/search.rs`
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 ### Step 1: Write the failing tests
 
@@ -262,7 +262,7 @@ fn test_search_result_paginate_partial_last_page() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_search_result_total_file_count -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_result_total_file_count -v`
 
 Expected: FAIL -- `total_file_count` field does not exist, `total_count` renamed to `total_match_count`.
 
@@ -373,7 +373,7 @@ impl fmt::Display for SearchResult {
 
 ### Step 7: Run all tests
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 
 Expected: All tests pass.
 
@@ -382,7 +382,7 @@ Expected: All tests pass.
 ## Task 3: Add context line collection to `verify_content_matches()`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 ### Step 1: Write the failing tests
 
@@ -455,7 +455,7 @@ fn test_verify_context_adjacent_matches_no_overlap() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_verify_with_context_lines -v`
+Run: `cargo test -p ferret-indexer-core -- test_verify_with_context_lines -v`
 
 Expected: FAIL -- `verify_content_matches` currently takes 2 args, not 3.
 
@@ -589,7 +589,7 @@ use crate::search::{ContextLine, FileMatch, LineMatch, SearchResult};
 
 ### Step 7: Run all tests
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 
 Expected: All tests pass, including the new context tests.
 
@@ -598,7 +598,7 @@ Expected: All tests pass, including the new context tests.
 ## Task 4: Update `Display` impl with file-grouped output format
 
 **Files:**
-- Modify: `indexrs-core/src/search.rs`
+- Modify: `ferret-indexer-core/src/search.rs`
 
 ### Step 1: Write the failing tests
 
@@ -657,7 +657,7 @@ fn test_search_result_display_with_pagination() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_file_match_display_with_context -v`
+Run: `cargo test -p ferret-indexer-core -- test_file_match_display_with_context -v`
 
 Expected: FAIL -- `FileMatch` does not implement `Display`.
 
@@ -717,7 +717,7 @@ Update the existing `test_search_result_display` and `test_search_result_display
 
 ### Step 6: Run all tests
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 
 Expected: All tests pass.
 
@@ -726,9 +726,9 @@ Expected: All tests pass.
 ## Task 5: Thread context lines through `search_segments()` via `SearchOptions`
 
 **Files:**
-- Modify: `indexrs-core/src/search.rs`
-- Modify: `indexrs-core/src/multi_search.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Modify: `ferret-indexer-core/src/search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing tests
 
@@ -738,7 +738,7 @@ Add to `multi_search.rs` tests:
 #[test]
 fn test_search_segments_with_context() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -771,7 +771,7 @@ fn test_search_segments_with_context() {
 #[test]
 fn test_search_segments_default_no_context() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -794,7 +794,7 @@ fn test_search_segments_default_no_context() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_search_segments_with_context -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_with_context -v`
 
 Expected: FAIL -- `SearchOptions` and `search_segments_with_options` do not exist.
 
@@ -952,7 +952,7 @@ pub use search::{ContextLine, FileMatch, LineMatch, SearchOptions, SearchResult}
 
 ### Step 7: Run all tests
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 
 Expected: All tests pass. The existing `search_segments` tests continue to work (they use context_lines=0 via the default).
 

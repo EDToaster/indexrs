@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make `indexrs-cli` output file paths relative to the caller's CWD, matching `rg`/`fd` conventions, so paths resolve correctly for downstream consumers (fzf preview, Helix `:open`).
+**Goal:** Make `ferret-indexer-cli` output file paths relative to the caller's CWD, matching `rg`/`fd` conventions, so paths resolve correctly for downstream consumers (fzf preview, Helix `:open`).
 
 **Architecture:** The CLI client sends its CWD to the daemon as part of each Search/Files request. The daemon constructs a `PathRewriter` from `(repo_root, cwd)` and rewrites each repo-root-relative path before ANSI formatting. This keeps the daemon as the single point of path transformation, operating on structured data before color codes are applied.
 
@@ -22,11 +22,11 @@
 ### Task 1: Create `paths.rs` — PathRewriter with tests
 
 **Files:**
-- Create: `indexrs-cli/src/paths.rs`
+- Create: `ferret-indexer-cli/src/paths.rs`
 
 **Step 1: Write the failing tests**
 
-Create `indexrs-cli/src/paths.rs` with tests only (struct/impl stubs that don't compile yet):
+Create `ferret-indexer-cli/src/paths.rs` with tests only (struct/impl stubs that don't compile yet):
 
 ```rust
 use std::path::{Path, PathBuf};
@@ -159,9 +159,9 @@ mod tests {
 
 **Step 2: Register the module and run tests to verify they fail**
 
-Add `mod paths;` and `pub use paths::PathRewriter;` to `indexrs-cli/src/main.rs` (after the existing `mod` lines, before `use` lines).
+Add `mod paths;` and `pub use paths::PathRewriter;` to `ferret-indexer-cli/src/main.rs` (after the existing `mod` lines, before `use` lines).
 
-Run: `cargo test -p indexrs-cli -- paths -v`
+Run: `cargo test -p ferret-indexer-cli -- paths -v`
 Expected: FAIL — `todo!()` panics.
 
 **Step 3: Implement `diff_relative_paths`**
@@ -247,13 +247,13 @@ impl PathRewriter {
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- paths -v`
+Run: `cargo test -p ferret-indexer-cli -- paths -v`
 Expected: all 9 tests PASS.
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-cli/src/paths.rs indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/paths.rs ferret-indexer-cli/src/main.rs
 git commit -m "feat: add PathRewriter for CWD-relative path output"
 ```
 
@@ -262,7 +262,7 @@ git commit -m "feat: add PathRewriter for CWD-relative path output"
 ### Task 2: Thread PathRewriter through search output
 
 **Files:**
-- Modify: `indexrs-cli/src/search_cmd.rs` (lines 59-222 — both `run_search` and `run_search_streaming`)
+- Modify: `ferret-indexer-cli/src/search_cmd.rs` (lines 59-222 — both `run_search` and `run_search_streaming`)
 
 **Step 1: Update function signatures**
 
@@ -378,13 +378,13 @@ fn test_search_rewrites_paths_to_cwd_relative() {
 
 **Step 7: Run tests**
 
-Run: `cargo test -p indexrs-cli -- search -v`
+Run: `cargo test -p ferret-indexer-cli -- search -v`
 Expected: all tests PASS (including the new rewrite test).
 
 **Step 8: Commit**
 
 ```bash
-git add indexrs-cli/src/search_cmd.rs indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/search_cmd.rs ferret-indexer-cli/src/daemon.rs
 git commit -m "feat: thread PathRewriter through search output"
 ```
 
@@ -393,7 +393,7 @@ git commit -m "feat: thread PathRewriter through search output"
 ### Task 3: Thread PathRewriter through files output
 
 **Files:**
-- Modify: `indexrs-cli/src/files.rs` (lines 92-114, `run_files`)
+- Modify: `ferret-indexer-cli/src/files.rs` (lines 92-114, `run_files`)
 
 **Step 1: Update function signature**
 
@@ -467,13 +467,13 @@ fn test_run_files_rewrites_paths_to_cwd_relative() {
 
 **Step 5: Run tests**
 
-Run: `cargo test -p indexrs-cli -v`
+Run: `cargo test -p ferret-indexer-cli -v`
 Expected: all tests PASS.
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-cli/src/files.rs indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/files.rs ferret-indexer-cli/src/daemon.rs
 git commit -m "feat: thread PathRewriter through files output"
 ```
 
@@ -482,8 +482,8 @@ git commit -m "feat: thread PathRewriter through files output"
 ### Task 4: Add `cwd` to daemon protocol and wire everything together
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs` (DaemonRequest, handle_search_request, handle_files_request, handle_connection)
-- Modify: `indexrs-cli/src/main.rs` (Search and Files command branches)
+- Modify: `ferret-indexer-cli/src/daemon.rs` (DaemonRequest, handle_search_request, handle_files_request, handle_connection)
+- Modify: `ferret-indexer-cli/src/main.rs` (Search and Files command branches)
 
 **Step 1: Add `cwd` field to DaemonRequest variants**
 
@@ -588,7 +588,7 @@ DaemonRequest::Files {
 In `main.rs`, at the top of the `run` function (line 50), compute CWD once:
 
 ```rust
-async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::IndexError> {
+async fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, ferret_indexer_core::IndexError> {
     // Resolve CWD for path rewriting (best-effort; None if unavailable).
     let cwd = std::env::current_dir().ok().map(|p| p.to_string_lossy().into_owned());
 
@@ -627,7 +627,7 @@ let request = daemon::DaemonRequest::Files {
 
 **Step 6: Run all tests**
 
-Run: `cargo test -p indexrs-cli -v`
+Run: `cargo test -p ferret-indexer-cli -v`
 Expected: all tests PASS.
 
 Run: `cargo clippy --workspace -- -D warnings`
@@ -636,7 +636,7 @@ Expected: no warnings.
 **Step 7: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/daemon.rs ferret-indexer-cli/src/main.rs
 git commit -m "feat: send CWD to daemon for CWD-relative path output"
 ```
 
@@ -666,15 +666,15 @@ Expected: all tests PASS.
 
 From the repo root:
 ```bash
-cargo run -p indexrs-cli --release -- search "fn main"
+cargo run -p ferret-indexer-cli --release -- search "fn main"
 ```
 Expected: paths like `src/main.rs:1:1:fn main() {`
 
 From a subdirectory:
 ```bash
-cd indexrs-cli/src && cargo run -p indexrs-cli --release -- search "fn main"
+cd ferret-indexer-cli/src && cargo run -p ferret-indexer-cli --release -- search "fn main"
 ```
-Expected: paths like `../../indexrs-core/src/lib.rs` (relative to CWD, with `../` as needed).
+Expected: paths like `../../ferret-indexer-core/src/lib.rs` (relative to CWD, with `../` as needed).
 
 **Step 5: Commit any fixes**
 

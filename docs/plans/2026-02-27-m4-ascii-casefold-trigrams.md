@@ -6,7 +6,7 @@
 
 **Architecture:** Add `ascii_fold_byte(b: u8) -> u8` to `trigram.rs` and new `extract_trigrams_folded()` / `extract_unique_trigrams_folded()` functions that fold bytes inline during the sliding window (zero allocation). Update `PostingListBuilder::add_file()` to use folded extraction, and `find_candidates()` to fold the query before trigram extraction. The existing non-folded `extract_trigrams()` is preserved for any use case needing raw byte trigrams.
 
-**Tech Stack:** Rust 2024, existing `indexrs-core` modules (`trigram`, `posting`, `intersection`), `tempfile` (dev)
+**Tech Stack:** Rust 2024, existing `ferret-indexer-core` modules (`trigram`, `posting`, `intersection`), `tempfile` (dev)
 
 **Prerequisite for:** All M4 issues (HHC-46 through HHC-51). This must be implemented before the query engine, since the query engine's trigram extraction assumes a case-folded index.
 
@@ -15,8 +15,8 @@
 ## Task 1: Add `ascii_fold_byte` and folded extraction functions to `trigram.rs`
 
 **Files:**
-- Modify: `indexrs-core/src/trigram.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Modify: `ferret-indexer-core/src/trigram.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing tests
 
@@ -106,7 +106,7 @@ fn test_extract_unique_trigrams_folded_fn_main() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_ascii_fold test_extract_trigrams_folded test_extract_unique_trigrams_folded`
+Run: `cargo test -p ferret-indexer-core -- test_ascii_fold test_extract_trigrams_folded test_extract_unique_trigrams_folded`
 
 Expected: FAIL -- functions do not exist.
 
@@ -144,8 +144,8 @@ pub fn ascii_fold_byte(b: u8) -> u8 {
 /// # Examples
 ///
 /// ```
-/// use indexrs_core::trigram::extract_trigrams_folded;
-/// use indexrs_core::Trigram;
+/// use ferret_indexer_core::trigram::extract_trigrams_folded;
+/// use ferret_indexer_core::Trigram;
 ///
 /// let content = b"ABC";
 /// let trigrams: Vec<Trigram> = extract_trigrams_folded(content).collect();
@@ -165,7 +165,7 @@ pub fn extract_trigrams_folded(content: &[u8]) -> impl Iterator<Item = Trigram> 
 /// # Examples
 ///
 /// ```
-/// use indexrs_core::trigram::extract_unique_trigrams_folded;
+/// use ferret_indexer_core::trigram::extract_unique_trigrams_folded;
 ///
 /// let unique = extract_unique_trigrams_folded(b"ABab");
 /// assert_eq!(unique.len(), 2); // "aba" and "bab" (both lowercased)
@@ -177,7 +177,7 @@ pub fn extract_unique_trigrams_folded(content: &[u8]) -> HashSet<Trigram> {
 
 ### Step 4: Add re-exports to lib.rs
 
-Add to the re-exports in `indexrs-core/src/lib.rs`:
+Add to the re-exports in `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub use trigram::{ascii_fold_byte, extract_trigrams_folded, extract_unique_trigrams_folded};
@@ -185,14 +185,14 @@ pub use trigram::{ascii_fold_byte, extract_trigrams_folded, extract_unique_trigr
 
 ### Step 5: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_ascii_fold test_extract_trigrams_folded test_extract_unique_trigrams_folded`
+Run: `cargo test -p ferret-indexer-core -- test_ascii_fold test_extract_trigrams_folded test_extract_unique_trigrams_folded`
 
 Expected: PASS.
 
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/trigram.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/trigram.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat: add ASCII case-folded trigram extraction functions"
 ```
 
@@ -201,7 +201,7 @@ git commit -m "feat: add ASCII case-folded trigram extraction functions"
 ## Task 2: Update `PostingListBuilder::add_file()` to use folded trigram extraction
 
 **Files:**
-- Modify: `indexrs-core/src/posting.rs`
+- Modify: `ferret-indexer-core/src/posting.rs`
 
 ### Step 1: Write the failing test
 
@@ -251,7 +251,7 @@ fn test_posting_builder_case_fold_mixed_case() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_posting_builder_case_fold`
+Run: `cargo test -p ferret-indexer-core -- test_posting_builder_case_fold`
 
 Expected: FAIL -- `add_file` still extracts raw (non-folded) trigrams, so "FN " trigram exists instead of "fn ".
 
@@ -289,14 +289,14 @@ pub fn add_file(&mut self, file_id: FileId, content: &[u8]) {
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- posting`
+Run: `cargo test -p ferret-indexer-core -- posting`
 
 Expected: All posting tests PASS. Existing tests use lowercase content ("fn main() {}", "fn parse() {}") so folding doesn't change their trigrams. The new tests verify uppercase content gets folded.
 
 ### Step 5: Commit
 
 ```bash
-git add indexrs-core/src/posting.rs
+git add ferret-indexer-core/src/posting.rs
 git commit -m "feat: fold ASCII case in PostingListBuilder::add_file()"
 ```
 
@@ -305,7 +305,7 @@ git commit -m "feat: fold ASCII case in PostingListBuilder::add_file()"
 ## Task 3: Update `find_candidates()` to fold query trigrams
 
 **Files:**
-- Modify: `indexrs-core/src/intersection.rs`
+- Modify: `ferret-indexer-core/src/intersection.rs`
 
 ### Step 1: Write the failing test
 
@@ -350,7 +350,7 @@ fn test_find_candidates_mixed_case_query() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_find_candidates_case`
+Run: `cargo test -p ferret-indexer-core -- test_find_candidates_case`
 
 Expected: FAIL -- "MAIN" query extracts uppercase trigrams "MAI", "AIN" which don't match the lowercase index.
 
@@ -392,7 +392,7 @@ pub fn find_candidates(
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- intersection`
+Run: `cargo test -p ferret-indexer-core -- intersection`
 
 Expected: All intersection tests PASS. Existing tests use lowercase queries and content, so folding doesn't change behavior. New tests verify uppercase queries match the lowercase index.
 
@@ -405,7 +405,7 @@ Expected: All tests PASS.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/intersection.rs
+git add ferret-indexer-core/src/intersection.rs
 git commit -m "feat: fold query trigrams in find_candidates() for case-insensitive lookup"
 ```
 
@@ -414,14 +414,14 @@ git commit -m "feat: fold query trigrams in find_candidates() for case-insensiti
 ## Task 4: Update `bench_space.rs` to use folded trigram extraction
 
 **Files:**
-- Modify: `indexrs-core/examples/bench_space.rs`
+- Modify: `ferret-indexer-core/examples/bench_space.rs`
 
 ### Step 1: Update imports
 
 Change the import to include folded variants:
 
 ```rust
-use indexrs_core::{
+use ferret_indexer_core::{
     DEFAULT_MAX_FILE_SIZE, DirectoryWalkerBuilder, Language, Trigram, encode_delta_varint,
     extract_trigrams_folded, extract_unique_trigrams_folded, is_binary_content, is_binary_path,
 };
@@ -443,14 +443,14 @@ total_trigram_occurrences += extract_trigrams_folded(content).count() as u64;
 
 ### Step 3: Verify
 
-Run: `cargo run -p indexrs-core --example bench_space --release -- .`
+Run: `cargo run -p ferret-indexer-core --example bench_space --release -- .`
 
 Expected: Runs without errors. Trigram counts may be slightly lower (uppercase variants are now folded to lowercase, reducing unique trigram count).
 
 ### Step 4: Commit
 
 ```bash
-git add indexrs-core/examples/bench_space.rs
+git add ferret-indexer-core/examples/bench_space.rs
 git commit -m "chore: use folded trigram extraction in bench_space example"
 ```
 
@@ -459,7 +459,7 @@ git commit -m "chore: use folded trigram extraction in bench_space example"
 ## Task 5: Add end-to-end test for case-insensitive search through segments
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 ### Step 1: Write the test
 
@@ -469,7 +469,7 @@ Add to the `#[cfg(test)] mod tests` block in `multi_search.rs`:
 #[test]
 fn test_search_segments_case_insensitive_via_folded_index() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Index content with mixed case
@@ -513,7 +513,7 @@ fn test_search_segments_case_insensitive_via_folded_index() {
 
 ### Step 2: Run the test
 
-Run: `cargo test -p indexrs-core -- test_search_segments_case_insensitive_via_folded_index`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_case_insensitive_via_folded_index`
 
 Expected: PASS -- the segment writer uses `PostingListBuilder::file_only()` which now folds trigrams, and `find_candidates()` folds the query.
 
@@ -541,7 +541,7 @@ Expected: All tests PASS, clippy clean, fmt clean.
 ### Step 4: Commit
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "test: add case-insensitive search test via folded trigram index"
 ```
 

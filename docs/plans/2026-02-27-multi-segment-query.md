@@ -6,19 +6,19 @@
 
 **Architecture:** Three new pieces: (1) `IndexState` manages an `Arc<Vec<Arc<Segment>>>` representing the current set of active segments, with a `snapshot()` method that clones the Arc for lock-free reads and a `publish()` method that atomically swaps the segment list under a writer mutex. (2) A multi-segment search function that takes a snapshot and a query string, searches each segment (trigram intersection + tombstone filtering + content verification), merges results across segments (dedup by file path preferring the newest segment), and returns a `SearchResult` with timing. (3) `SegmentList` is a type alias for the snapshot (`Arc<Vec<Arc<Segment>>>`). The search pipeline per segment is: `find_candidates()` -> filter tombstones -> read metadata -> read content -> verify match -> build `LineMatch`/`FileMatch`. Cross-segment dedup uses a `HashMap<String, (SegmentId, FileMatch)>` keeping only the entry from the highest SegmentId.
 
-**Tech Stack:** Rust 2024, `std::sync::{Arc, Mutex}`, existing `indexrs-core` modules (segment, tombstone, intersection, search, content, metadata, types, error), `tempfile` (dev), `regex` for content verification
+**Tech Stack:** Rust 2024, `std::sync::{Arc, Mutex}`, existing `ferret-indexer-core` modules (segment, tombstone, intersection, search, content, metadata, types, error), `tempfile` (dev), `regex` for content verification
 
 ---
 
 ## Task 1: Add `SegmentList` type alias and `IndexState` struct skeleton
 
 **Files:**
-- Create: `indexrs-core/src/index_state.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/index_state.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing test
 
-Create `indexrs-core/src/index_state.rs` with a test for constructing an empty `IndexState`:
+Create `ferret-indexer-core/src/index_state.rs` with a test for constructing an empty `IndexState`:
 
 ```rust
 //! Index state management with snapshot isolation.
@@ -54,7 +54,7 @@ mod tests {
 
 ### Step 2: Register the module in lib.rs
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod index_state;
@@ -68,7 +68,7 @@ pub use index_state::{IndexState, SegmentList};
 
 ### Step 3: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_index_state_new_is_empty -v`
+Run: `cargo test -p ferret-indexer-core -- test_index_state_new_is_empty -v`
 
 Expected: FAIL -- `IndexState` struct does not exist yet.
 
@@ -135,7 +135,7 @@ impl Default for IndexState {
 
 ### Step 5: Run test to verify it passes
 
-Run: `cargo test -p indexrs-core -- test_index_state_new_is_empty -v`
+Run: `cargo test -p ferret-indexer-core -- test_index_state_new_is_empty -v`
 
 Expected: PASS
 
@@ -148,7 +148,7 @@ Expected: No errors or warnings.
 ### Step 7: Commit
 
 ```bash
-git add indexrs-core/src/index_state.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/index_state.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(index_state): add IndexState struct with SegmentList type alias"
 ```
 
@@ -157,7 +157,7 @@ git commit -m "feat(index_state): add IndexState struct with SegmentList type al
 ## Task 2: Add `snapshot()` and `publish()` tests for IndexState
 
 **Files:**
-- Modify: `indexrs-core/src/index_state.rs`
+- Modify: `ferret-indexer-core/src/index_state.rs`
 
 ### Step 1: Write the tests
 
@@ -179,7 +179,7 @@ fn build_test_segment(
 #[test]
 fn test_publish_and_snapshot() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg0 = build_test_segment(
@@ -203,7 +203,7 @@ fn test_publish_and_snapshot() {
 #[test]
 fn test_snapshot_is_isolated_from_publish() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg0 = build_test_segment(
@@ -247,7 +247,7 @@ fn test_snapshot_is_isolated_from_publish() {
 #[test]
 fn test_publish_replaces_entirely() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg0 = build_test_segment(
@@ -288,14 +288,14 @@ fn test_default_trait() {
 
 ### Step 2: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- index_state -v`
+Run: `cargo test -p ferret-indexer-core -- index_state -v`
 
 Expected: All tests PASS.
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/index_state.rs
+git add ferret-indexer-core/src/index_state.rs
 git commit -m "test(index_state): add publish, snapshot isolation, and replace tests"
 ```
 
@@ -304,7 +304,7 @@ git commit -m "test(index_state): add publish, snapshot isolation, and replace t
 ## Task 3: Add `Segment::load_tombstones()` method
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs`
+- Modify: `ferret-indexer-core/src/segment.rs`
 
 The multi-segment search needs to read tombstones from each segment. Currently `Segment` does not expose tombstone loading. We add a method that reads `tombstones.bin` from the segment directory, returning an empty `TombstoneSet` if the file is empty (which is the initial state written by `SegmentWriter`).
 
@@ -318,7 +318,7 @@ use crate::tombstone::TombstoneSet;
 #[test]
 fn test_segment_load_tombstones_empty() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![InputFile {
@@ -338,7 +338,7 @@ fn test_segment_load_tombstones_empty() {
 #[test]
 fn test_segment_load_tombstones_after_write() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![
@@ -371,7 +371,7 @@ fn test_segment_load_tombstones_after_write() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_segment_load_tombstones -v`
+Run: `cargo test -p ferret-indexer-core -- test_segment_load_tombstones -v`
 
 Expected: FAIL -- `load_tombstones` method does not exist.
 
@@ -409,7 +409,7 @@ Add this method inside `impl Segment`:
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_segment_load_tombstones -v`
+Run: `cargo test -p ferret-indexer-core -- test_segment_load_tombstones -v`
 
 Expected: PASS
 
@@ -422,7 +422,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/segment.rs
+git add ferret-indexer-core/src/segment.rs
 git commit -m "feat(segment): add load_tombstones() method for reading tombstone bitmap"
 ```
 
@@ -431,14 +431,14 @@ git commit -m "feat(segment): add load_tombstones() method for reading tombstone
 ## Task 4: Create `multi_search.rs` module with content verification helper
 
 **Files:**
-- Create: `indexrs-core/src/multi_search.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 The content verification step is the core of turning trigram candidates into actual `LineMatch` results. This task implements the `verify_content_matches` function that, given file content bytes and a query string, finds all matching lines and returns `Vec<LineMatch>`.
 
 ### Step 1: Write the failing test
 
-Create `indexrs-core/src/multi_search.rs`:
+Create `ferret-indexer-core/src/multi_search.rs`:
 
 ```rust
 //! Multi-segment search with snapshot isolation.
@@ -526,7 +526,7 @@ mod tests {
 
 ### Step 2: Register the module in lib.rs
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod multi_search;
@@ -540,7 +540,7 @@ pub use multi_search::search_segments;
 
 ### Step 3: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_verify -v`
+Run: `cargo test -p ferret-indexer-core -- test_verify -v`
 
 Expected: FAIL -- `verify_content_matches` function does not exist.
 
@@ -614,7 +614,7 @@ fn find_substring(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 ### Step 5: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_verify -v`
+Run: `cargo test -p ferret-indexer-core -- test_verify -v`
 
 Expected: PASS
 
@@ -627,7 +627,7 @@ Expected: No errors or warnings.
 ### Step 7: Commit
 
 ```bash
-git add indexrs-core/src/multi_search.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/multi_search.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(multi_search): add verify_content_matches for line-level match extraction"
 ```
 
@@ -636,7 +636,7 @@ git commit -m "feat(multi_search): add verify_content_matches for line-level mat
 ## Task 5: Implement single-segment search helper
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 This task adds `search_single_segment()`, which searches one segment: runs `find_candidates()`, filters tombstones, reads metadata and content, verifies matches, and builds `FileMatch` results.
 
@@ -661,7 +661,7 @@ fn build_segment(
 #[test]
 fn test_search_single_segment_basic() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -692,7 +692,7 @@ fn test_search_single_segment_basic() {
 #[test]
 fn test_search_single_segment_with_tombstone() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -725,7 +725,7 @@ fn test_search_single_segment_with_tombstone() {
 #[test]
 fn test_search_single_segment_no_match() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -746,7 +746,7 @@ fn test_search_single_segment_no_match() {
 #[test]
 fn test_search_single_segment_short_query() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -768,7 +768,7 @@ fn test_search_single_segment_short_query() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_search_single_segment -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_single_segment -v`
 
 Expected: FAIL -- `search_single_segment` function does not exist.
 
@@ -841,7 +841,7 @@ fn search_single_segment(
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_search_single_segment -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_single_segment -v`
 
 Expected: PASS
 
@@ -854,7 +854,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): add search_single_segment with tombstone filtering"
 ```
 
@@ -863,7 +863,7 @@ git commit -m "feat(multi_search): add search_single_segment with tombstone filt
 ## Task 6: Implement `search_segments()` with cross-segment dedup and merging
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 This is the main public API. It takes a `SegmentList` (snapshot) and a query, searches each segment, deduplicates results across segments (preferring the newest segment = highest SegmentId), sorts by relevance, and returns a `SearchResult`.
 
@@ -875,7 +875,7 @@ Add to the `tests` module in `multi_search.rs`:
 #[test]
 fn test_search_segments_single_segment() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -898,7 +898,7 @@ fn test_search_segments_single_segment() {
 #[test]
 fn test_search_segments_multiple_segments() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg0 = build_segment(
@@ -933,7 +933,7 @@ fn test_search_segments_multiple_segments() {
 #[test]
 fn test_search_segments_dedup_prefers_newest() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Segment 0 has main.rs with "hello"
@@ -971,7 +971,7 @@ fn test_search_segments_dedup_prefers_newest() {
 #[test]
 fn test_search_segments_dedup_with_tombstone() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Segment 0 has main.rs
@@ -1020,7 +1020,7 @@ fn test_search_segments_empty_snapshot() {
 #[test]
 fn test_search_segments_sorted_by_score() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // File with many matches (high score)
@@ -1056,7 +1056,7 @@ fn test_search_segments_sorted_by_score() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_search_segments -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments -v`
 
 Expected: FAIL -- `search_segments` function does not exist.
 
@@ -1138,7 +1138,7 @@ pub fn search_segments(
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_search_segments -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments -v`
 
 Expected: PASS
 
@@ -1151,7 +1151,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "feat(multi_search): implement search_segments with cross-segment dedup and merging"
 ```
 
@@ -1160,7 +1160,7 @@ git commit -m "feat(multi_search): implement search_segments with cross-segment 
 ## Task 7: Add `IndexState` integration test with `search_segments`
 
 **Files:**
-- Modify: `indexrs-core/src/index_state.rs`
+- Modify: `ferret-indexer-core/src/index_state.rs`
 
 This test verifies the full end-to-end flow: build segments, publish them to `IndexState`, take a snapshot, and search it.
 
@@ -1175,7 +1175,7 @@ use std::path::PathBuf;
 #[test]
 fn test_index_state_search_integration() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg0 = build_test_segment(
@@ -1214,7 +1214,7 @@ fn test_index_state_search_integration() {
 #[test]
 fn test_index_state_snapshot_isolation_during_search() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg0 = build_test_segment(
@@ -1263,14 +1263,14 @@ fn test_index_state_snapshot_isolation_during_search() {
 
 ### Step 2: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- index_state -v`
+Run: `cargo test -p ferret-indexer-core -- index_state -v`
 
 Expected: All tests PASS.
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/index_state.rs
+git add ferret-indexer-core/src/index_state.rs
 git commit -m "test(index_state): add search integration and snapshot isolation tests"
 ```
 
@@ -1294,7 +1294,7 @@ Expected: No warnings, formatting OK. If formatting fails, run `cargo fmt --all`
 
 At this point, the new code should contain:
 
-**`indexrs-core/src/index_state.rs`:**
+**`ferret-indexer-core/src/index_state.rs`:**
 - `SegmentList` type alias (`Arc<Vec<Arc<Segment>>>`)
 - `IndexState` struct with `Mutex<SegmentList>`
   - `IndexState::new()` -- creates with empty segment list
@@ -1302,18 +1302,18 @@ At this point, the new code should contain:
   - `publish(new_segments)` -- atomically swaps segment list (Mutex serializes writers)
 - Tests for snapshot isolation, publish/replace, default trait
 
-**`indexrs-core/src/multi_search.rs`:**
+**`ferret-indexer-core/src/multi_search.rs`:**
 - `verify_content_matches(content, query)` (private) -- byte-level substring match, returns `Vec<LineMatch>`
 - `find_substring(haystack, needle)` (private) -- helper for byte-level search
 - `search_single_segment(segment, query, tombstones)` (private) -- full pipeline for one segment
 - `search_segments(snapshot, query)` (public) -- multi-segment search with dedup and merge
 - Tests for verification, single-segment search, multi-segment dedup, tombstone filtering, score sorting
 
-**`indexrs-core/src/segment.rs`:**
+**`ferret-indexer-core/src/segment.rs`:**
 - `load_tombstones()` method added to `Segment` struct
 - Tests for empty and non-empty tombstone loading
 
-**`indexrs-core/src/lib.rs`:**
+**`ferret-indexer-core/src/lib.rs`:**
 - New modules: `index_state`, `multi_search`
 - New re-exports: `IndexState`, `SegmentList`, `search_segments`
 

@@ -78,5 +78,5 @@ jobs:
           python-version: "3.12"
       - run: npm ci
       - run: pip install djlint
-      - run: npx stylelint 'indexrs-web/static/**/*.css'
-      - run: djlint indexrs-web/templates/ --lint
+      - run: npx stylelint 'ferret-web/static/**/*.css'
+      - run: djlint ferret-web/templates/ --lint

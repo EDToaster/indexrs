@@ -1,6 +1,6 @@
 **/target/
 **/.claude/
 **/.playwright-mcp/
-**/.indexrs/
+**/.ferret_index/
 **/.worktrees/
 node_modules/

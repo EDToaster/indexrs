@@ -1,6 +1,6 @@
 # Multi-Repo Support Design
 
-indexrs currently operates on a single repository at a time. Multi-repo support adds a lightweight registry so the web UI can switch between repos, while the CLI continues to infer the current repo from the working directory.
+ferret currently operates on a single repository at a time. Multi-repo support adds a lightweight registry so the web UI can switch between repos, while the CLI continues to infer the current repo from the working directory.
 
 **Key constraint:** no cross-repo search. Each search targets exactly one repo. The CLI, MCP server, and web UI all operate on one repo at a time.
 
@@ -8,14 +8,14 @@ indexrs currently operates on a single repository at a time. Multi-repo support 
 
 ## 1. Repo Registry
 
-### Config file: `~/.config/indexrs/repos.toml`
+### Config file: `~/.config/ferret/repos.toml`
 
 A simple list of known repositories:
 
 ```toml
 [[repo]]
-name = "indexrs"
-path = "/Users/howard/src/indexrs"
+name = "ferret"
+path = "/Users/howard/src/ferret"
 
 [[repo]]
 name = "frontend"
@@ -31,9 +31,9 @@ Each entry has:
 | Field  | Required | Description |
 |--------|----------|-------------|
 | `name` | no       | Human-readable identifier. Defaults to the directory name if omitted. |
-| `path` | yes      | Absolute path to the repo root (must contain `.indexrs/`). |
+| `path` | yes      | Absolute path to the repo root (must contain `.ferret_index/`). |
 
-Names must be unique. If two repos would have the same auto-derived name (e.g., `~/work/api` and `~/personal/api`), the second `indexrs init` prints a warning and requires an explicit `--name` override.
+Names must be unique. If two repos would have the same auto-derived name (e.g., `~/work/api` and `~/personal/api`), the second `ferret init` prints a warning and requires an explicit `--name` override.
 
 ### Config parsing
 
@@ -56,26 +56,26 @@ The config directory is created on first write. If the file doesn't exist, the r
 
 ## 2. Registration
 
-### Auto-registration on `indexrs init`
+### Auto-registration on `ferret init`
 
-When `indexrs init` builds the index for a repo, it also registers the repo in the config file:
+When `ferret init` builds the index for a repo, it also registers the repo in the config file:
 
-1. Derive name from directory: `/Users/howard/src/indexrs` → `"indexrs"`
+1. Derive name from directory: `/Users/howard/src/ferret` → `"ferret"`
 2. Check for name collision in existing config
 3. Append `[[repo]]` entry to `repos.toml` (create file if needed)
-4. Print: `Registered repo "indexrs" in ~/.config/indexrs/repos.toml`
+4. Print: `Registered repo "ferret" in ~/.config/ferret/repos.toml`
 
 If a repo with the same path already exists in the config, skip registration silently (idempotent).
 
 ### Manual management commands
 
 ```
-indexrs repos list              # List registered repos (name, path, status)
-indexrs repos add <path>        # Register a repo (--name override optional)
-indexrs repos remove <name>     # Unregister (does not delete .indexrs/)
+ferret repos list              # List registered repos (name, path, status)
+ferret repos add <path>        # Register a repo (--name override optional)
+ferret repos remove <name>     # Unregister (does not delete .ferret_index/)
 ```
 
-`repos add` validates that the path exists and contains `.indexrs/` (i.e., the repo has been initialized). `repos remove` only edits the config -- it does not delete the index or stop a running daemon.
+`repos add` validates that the path exists and contains `.ferret_index/` (i.e., the repo has been initialized). `repos remove` only edits the config -- it does not delete the index or stop a running daemon.
 
 ### CLI args
 
@@ -119,10 +119,10 @@ pub enum ReposAction {
 
 Each repo continues to have its own independent:
 
-- `.indexrs/` directory with segments, lock file, checkpoint
+- `.ferret_index/` directory with segments, lock file, checkpoint
 - `SegmentManager` (owned by the daemon)
 - `HybridDetector` (file watcher + git diff)
-- Unix socket at `.indexrs/sock`
+- Unix socket at `.ferret_index/sock`
 
 The registry is purely a discovery mechanism -- it tells the web server which repos exist. It has no effect on how indexing works.
 
@@ -141,7 +141,7 @@ struct RepoInfo {
 }
 ```
 
-When a request comes in for repo `"indexrs"`, the web server:
+When a request comes in for repo `"ferret"`, the web server:
 
 1. Looks up `root` in the registry
 2. Calls `ensure_daemon(root)` to get a Unix socket connection
@@ -154,12 +154,12 @@ The web server is stateless with respect to index data. All search, file retriev
 
 The `--repo` flag gains name-based resolution. When a value is passed:
 
-1. Look up the value as a **repo name** in `~/.config/indexrs/repos.toml`
+1. Look up the value as a **repo name** in `~/.config/ferret/repos.toml`
 2. If found, use the config's `path` as the repo root
-3. If not found, treat the value as a **filesystem path** (existing behavior -- walk it looking for `.indexrs/`)
+3. If not found, treat the value as a **filesystem path** (existing behavior -- walk it looking for `.ferret_index/`)
 4. If no `--repo` is passed, infer from CWD as today
 
-This means `indexrs search --repo indexrs "fn main"` works without knowing the full path, while `indexrs search --repo /tmp/some-project "fn main"` still works for unregistered repos.
+This means `ferret search --repo ferret "fn main"` works without knowing the full path, while `ferret search --repo /tmp/some-project "fn main"` still works for unregistered repos.
 
 ```rust
 fn resolve_repo(flag: Option<&str>) -> Result<PathBuf, IndexError> {
@@ -171,7 +171,7 @@ fn resolve_repo(flag: Option<&str>) -> Result<PathBuf, IndexError> {
             }
             // Fall back to path.
             let path = PathBuf::from(value);
-            if path.join(".indexrs").exists() {
+            if path.join(".ferret_index").exists() {
                 Ok(path)
             } else {
                 Err(IndexError::RepoNotFound(value.to_string()))
@@ -261,7 +261,7 @@ pub enum DaemonResponse {
 [Done]  {total, duration_ms, stale}                 // end marker
 ```
 
-Where `FileMatch` and `SearchStats` are the existing serde-serializable types from `indexrs-core::search`, extended with pagination info:
+Where `FileMatch` and `SearchStats` are the existing serde-serializable types from `ferret-indexer-core::search`, extended with pagination info:
 
 ```rust
 /// Wrapper for JSON search response frames.
@@ -345,7 +345,7 @@ DaemonRequest::JsonSearch { query, page, per_page, context_lines, language, path
 
 ## 5. Web Server Integration
 
-The web server (`indexrs web`) uses the registry and extended daemon protocol:
+The web server (`ferret web`) uses the registry and extended daemon protocol:
 
 ```rust
 struct AppState {
@@ -356,11 +356,11 @@ struct AppState {
 ### Request flow
 
 ```
-GET /api/v1/repos/indexrs/search?q=handleRequest&page=1&per_page=25
+GET /api/v1/repos/ferret/search?q=handleRequest&page=1&per_page=25
 
-1. Extract repo name "indexrs" from path
-2. Look up root path in registry → /Users/howard/src/indexrs
-3. Connect to daemon: ensure_daemon("/Users/howard/src/indexrs")
+1. Extract repo name "ferret" from path
+2. Look up root path in registry → /Users/howard/src/ferret
+3. Connect to daemon: ensure_daemon("/Users/howard/src/ferret")
 4. Send: JsonSearch { query: "handleRequest", page: 1, per_page: 25, ... }
 5. Receive: Json frames with FileMatch data + Done
 6. Serialize as JSON HTTP response (or render as HTML fragment for htmx)
@@ -394,9 +394,9 @@ The UI header includes a dropdown populated from `GET /api/v1/repos`. Selecting 
 
 ### Issue 1: Repo registry config + CLI commands
 
-- Config file format, parsing, writing (`~/.config/indexrs/repos.toml`)
-- `indexrs repos list|add|remove` subcommands
-- Auto-registration in `indexrs init`
+- Config file format, parsing, writing (`~/.config/ferret/repos.toml`)
+- `ferret repos list|add|remove` subcommands
+- Auto-registration in `ferret init`
 - ~300 lines + tests
 
 ### Issue 2: Daemon protocol extensions

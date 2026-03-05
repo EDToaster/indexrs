@@ -2,19 +2,19 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Parallelize Phase 1 (file tree walk) and Phase 2 (filter & load file contents) of `indexrs init` to reduce wall-clock time on large repos.
+**Goal:** Parallelize Phase 1 (file tree walk) and Phase 2 (filter & load file contents) of `ferret init` to reduce wall-clock time on large repos.
 
 **Architecture:** Phase 1 adds a `run_parallel_with_progress` method to `Walker` that uses `ignore`'s `build_parallel()` with an `AtomicUsize` file counter and a `Fn + Sync` callback. Phase 2 replaces the sequential filter-and-read loop in `init.rs` with a rayon `par_iter` over the walked files, using atomic counters for skip stats and progress. All existing output (progress lines, skip breakdown, summary) is preserved identically.
 
-**Tech Stack:** Rust, rayon (already in `indexrs-core`), `ignore` crate's parallel walker, `std::sync::atomic`
+**Tech Stack:** Rust, rayon (already in `ferret-indexer-core`), `ignore` crate's parallel walker, `std::sync::atomic`
 
 ---
 
 ### Task 1: Add `run_parallel_with_progress` to Walker
 
 **Files:**
-- Modify: `indexrs-core/src/walker.rs:190-229`
-- Test: `indexrs-core/src/walker.rs` (inline tests)
+- Modify: `ferret-indexer-core/src/walker.rs:190-229`
+- Test: `ferret-indexer-core/src/walker.rs` (inline tests)
 
 **Step 1: Write the failing test**
 
@@ -44,7 +44,7 @@ fn test_parallel_walk_with_progress_reports_count() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_parallel_walk_with_progress_reports_count`
+Run: `cargo test -p ferret-indexer-core -- test_parallel_walk_with_progress_reports_count`
 Expected: compile error — `run_parallel_with_progress` does not exist
 
 **Step 3: Implement `run_parallel_with_progress`**
@@ -106,13 +106,13 @@ pub fn run_parallel_with_progress<F: Fn(usize) + Sync>(
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-core -- test_parallel_walk_with_progress`
+Run: `cargo test -p ferret-indexer-core -- test_parallel_walk_with_progress`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/walker.rs
+git add ferret-indexer-core/src/walker.rs
 git commit -m "feat: add run_parallel_with_progress to Walker"
 ```
 
@@ -121,7 +121,7 @@ git commit -m "feat: add run_parallel_with_progress to Walker"
 ### Task 2: Switch init Phase 1 to parallel walk with progress
 
 **Files:**
-- Modify: `indexrs-cli/src/init.rs:130-149`
+- Modify: `ferret-indexer-cli/src/init.rs:130-149`
 
 **Step 1: Update Phase 1 to use `run_parallel_with_progress`**
 
@@ -160,7 +160,7 @@ Expected: clean clippy, all tests pass
 **Step 3: Commit**
 
 ```bash
-git add indexrs-cli/src/init.rs
+git add ferret-indexer-cli/src/init.rs
 git commit -m "perf: parallelize init Phase 1 file tree walk"
 ```
 
@@ -169,12 +169,12 @@ git commit -m "perf: parallelize init Phase 1 file tree walk"
 ### Task 3: Parallelize init Phase 2 (filter & load)
 
 **Files:**
-- Modify: `indexrs-cli/Cargo.toml` (add `rayon` dep)
-- Modify: `indexrs-cli/src/init.rs:151-211`
+- Modify: `ferret-indexer-cli/Cargo.toml` (add `rayon` dep)
+- Modify: `ferret-indexer-cli/src/init.rs:151-211`
 
-**Step 1: Add rayon dependency to indexrs-cli**
+**Step 1: Add rayon dependency to ferret-indexer-cli**
 
-In `indexrs-cli/Cargo.toml`, add under `[dependencies]`:
+In `ferret-indexer-cli/Cargo.toml`, add under `[dependencies]`:
 
 ```toml
 rayon = "1"
@@ -217,7 +217,7 @@ let files: Vec<InputFile> = walked
             skipped_size.fetch_add(1, Ordering::Relaxed);
             return None;
         }
-        if indexrs_core::is_binary_path(&wf.path) {
+        if ferret_indexer_core::is_binary_path(&wf.path) {
             skipped_binary.fetch_add(1, Ordering::Relaxed);
             return None;
         }
@@ -273,7 +273,7 @@ Expected: clean clippy, all tests pass
 **Step 4: Commit**
 
 ```bash
-git add indexrs-cli/Cargo.toml indexrs-cli/src/init.rs
+git add ferret-indexer-cli/Cargo.toml ferret-indexer-cli/src/init.rs
 git commit -m "perf: parallelize init Phase 2 file filtering and loading"
 ```
 
@@ -287,7 +287,7 @@ Run: `cargo build --workspace --release`
 
 **Step 2: Test on a real repo**
 
-Run `indexrs init` on a real codebase and verify:
+Run `ferret init` on a real codebase and verify:
 1. Phase 1 shows live file count updating during walk
 2. Phase 2 shows percentage progress during filtering
 3. Phase 3 shows percentage progress during index build (already working)
@@ -296,14 +296,14 @@ Run `indexrs init` on a real codebase and verify:
 
 Run:
 ```bash
-cargo run -p indexrs-cli --release -- init --force
+cargo run -p ferret-indexer-cli --release -- init --force
 ```
 
 **Step 3: Verify non-TTY output**
 
 Pipe through cat to test non-TTY mode:
 ```bash
-cargo run -p indexrs-cli --release -- init --force 2>&1 | cat
+cargo run -p ferret-indexer-cli --release -- init --force 2>&1 | cat
 ```
 
 Verify each phase prints separate lines instead of `\r`-overwriting.

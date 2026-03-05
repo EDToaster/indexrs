@@ -13,11 +13,11 @@
 ## Task 1: Add `Git` error variant to `IndexError`
 
 **Files:**
-- Modify: `indexrs-core/src/error.rs`
+- Modify: `ferret-indexer-core/src/error.rs`
 
 **Step 1: Add the `Git` variant**
 
-In `indexrs-core/src/error.rs`, add a `Git` variant to `IndexError` after the `Walk` variant:
+In `ferret-indexer-core/src/error.rs`, add a `Git` variant to `IndexError` after the `Walk` variant:
 
 ```rust
 /// A git command failed or the directory is not a git repository.
@@ -27,13 +27,13 @@ Git(String),
 
 **Step 2: Verify compilation**
 
-Run: `cargo check -p indexrs-core`
+Run: `cargo check -p ferret-indexer-core`
 Expected: success
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/src/error.rs
+git add ferret-indexer-core/src/error.rs
 git commit -m "feat(git_diff): add Git variant to IndexError (HHC-38)"
 ```
 
@@ -42,8 +42,8 @@ git commit -m "feat(git_diff): add Git variant to IndexError (HHC-38)"
 ## Task 2: Create `changes.rs` with shared `ChangeEvent` and `ChangeKind`
 
 **Files:**
-- Create: `indexrs-core/src/changes.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/changes.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 **Step 1: Create `changes.rs`**
 
@@ -80,13 +80,13 @@ pub use changes::{ChangeEvent, ChangeKind};
 
 **Step 3: Verify compilation**
 
-Run: `cargo check -p indexrs-core`
+Run: `cargo check -p ferret-indexer-core`
 Expected: success
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/changes.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/changes.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(changes): add shared ChangeEvent/ChangeKind types (HHC-38)"
 ```
 
@@ -95,8 +95,8 @@ git commit -m "feat(changes): add shared ChangeEvent/ChangeKind types (HHC-38)"
 ## Task 3: Create `git_diff.rs` with `GitChangeDetector`
 
 **Files:**
-- Create: `indexrs-core/src/git_diff.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/git_diff.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 **Step 1: Create the module with struct, constructor, and helpers**
 
@@ -113,12 +113,12 @@ Add `pub mod git_diff;` and re-export `GitChangeDetector`.
 
 **Step 3: Verify compilation**
 
-Run: `cargo check -p indexrs-core`
+Run: `cargo check -p ferret-indexer-core`
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/git_diff.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/git_diff.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(git_diff): add GitChangeDetector with change detection (HHC-38)"
 ```
 
@@ -127,7 +127,7 @@ git commit -m "feat(git_diff): add GitChangeDetector with change detection (HHC-
 ## Task 4: Write unit tests for parsing logic
 
 **Files:**
-- Modify: `indexrs-core/src/git_diff.rs` (add `#[cfg(test)] mod tests`)
+- Modify: `ferret-indexer-core/src/git_diff.rs` (add `#[cfg(test)] mod tests`)
 
 **Tests to write:**
 1. `test_parse_name_status_added` — "A\tfile.rs" -> Created
@@ -143,13 +143,13 @@ git commit -m "feat(git_diff): add GitChangeDetector with change detection (HHC-
 **Step 1: Write all tests**
 **Step 2: Run tests**
 
-Run: `cargo test -p indexrs-core -- git_diff`
+Run: `cargo test -p ferret-indexer-core -- git_diff`
 Expected: all pass
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/src/git_diff.rs
+git add ferret-indexer-core/src/git_diff.rs
 git commit -m "test(git_diff): add unit and integration tests (HHC-38)"
 ```
 
@@ -159,12 +159,12 @@ git commit -m "test(git_diff): add unit and integration tests (HHC-38)"
 
 **Step 1: Run clippy**
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 Expected: no warnings
 
 **Step 2: Run full test suite**
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 Expected: all pass
 
 **Step 3: Final commit (if any fixes needed)**

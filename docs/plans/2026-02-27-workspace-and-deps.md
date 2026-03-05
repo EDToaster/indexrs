@@ -4,7 +4,7 @@
 
 **Goal:** Set up cargo workspace with 3 crates and all foundational dependencies.
 
-**Architecture:** Workspace root with indexrs-core (lib), indexrs-cli (bin), indexrs-mcp (bin). Core is the shared library, CLI and MCP are thin binaries that depend on it.
+**Architecture:** Workspace root with ferret-indexer-core (lib), ferret-indexer-cli (bin), ferret-mcp (bin). Core is the shared library, CLI and MCP are thin binaries that depend on it.
 
 **Tech Stack:** Rust 2024 edition, tokio, serde, memmap2, blake3, clap, rmcp
 
@@ -20,9 +20,9 @@ Replace the existing `[package]` manifest with a workspace manifest:
 [workspace]
 resolver = "3"
 members = [
-    "indexrs-core",
-    "indexrs-cli",
-    "indexrs-mcp",
+    "ferret-indexer-core",
+    "ferret-indexer-cli",
+    "ferret-mcp",
 ]
 ```
 
@@ -43,13 +43,13 @@ rmdir src
 
 ---
 
-## Task 3: Create indexrs-core crate with dependencies
+## Task 3: Create ferret-indexer-core crate with dependencies
 
-**File:** `indexrs-core/Cargo.toml`
+**File:** `ferret-indexer-core/Cargo.toml`
 
 ```toml
 [package]
-name = "indexrs-core"
+name = "ferret-indexer-core"
 version = "0.1.0"
 edition = "2024"
 
@@ -69,23 +69,23 @@ thiserror = "2"
 tracing = "0.1"
 ```
 
-**File:** `indexrs-core/src/lib.rs`
+**File:** `ferret-indexer-core/src/lib.rs`
 
 ```rust
-//! indexrs-core: Index engine, storage, and query library for local code search.
+//! ferret-indexer-core: Index engine, storage, and query library for local code search.
 ```
 
-**Verify:** `cargo check -p indexrs-core` compiles without errors.
+**Verify:** `cargo check -p ferret-indexer-core` compiles without errors.
 
 ---
 
-## Task 4: Create indexrs-cli crate with dependencies
+## Task 4: Create ferret-indexer-cli crate with dependencies
 
-**File:** `indexrs-cli/Cargo.toml`
+**File:** `ferret-indexer-cli/Cargo.toml`
 
 ```toml
 [package]
-name = "indexrs-cli"
+name = "ferret-indexer-cli"
 version = "0.1.0"
 edition = "2024"
 
@@ -93,29 +93,29 @@ edition = "2024"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
-indexrs-core = { path = "../indexrs-core" }
+ferret-indexer-core = { path = "../ferret-indexer-core" }
 ```
 
-**File:** `indexrs-cli/src/main.rs`
+**File:** `ferret-indexer-cli/src/main.rs`
 
 ```rust
 #[tokio::main]
 async fn main() {
-    println!("indexrs-cli");
+    println!("ferret-indexer-cli");
 }
 ```
 
-**Verify:** `cargo check -p indexrs-cli` compiles without errors.
+**Verify:** `cargo check -p ferret-indexer-cli` compiles without errors.
 
 ---
 
-## Task 5: Create indexrs-mcp crate with dependencies
+## Task 5: Create ferret-mcp crate with dependencies
 
-**File:** `indexrs-mcp/Cargo.toml`
+**File:** `ferret-mcp/Cargo.toml`
 
 ```toml
 [package]
-name = "indexrs-mcp"
+name = "ferret-mcp"
 version = "0.1.0"
 edition = "2024"
 
@@ -125,19 +125,19 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
-indexrs-core = { path = "../indexrs-core" }
+ferret-indexer-core = { path = "../ferret-indexer-core" }
 ```
 
-**File:** `indexrs-mcp/src/main.rs`
+**File:** `ferret-mcp/src/main.rs`
 
 ```rust
 #[tokio::main]
 async fn main() {
-    println!("indexrs-mcp");
+    println!("ferret-mcp");
 }
 ```
 
-**Verify:** `cargo check -p indexrs-mcp` compiles without errors.
+**Verify:** `cargo check -p ferret-mcp` compiles without errors.
 
 ---
 

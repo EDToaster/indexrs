@@ -51,7 +51,7 @@ Section offsets are computed as:
 
 ### Step 1: TrigramIndexWriter (HHC-30)
 
-File: `indexrs-core/src/index_writer.rs`
+File: `ferret-indexer-core/src/index_writer.rs`
 
 - `TrigramIndexWriter::write(builder, path)` serializes to disk.
 - Collect trigrams from builder, sort by `Trigram::to_u32()`.
@@ -63,7 +63,7 @@ File: `indexrs-core/src/index_writer.rs`
 
 ### Step 2: TrigramIndexReader (HHC-31)
 
-File: `indexrs-core/src/index_reader.rs`
+File: `ferret-indexer-core/src/index_reader.rs`
 
 - `TrigramIndexReader::open(path)` memory-maps the file, validates header.
 - Stores computed section offsets (table_offset, file_postings_offset, pos_postings_offset).
@@ -74,7 +74,7 @@ File: `indexrs-core/src/index_reader.rs`
 
 ### Step 3: Posting List Intersection (HHC-32)
 
-File: `indexrs-core/src/intersection.rs`
+File: `ferret-indexer-core/src/intersection.rs`
 
 - `intersect_file_ids(lists)`: sorted merge intersection.
   - Sort lists by length (smallest first) for efficiency.
@@ -107,5 +107,5 @@ re-exports for the public types.
 
 ## Verification
 
-- `cargo test -p indexrs-core` -- all tests pass (86 existing + new tests)
+- `cargo test -p ferret-indexer-core` -- all tests pass (86 existing + new tests)
 - `cargo check --workspace` -- no errors

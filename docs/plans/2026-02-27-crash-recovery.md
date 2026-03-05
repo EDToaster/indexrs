@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** On startup, scan the `.indexrs/segments/` directory, clean up temp directories left by crashed builds, validate each segment's files and headers, skip corrupted segments with a warning, remove stale lock files, and return the set of valid segments sorted by ID.
+**Goal:** On startup, scan the `.ferret_index/segments/` directory, clean up temp directories left by crashed builds, validate each segment's files and headers, skip corrupted segments with a warning, remove stale lock files, and return the set of valid segments sorted by ID.
 
-**Architecture:** A new `recovery.rs` module in `indexrs-core` containing `recover_segments(base_dir) -> Result<Vec<Segment>>`. It scans the segments directory, deletes any entries matching the temp-dir naming pattern (`.seg_NNNN_tmp_*`), parses segment IDs from `seg_NNNN` directory names, validates that all required files exist and that `trigrams.bin` and `meta.bin` have correct magic numbers and version fields. Invalid segments are logged via `tracing::warn!` and skipped. A separate `cleanup_lock_file(indexrs_dir)` function handles stale `.indexrs/lock` removal. The module re-uses `Segment::open()` for the final load step, which already validates headers internally. A lightweight pre-check for file existence avoids partial mmapping of incomplete segments.
+**Architecture:** A new `recovery.rs` module in `ferret-indexer-core` containing `recover_segments(base_dir) -> Result<Vec<Segment>>`. It scans the segments directory, deletes any entries matching the temp-dir naming pattern (`.seg_NNNN_tmp_*`), parses segment IDs from `seg_NNNN` directory names, validates that all required files exist and that `trigrams.bin` and `meta.bin` have correct magic numbers and version fields. Invalid segments are logged via `tracing::warn!` and skipped. A separate `cleanup_lock_file(ferret_dir)` function handles stale `.ferret_index/lock` removal. The module re-uses `Segment::open()` for the final load step, which already validates headers internally. A lightweight pre-check for file existence avoids partial mmapping of incomplete segments.
 
 **Tech Stack:** Rust 2024, memmap2 (via existing Segment::open), tracing (for warn! logging), tempfile (dev), existing segment/index_writer/metadata modules
 
@@ -13,14 +13,14 @@
 ## Task 1: Make TRIG_MAGIC, TRIG_VERSION, META_MAGIC, META_VERSION accessible for header validation
 
 **Files:**
-- Modify: `indexrs-core/src/index_writer.rs`
-- Modify: `indexrs-core/src/metadata.rs`
+- Modify: `ferret-indexer-core/src/index_writer.rs`
+- Modify: `ferret-indexer-core/src/metadata.rs`
 
 The recovery module needs to read the first 6 bytes of `trigrams.bin` and `meta.bin` to validate magic numbers and versions without fully opening the segment. Currently `META_MAGIC` and `META_VERSION` in `metadata.rs` are private (`const`), while `TRIG_MAGIC` and `TRIG_VERSION` in `index_writer.rs` are `pub(crate)`. We need to make the metadata constants `pub(crate)` too.
 
 ### Step 1: Change metadata.rs constants visibility
 
-In `indexrs-core/src/metadata.rs`, change the two constants from `const` to `pub(crate) const`:
+In `ferret-indexer-core/src/metadata.rs`, change the two constants from `const` to `pub(crate) const`:
 
 ```rust
 /// Magic number for meta.bin header: "META" in ASCII as little-endian u32.
@@ -39,7 +39,7 @@ Expected: No errors or warnings. The change only widens visibility within the cr
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/metadata.rs
+git add ferret-indexer-core/src/metadata.rs
 git commit -m "refactor(metadata): make META_MAGIC and META_VERSION pub(crate) for recovery module"
 ```
 
@@ -48,19 +48,19 @@ git commit -m "refactor(metadata): make META_MAGIC and META_VERSION pub(crate) f
 ## Task 2: Add recovery module skeleton with temp directory cleanup
 
 **Files:**
-- Create: `indexrs-core/src/recovery.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing test
 
-Create `indexrs-core/src/recovery.rs` with the test for temp directory cleanup:
+Create `ferret-indexer-core/src/recovery.rs` with the test for temp directory cleanup:
 
 ```rust
 //! Crash recovery: detect and clean up incomplete segments on startup.
 //!
 //! When the indexer process crashes mid-build, it can leave behind:
 //! - Temp directories from `SegmentWriter` (named `.seg_NNNN_tmp_<pid>`)
-//! - A stale lock file (`.indexrs/lock`)
+//! - A stale lock file (`.ferret_index/lock`)
 //! - Partially-written segment directories with missing or corrupt files
 //!
 //! The [`recover_segments`] function scans the segments directory, cleans up
@@ -88,7 +88,7 @@ use crate::types::SegmentId;
 ///
 /// # Arguments
 ///
-/// * `segments_dir` - Path to the segments directory (e.g. `.indexrs/segments/`).
+/// * `segments_dir` - Path to the segments directory (e.g. `.ferret_index/segments/`).
 ///
 /// # Errors
 ///
@@ -102,16 +102,16 @@ pub fn recover_segments(segments_dir: &Path) -> Result<Vec<Segment>, IndexError>
 ///
 /// In a single-process use case, any lock file present at startup is stale
 /// (the previous process must have crashed without cleaning up). This function
-/// simply deletes `.indexrs/lock` if it exists.
+/// simply deletes `.ferret_index/lock` if it exists.
 ///
 /// # Arguments
 ///
-/// * `indexrs_dir` - Path to the `.indexrs/` directory.
+/// * `ferret_dir` - Path to the `.ferret_index/` directory.
 ///
 /// # Errors
 ///
 /// Returns `IndexError::Io` if the lock file exists but cannot be deleted.
-pub fn cleanup_lock_file(indexrs_dir: &Path) -> Result<(), IndexError> {
+pub fn cleanup_lock_file(ferret_dir: &Path) -> Result<(), IndexError> {
     todo!()
 }
 
@@ -144,7 +144,7 @@ mod tests {
 
 ### Step 2: Register the module in lib.rs
 
-Add to `indexrs-core/src/lib.rs` after the existing module declarations:
+Add to `ferret-indexer-core/src/lib.rs` after the existing module declarations:
 
 ```rust
 pub mod recovery;
@@ -158,7 +158,7 @@ pub use recovery::{cleanup_lock_file, recover_segments};
 
 ### Step 3: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_cleanup_temp_directories -v`
+Run: `cargo test -p ferret-indexer-core -- test_cleanup_temp_directories -v`
 
 Expected: FAIL with `not yet implemented` (from `todo!()`)
 
@@ -332,8 +332,8 @@ fn validate_meta_header(path: &Path) -> Result<(), String> {
 And implement `cleanup_lock_file`:
 
 ```rust
-pub fn cleanup_lock_file(indexrs_dir: &Path) -> Result<(), IndexError> {
-    let lock_path = indexrs_dir.join("lock");
+pub fn cleanup_lock_file(ferret_dir: &Path) -> Result<(), IndexError> {
+    let lock_path = ferret_dir.join("lock");
     if lock_path.exists() {
         tracing::warn!(path = %lock_path.display(), "removing stale lock file");
         fs::remove_file(&lock_path)?;
@@ -344,7 +344,7 @@ pub fn cleanup_lock_file(indexrs_dir: &Path) -> Result<(), IndexError> {
 
 ### Step 5: Run test to verify it passes
 
-Run: `cargo test -p indexrs-core -- test_cleanup_temp_directories -v`
+Run: `cargo test -p ferret-indexer-core -- test_cleanup_temp_directories -v`
 
 Expected: PASS
 
@@ -357,7 +357,7 @@ Expected: No errors or warnings.
 ### Step 7: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/recovery.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(recovery): add recovery module with temp directory cleanup"
 ```
 
@@ -366,7 +366,7 @@ git commit -m "feat(recovery): add recovery module with temp directory cleanup"
 ## Task 3: Add test for recover_segments with valid segments
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the test
 
@@ -413,14 +413,14 @@ fn test_recover_valid_segments() {
 
 ### Step 2: Run the test
 
-Run: `cargo test -p indexrs-core -- test_recover_valid_segments -v`
+Run: `cargo test -p ferret-indexer-core -- test_recover_valid_segments -v`
 
 Expected: PASS (the implementation from Task 2 already handles this case).
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add test for recovering valid segments"
 ```
 
@@ -429,7 +429,7 @@ git commit -m "test(recovery): add test for recovering valid segments"
 ## Task 4: Add test for recover_segments sorted order and non-sequential IDs
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the test
 
@@ -464,14 +464,14 @@ fn test_recover_segments_sorted_by_id() {
 
 ### Step 2: Run the test
 
-Run: `cargo test -p indexrs-core -- test_recover_segments_sorted_by_id -v`
+Run: `cargo test -p ferret-indexer-core -- test_recover_segments_sorted_by_id -v`
 
 Expected: PASS
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add test for segment ID sorting"
 ```
 
@@ -480,7 +480,7 @@ git commit -m "test(recovery): add test for segment ID sorting"
 ## Task 5: Add test for skipping segments with missing files
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the test
 
@@ -522,14 +522,14 @@ fn test_recover_skips_segment_missing_files() {
 
 ### Step 2: Run the test
 
-Run: `cargo test -p indexrs-core -- test_recover_skips_segment_missing_files -v`
+Run: `cargo test -p ferret-indexer-core -- test_recover_skips_segment_missing_files -v`
 
 Expected: PASS
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add test for skipping segments with missing files"
 ```
 
@@ -538,7 +538,7 @@ git commit -m "test(recovery): add test for skipping segments with missing files
 ## Task 6: Add test for skipping segments with corrupted headers
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the test
 
@@ -623,14 +623,14 @@ fn test_recover_skips_segment_bad_meta_magic() {
 
 ### Step 2: Run the tests
 
-Run: `cargo test -p indexrs-core -- test_recover_skips_segment_bad -v`
+Run: `cargo test -p ferret-indexer-core -- test_recover_skips_segment_bad -v`
 
 Expected: PASS
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add tests for skipping segments with corrupted headers"
 ```
 
@@ -639,7 +639,7 @@ git commit -m "test(recovery): add tests for skipping segments with corrupted he
 ## Task 7: Add test for lock file cleanup
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the tests
 
@@ -649,48 +649,48 @@ Add to the `tests` module:
 #[test]
 fn test_cleanup_lock_file_removes_stale_lock() {
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    fs::create_dir_all(&indexrs_dir).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    fs::create_dir_all(&ferret_dir).unwrap();
 
     // Create a stale lock file
-    fs::write(indexrs_dir.join("lock"), b"12345").unwrap();
-    assert!(indexrs_dir.join("lock").exists());
+    fs::write(ferret_dir.join("lock"), b"12345").unwrap();
+    assert!(ferret_dir.join("lock").exists());
 
-    cleanup_lock_file(&indexrs_dir).unwrap();
+    cleanup_lock_file(&ferret_dir).unwrap();
 
-    assert!(!indexrs_dir.join("lock").exists());
+    assert!(!ferret_dir.join("lock").exists());
 }
 
 #[test]
 fn test_cleanup_lock_file_no_lock() {
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    fs::create_dir_all(&indexrs_dir).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    fs::create_dir_all(&ferret_dir).unwrap();
 
     // No lock file exists — should succeed without error
-    cleanup_lock_file(&indexrs_dir).unwrap();
+    cleanup_lock_file(&ferret_dir).unwrap();
 }
 
 #[test]
 fn test_cleanup_lock_file_dir_not_exist() {
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
+    let ferret_dir = dir.path().join(".ferret_index");
     // Directory doesn't exist — lock file can't exist, should succeed
 
-    cleanup_lock_file(&indexrs_dir).unwrap();
+    cleanup_lock_file(&ferret_dir).unwrap();
 }
 ```
 
 ### Step 2: Run the tests
 
-Run: `cargo test -p indexrs-core -- test_cleanup_lock_file -v`
+Run: `cargo test -p ferret-indexer-core -- test_cleanup_lock_file -v`
 
 Expected: PASS
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add lock file cleanup tests"
 ```
 
@@ -699,7 +699,7 @@ git commit -m "test(recovery): add lock file cleanup tests"
 ## Task 8: Add test for nonexistent segments directory
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the test
 
@@ -719,14 +719,14 @@ fn test_recover_nonexistent_dir() {
 
 ### Step 2: Run the test
 
-Run: `cargo test -p indexrs-core -- test_recover_nonexistent_dir -v`
+Run: `cargo test -p ferret-indexer-core -- test_recover_nonexistent_dir -v`
 
 Expected: PASS
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add test for nonexistent segments directory"
 ```
 
@@ -735,7 +735,7 @@ git commit -m "test(recovery): add test for nonexistent segments directory"
 ## Task 9: Add test for mixed temp dirs, valid segments, and invalid segments
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the integration-style test
 
@@ -800,14 +800,14 @@ fn test_recover_mixed_state() {
 
 ### Step 2: Run the test
 
-Run: `cargo test -p indexrs-core -- test_recover_mixed_state -v`
+Run: `cargo test -p ferret-indexer-core -- test_recover_mixed_state -v`
 
 Expected: PASS
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add integration test for mixed startup state"
 ```
 
@@ -816,7 +816,7 @@ git commit -m "test(recovery): add integration test for mixed startup state"
 ## Task 10: Add test for parse_segment_id edge cases
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the tests
 
@@ -848,14 +848,14 @@ fn test_parse_segment_id_invalid() {
 
 ### Step 2: Run the tests
 
-Run: `cargo test -p indexrs-core -- test_parse_segment_id -v`
+Run: `cargo test -p ferret-indexer-core -- test_parse_segment_id -v`
 
 Expected: PASS
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add parse_segment_id edge case tests"
 ```
 
@@ -864,7 +864,7 @@ git commit -m "test(recovery): add parse_segment_id edge case tests"
 ## Task 11: Add test for empty segments directory
 
 **Files:**
-- Modify: `indexrs-core/src/recovery.rs`
+- Modify: `ferret-indexer-core/src/recovery.rs`
 
 ### Step 1: Write the test
 
@@ -884,14 +884,14 @@ fn test_recover_empty_segments_dir() {
 
 ### Step 2: Run the test
 
-Run: `cargo test -p indexrs-core -- test_recover_empty_segments_dir -v`
+Run: `cargo test -p ferret-indexer-core -- test_recover_empty_segments_dir -v`
 
 Expected: PASS
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/recovery.rs
+git add ferret-indexer-core/src/recovery.rs
 git commit -m "test(recovery): add test for empty segments directory"
 ```
 
@@ -913,11 +913,11 @@ Expected: No warnings, formatting OK.
 
 ### Step 3: Verify the module structure
 
-At this point, `indexrs-core/src/recovery.rs` should contain:
+At this point, `ferret-indexer-core/src/recovery.rs` should contain:
 
 **Public functions:**
 - `recover_segments(segments_dir: &Path) -> Result<Vec<Segment>, IndexError>` -- scans segments dir, cleans temp dirs, validates and loads segments, returns sorted by ID
-- `cleanup_lock_file(indexrs_dir: &Path) -> Result<(), IndexError>` -- removes stale `.indexrs/lock`
+- `cleanup_lock_file(ferret_dir: &Path) -> Result<(), IndexError>` -- removes stale `.ferret_index/lock`
 
 **Private helpers:**
 - `parse_segment_id(name: &str) -> Option<SegmentId>` -- parses `seg_NNNN` -> `SegmentId`
@@ -960,7 +960,7 @@ A valid segment directory must contain:
 ## Reference: On-Disk Layout
 
 ```
-.indexrs/
+.ferret_index/
   lock                    # PID lock file (stale if process crashed)
   segments/
     seg_0000/             # Valid segment

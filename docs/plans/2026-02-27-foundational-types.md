@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Define all foundational types and error types for the indexrs-core crate.
+**Goal:** Define all foundational types and error types for the ferret-indexer-core crate.
 
 **Architecture:** Types split across 3 modules: types.rs (identifiers, enums), search.rs (result structs), error.rs (thiserror error type). All re-exported from lib.rs.
 
@@ -10,13 +10,13 @@
 
 ---
 
-## Task 1: Create indexrs-core crate structure
+## Task 1: Create ferret-indexer-core crate structure
 
-**File:** `indexrs-core/Cargo.toml`
+**File:** `ferret-indexer-core/Cargo.toml`
 
 ```toml
 [package]
-name = "indexrs-core"
+name = "ferret-indexer-core"
 version = "0.1.0"
 edition = "2024"
 
@@ -29,11 +29,11 @@ serde = { version = "1", features = ["derive"] }
 
 ```toml
 [workspace]
-members = ["indexrs-core"]
+members = ["ferret-indexer-core"]
 resolver = "3"
 ```
 
-**File:** `indexrs-core/src/lib.rs`
+**File:** `ferret-indexer-core/src/lib.rs`
 
 ```rust
 pub mod error;
@@ -41,13 +41,13 @@ pub mod search;
 pub mod types;
 ```
 
-**Test:** `cargo check -p indexrs-core` — should fail (missing modules), confirming the crate is recognized.
+**Test:** `cargo check -p ferret-indexer-core` — should fail (missing modules), confirming the crate is recognized.
 
 ---
 
 ## Task 2: Implement types.rs — Core identifier types and enums
 
-**File:** `indexrs-core/src/types.rs`
+**File:** `ferret-indexer-core/src/types.rs`
 
 Define:
 - `FileId(u32)` — newtype, derives: Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize. Display impl shows inner value.
@@ -64,13 +64,13 @@ Define:
 - `test_language_from_extension` — .rs -> Rust, .py -> Python, .unknown -> Unknown
 - `test_symbol_kind_display` — each variant renders its name
 
-**Test:** `cargo test -p indexrs-core -- types` — all pass.
+**Test:** `cargo test -p ferret-indexer-core -- types` — all pass.
 
 ---
 
 ## Task 3: Implement error.rs — Central error type
 
-**File:** `indexrs-core/src/error.rs`
+**File:** `ferret-indexer-core/src/error.rs`
 
 Define `IndexError` enum with `#[derive(Debug, thiserror::Error)]`:
 - `#[error("I/O error: {0}")] Io(#[from] std::io::Error)` — auto-converts from io::Error
@@ -85,13 +85,13 @@ Also define: `pub type Result<T> = std::result::Result<T, IndexError>;`
 - `test_io_error_from` — std::io::Error converts via From
 - `test_error_display` — each variant has expected message
 
-**Test:** `cargo test -p indexrs-core -- error` — all pass.
+**Test:** `cargo test -p ferret-indexer-core -- error` — all pass.
 
 ---
 
 ## Task 4: Implement search.rs — Search result types
 
-**File:** `indexrs-core/src/search.rs`
+**File:** `ferret-indexer-core/src/search.rs`
 
 Define:
 - `LineMatch` — line_number: u32, content: String, ranges: Vec<(usize, usize)>. Derives: Debug, Clone, PartialEq, Serialize, Deserialize.
@@ -102,15 +102,15 @@ Define:
 - `test_search_result_display` — formatted output matches expected string
 - `test_line_match_ranges` — highlight ranges are stored correctly
 
-**Test:** `cargo test -p indexrs-core -- search` — all pass.
+**Test:** `cargo test -p ferret-indexer-core -- search` — all pass.
 
 ---
 
 ## Task 5: Wire up lib.rs re-exports
 
-**File:** `indexrs-core/src/lib.rs` (update)
+**File:** `ferret-indexer-core/src/lib.rs` (update)
 
-Add `pub use` for all public types so users can `use indexrs_core::FileId` etc.
+Add `pub use` for all public types so users can `use ferret_indexer_core::FileId` etc.
 
 ```rust
 pub mod error;
@@ -122,13 +122,13 @@ pub use search::{FileMatch, LineMatch, SearchResult};
 pub use types::{FileId, Language, SegmentId, SymbolKind, Trigram};
 ```
 
-**Test:** `cargo check -p indexrs-core` and `cargo test -p indexrs-core` — all pass, no warnings.
+**Test:** `cargo check -p ferret-indexer-core` and `cargo test -p ferret-indexer-core` — all pass, no warnings.
 
 ---
 
 ## Task 6: Final verification and commit
 
-- `cargo check -p indexrs-core` passes
-- `cargo test -p indexrs-core` passes — all tests green
-- `cargo doc -p indexrs-core --no-deps` builds without warnings
+- `cargo check -p ferret-indexer-core` passes
+- `cargo test -p ferret-indexer-core` passes — all tests green
+- `cargo doc -p ferret-indexer-core --no-deps` builds without warnings
 - Commit all changes with message describing the foundational types

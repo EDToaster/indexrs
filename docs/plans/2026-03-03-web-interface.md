@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build the axum web server and htmx frontend for indexrs that proxies all operations to per-repo daemons over Unix sockets.
+**Goal:** Build the axum web server and htmx frontend for ferret that proxies all operations to per-repo daemons over Unix sockets.
 
-**Architecture:** New `indexrs-web` library crate containing an axum server. The web server is a stateless proxy — it reads `repos.toml`, connects to per-repo daemons over Unix sockets, and either returns JSON (API) or renders HTML fragments (htmx UI). Static assets are embedded via `rust-embed`. Templates use `askama`.
+**Architecture:** New `ferret-indexer-web` library crate containing an axum server. The web server is a stateless proxy — it reads `repos.toml`, connects to per-repo daemons over Unix sockets, and either returns JSON (API) or renders HTML fragments (htmx UI). Static assets are embedded via `rust-embed`. Templates use `askama`.
 
 **Tech Stack:** axum 0.8, tower-http 0.6, askama 0.13, rust-embed 8, htmx 2.0, tokio 1
 
@@ -16,12 +16,12 @@
 
 | Agent | Worktree Branch | Focus | Key Files Created |
 |-------|----------------|-------|-------------------|
-| **Lead** | `main` | Foundation (Task 0), merging, integration (Task 4) | `indexrs-web/Cargo.toml`, `src/lib.rs` |
+| **Lead** | `main` | Foundation (Task 0), merging, integration (Task 4) | `ferret-indexer-web/Cargo.toml`, `src/lib.rs` |
 | **Agent A** | `feat/web-api` | JSON API endpoints + daemon proxy + error types | `src/api.rs`, `src/proxy.rs`, `src/error.rs` |
 | **Agent B** | `feat/web-frontend` | Static files + askama templates + UI routes + static serving | `static/*`, `templates/*`, `src/ui.rs`, `src/static_files.rs` |
-| **Agent C** | `feat/web-streaming-cli` | SSE endpoints + CLI `web` subcommand | `src/sse.rs`, `indexrs-cli/src/web.rs` |
+| **Agent C** | `feat/web-streaming-cli` | SSE endpoints + CLI `web` subcommand | `src/sse.rs`, `ferret-indexer-cli/src/web.rs` |
 
-All `src/` paths above are relative to `indexrs-web/`.
+All `src/` paths above are relative to `ferret-indexer-web/`.
 
 **Execution order:**
 1. Lead does **Task 0** (foundation), merges to `main`
@@ -31,25 +31,25 @@ All `src/` paths above are relative to `indexrs-web/`.
 
 **Playwright testing:** Each agent compiles and runs the server in their worktree. They use Playwright MCP tools (`browser_navigate`, `browser_snapshot`, `browser_evaluate`) to verify behavior. Agent A tests API responses via `fetch()`. Agent B tests UI rendering and interaction. Agent C tests SSE event delivery.
 
-**Testing prerequisite:** Before Playwright tests, each agent must have a repo with an index. Use `cargo run -p indexrs-cli -- init` in the worktree root (the indexrs repo itself is a good test target since it has Rust files). Agents must also register the repo: `cargo run -p indexrs-cli -- repos add . --name test-repo`.
+**Testing prerequisite:** Before Playwright tests, each agent must have a repo with an index. Use `cargo run -p ferret-indexer-cli -- init` in the worktree root (the ferret repo itself is a good test target since it has Rust files). Agents must also register the repo: `cargo run -p ferret-indexer-cli -- repos add . --name test-repo`.
 
 ---
 
 ## Task 0: Foundation — Crate Skeleton + Health Endpoint (Lead)
 
-**Goal:** Create `indexrs-web` crate with minimal router and health endpoint. Prove compilation and server startup work.
+**Goal:** Create `ferret-indexer-web` crate with minimal router and health endpoint. Prove compilation and server startup work.
 
 ### Files
 
-- Create: `indexrs-web/Cargo.toml`
-- Create: `indexrs-web/src/lib.rs`
+- Create: `ferret-indexer-web/Cargo.toml`
+- Create: `ferret-indexer-web/src/lib.rs`
 - Modify: `Cargo.toml` (root workspace)
 
-### Step 1: Create `indexrs-web/Cargo.toml`
+### Step 1: Create `ferret-indexer-web/Cargo.toml`
 
 ```toml
 [package]
-name = "indexrs-web"
+name = "ferret-indexer-web"
 version = "0.1.0"
 edition = "2024"
 
@@ -63,8 +63,8 @@ mime_guess = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "signal"] }
-indexrs-core = { path = "../indexrs-core" }
-indexrs-daemon = { path = "../indexrs-daemon" }
+ferret-indexer-core = { path = "../ferret-indexer-core" }
+ferret-indexer-daemon = { path = "../ferret-indexer-daemon" }
 tracing = "0.1"
 ```
 
@@ -73,7 +73,7 @@ tracing = "0.1"
 - `tower-http` must be compatible with `axum`
 - If `askama_axum` doesn't exist as a separate crate in the current ecosystem, use `askama` with `features = ["with-axum"]` instead
 
-### Step 2: Create `indexrs-web/src/lib.rs`
+### Step 2: Create `ferret-indexer-web/src/lib.rs`
 
 ```rust
 use std::collections::HashMap;
@@ -99,7 +99,7 @@ pub struct AppState {
 struct AppStateInner {
     /// Map of repo name → absolute path to repo root.
     repos: RwLock<HashMap<String, PathBuf>>,
-    /// Path to the indexrs binary (for ensure_daemon).
+    /// Path to the ferret binary (for ensure_daemon).
     daemon_bin: PathBuf,
     /// Server start time (for uptime calculation).
     start_time: Instant,
@@ -177,7 +177,7 @@ pub async fn start_server(
     // Ensure daemons are running for all registered repos.
     let repos_snapshot = state.repos().await;
     for (name, path) in &repos_snapshot {
-        match indexrs_daemon::ensure_daemon(state.daemon_bin(), path).await {
+        match ferret_indexer_daemon::ensure_daemon(state.daemon_bin(), path).await {
             Ok(_stream) => tracing::info!("daemon ready for repo '{name}'"),
             Err(e) => tracing::warn!("failed to start daemon for repo '{name}': {e}"),
         }
@@ -186,7 +186,7 @@ pub async fn start_server(
     let app = build_router(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
-    eprintln!("indexrs web interface: http://localhost:{port}");
+    eprintln!("ferret web interface: http://localhost:{port}");
     if !repos_snapshot.is_empty() {
         let names: Vec<&str> = repos_snapshot.keys().map(|s| s.as_str()).collect();
         eprintln!("  repos: {} ({} repos)", names.join(", "), names.len());
@@ -212,22 +212,22 @@ async fn shutdown_signal() {
 
 ### Step 3: Add to workspace
 
-In root `Cargo.toml`, add `"indexrs-web"` to the members list:
+In root `Cargo.toml`, add `"ferret-indexer-web"` to the members list:
 
 ```toml
 [workspace]
 resolver = "3"
 members = [
-    "indexrs-core",
-    "indexrs-cli",
-    "indexrs-daemon",
-    "indexrs-web",
+    "ferret-indexer-core",
+    "ferret-indexer-cli",
+    "ferret-indexer-daemon",
+    "ferret-indexer-web",
 ]
 ```
 
 ### Step 4: Verify compilation
 
-Run: `cargo check -p indexrs-web`
+Run: `cargo check -p ferret-indexer-web`
 Expected: compiles clean (may need to adjust dependency versions if any don't resolve)
 
 ### Step 5: Verify clippy + fmt
@@ -238,8 +238,8 @@ Expected: PASS
 ### Step 6: Commit
 
 ```bash
-git add indexrs-web/ Cargo.toml
-git commit -m "feat(web): create indexrs-web crate with health endpoint"
+git add ferret-indexer-web/ Cargo.toml
+git commit -m "feat(web): create ferret-indexer-web crate with health endpoint"
 ```
 
 ---
@@ -250,12 +250,12 @@ git commit -m "feat(web): create indexrs-web crate with health endpoint"
 
 ### Files
 
-- Create: `indexrs-web/src/error.rs`
-- Create: `indexrs-web/src/proxy.rs`
-- Create: `indexrs-web/src/api.rs`
-- Modify: `indexrs-web/src/lib.rs` (add modules + routes)
+- Create: `ferret-indexer-web/src/error.rs`
+- Create: `ferret-indexer-web/src/proxy.rs`
+- Create: `ferret-indexer-web/src/api.rs`
+- Modify: `ferret-indexer-web/src/lib.rs` (add modules + routes)
 
-### Step 1: Create `indexrs-web/src/error.rs`
+### Step 1: Create `ferret-indexer-web/src/error.rs`
 
 This module defines a unified API error type that serializes to the JSON error format from the design doc.
 
@@ -317,15 +317,15 @@ impl ApiError {
 }
 ```
 
-### Step 2: Create `indexrs-web/src/proxy.rs`
+### Step 2: Create `ferret-indexer-web/src/proxy.rs`
 
 Helper functions that open a connection to a repo's daemon and send typed requests. Each function returns a deserialized response or `ApiError`.
 
 ```rust
 use std::path::Path;
 
-use indexrs_daemon::types::DaemonRequest;
-use indexrs_daemon::{
+use ferret_indexer_daemon::types::DaemonRequest;
+use ferret_indexer_daemon::{
     FileResponse, HealthResponse, JsonSearchFrame, SearchStats, StatusResponse,
     send_json_request, ensure_daemon,
 };
@@ -343,7 +343,7 @@ pub async fn search(
     context_lines: usize,
     language: Option<String>,
     path_glob: Option<String>,
-) -> Result<(Vec<indexrs_core::search::FileMatch>, SearchStats), ApiError> {
+) -> Result<(Vec<ferret_indexer_core::search::FileMatch>, SearchStats), ApiError> {
     let request = DaemonRequest::JsonSearch {
         query: query.to_string(),
         page,
@@ -462,7 +462,7 @@ pub async fn daemon_health(
 }
 ```
 
-### Step 3: Create `indexrs-web/src/api.rs`
+### Step 3: Create `ferret-indexer-web/src/api.rs`
 
 All JSON API handlers. Each handler extracts parameters, calls proxy functions, and returns JSON.
 
@@ -472,7 +472,7 @@ use axum::http::StatusCode;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
 
-use indexrs_core::registry;
+use ferret_indexer_core::registry;
 
 use crate::error::ApiError;
 use crate::proxy;
@@ -503,7 +503,7 @@ fn default_context() -> usize { 2 }
 pub struct SearchResponse {
     stats: StatsBlock,
     #[serde(skip_serializing_if = "Option::is_none")]
-    results: Option<Vec<indexrs_core::search::FileMatch>>,
+    results: Option<Vec<ferret_indexer_core::search::FileMatch>>,
     pagination: PaginationBlock,
 }
 
@@ -576,7 +576,7 @@ pub async fn get_file(
     State(state): State<AppState>,
     Path((name, file_path)): Path<(String, String)>,
     Query(params): Query<FileParams>,
-) -> Result<Json<indexrs_daemon::FileResponse>, ApiError> {
+) -> Result<Json<ferret_indexer_daemon::FileResponse>, ApiError> {
     let repo_root = state.repo_path(&name).await
         .ok_or_else(|| ApiError::repo_not_found(&name))?;
 
@@ -596,7 +596,7 @@ pub async fn get_file(
 pub async fn index_status(
     State(state): State<AppState>,
     Path(name): Path<String>,
-) -> Result<Json<indexrs_daemon::StatusResponse>, ApiError> {
+) -> Result<Json<ferret_indexer_daemon::StatusResponse>, ApiError> {
     let repo_root = state.repo_path(&name).await
         .ok_or_else(|| ApiError::repo_not_found(&name))?;
 
@@ -620,13 +620,13 @@ pub async fn refresh_index(
         .ok_or_else(|| ApiError::repo_not_found(&name))?;
 
     // Send reindex request to daemon (fire-and-forget — the daemon handles it async).
-    let request = indexrs_daemon::types::DaemonRequest::Reindex;
-    let stream = indexrs_daemon::ensure_daemon(state.daemon_bin(), &repo_root)
+    let request = ferret_indexer_daemon::types::DaemonRequest::Reindex;
+    let stream = ferret_indexer_daemon::ensure_daemon(state.daemon_bin(), &repo_root)
         .await
         .map_err(|e| ApiError::service_unavailable(format!("daemon unavailable: {e}")))?;
 
     // We don't wait for reindex to complete — just confirm it was accepted.
-    let _ = indexrs_daemon::send_json_request(stream, &request).await;
+    let _ = ferret_indexer_daemon::send_json_request(stream, &request).await;
 
     Ok((StatusCode::ACCEPTED, Json(RefreshResponse {
         message: "Reindex started",
@@ -685,10 +685,10 @@ pub async fn add_repo(
     let canonical = path.canonicalize()
         .map_err(|_| ApiError::bad_request("invalid_path", format!("Path '{}' does not exist", body.path)))?;
 
-    if !canonical.join(".indexrs").exists() {
+    if !canonical.join(".ferret_index").exists() {
         return Err(ApiError::bad_request(
             "not_initialized",
-            format!("No index found at '{}'. Run 'indexrs init' first.", canonical.display()),
+            format!("No index found at '{}'. Run 'ferret init' first.", canonical.display()),
         ));
     }
 
@@ -709,7 +709,7 @@ pub async fn add_repo(
 
     // Update in-memory state and start daemon.
     state.add_repo(name.clone(), canonical.clone()).await;
-    let _ = indexrs_daemon::ensure_daemon(state.daemon_bin(), &canonical).await;
+    let _ = ferret_indexer_daemon::ensure_daemon(state.daemon_bin(), &canonical).await;
 
     Ok((StatusCode::CREATED, Json(RepoInfo {
         name,
@@ -783,16 +783,16 @@ Expected: PASS
 Start the server (requires indexed repo):
 
 ```bash
-# In the worktree root (which is the indexrs repo itself):
-cargo run -p indexrs-cli -- init
-cargo run -p indexrs-cli -- repos add . --name test-repo
+# In the worktree root (which is the ferret repo itself):
+cargo run -p ferret-indexer-cli -- init
+cargo run -p ferret-indexer-cli -- repos add . --name test-repo
 # Start web server (you'll need a small binary or test harness — see note below)
 ```
 
-**Note:** Since there's no CLI `web` subcommand yet (that's Task 3), Agent A should create a small test binary or use a test function that calls `indexrs_web::start_server()` directly. Alternatively, write a `#[tokio::test]` that boots the server on a random port and uses `reqwest` or `axum::test` to hit endpoints:
+**Note:** Since there's no CLI `web` subcommand yet (that's Task 3), Agent A should create a small test binary or use a test function that calls `ferret_indexer_web::start_server()` directly. Alternatively, write a `#[tokio::test]` that boots the server on a random port and uses `reqwest` or `axum::test` to hit endpoints:
 
 ```rust
-// In indexrs-web/src/lib.rs or a tests/ file
+// In ferret-indexer-web/src/lib.rs or a tests/ file
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -820,7 +820,7 @@ For Playwright testing, use `browser_navigate` to `http://localhost:4040/api/v1/
 ### Step 7: Commit
 
 ```bash
-git add indexrs-web/src/error.rs indexrs-web/src/proxy.rs indexrs-web/src/api.rs indexrs-web/src/lib.rs
+git add ferret-indexer-web/src/error.rs ferret-indexer-web/src/proxy.rs ferret-indexer-web/src/api.rs ferret-indexer-web/src/lib.rs
 git commit -m "feat(web): add JSON API endpoints with daemon proxy"
 ```
 
@@ -832,28 +832,28 @@ git commit -m "feat(web): add JSON API endpoints with daemon proxy"
 
 ### Files
 
-- Create: `indexrs-web/static/htmx.min.js` (vendored from https://unpkg.com/htmx.org)
-- Create: `indexrs-web/static/style.css`
-- Create: `indexrs-web/static/app.js`
-- Create: `indexrs-web/templates/index.html`
-- Create: `indexrs-web/templates/search_results.html`
-- Create: `indexrs-web/templates/file_preview.html`
-- Create: `indexrs-web/src/static_files.rs`
-- Create: `indexrs-web/src/ui.rs`
-- Modify: `indexrs-web/src/lib.rs` (add modules + routes)
+- Create: `ferret-indexer-web/static/htmx.min.js` (vendored from https://unpkg.com/htmx.org)
+- Create: `ferret-indexer-web/static/style.css`
+- Create: `ferret-indexer-web/static/app.js`
+- Create: `ferret-indexer-web/templates/index.html`
+- Create: `ferret-indexer-web/templates/search_results.html`
+- Create: `ferret-indexer-web/templates/file_preview.html`
+- Create: `ferret-indexer-web/src/static_files.rs`
+- Create: `ferret-indexer-web/src/ui.rs`
+- Modify: `ferret-indexer-web/src/lib.rs` (add modules + routes)
 
 ### Step 1: Vendor htmx
 
-Download htmx.min.js (version 2.0.x) and save to `indexrs-web/static/htmx.min.js`. This can be downloaded from `https://unpkg.com/htmx.org@2/dist/htmx.min.js`.
+Download htmx.min.js (version 2.0.x) and save to `ferret-indexer-web/static/htmx.min.js`. This can be downloaded from `https://unpkg.com/htmx.org@2/dist/htmx.min.js`.
 
 If download isn't possible, create a placeholder that will be replaced. The file must exist for rust-embed to include it.
 
-### Step 2: Create `indexrs-web/static/style.css`
+### Step 2: Create `ferret-indexer-web/static/style.css`
 
 Follow the design doc's CSS custom properties for light/dark mode. Key layout: header bar, search bar, results list, file preview. Use system fonts, minimal design. Target ~200 lines.
 
 ```css
-/* indexrs web interface styles */
+/* ferret web interface styles */
 *,
 *::before,
 *::after {
@@ -1165,12 +1165,12 @@ mark {
 }
 ```
 
-### Step 3: Create `indexrs-web/static/app.js`
+### Step 3: Create `ferret-indexer-web/static/app.js`
 
 Keyboard shortcuts and minor interactions. ~100 lines.
 
 ```javascript
-// indexrs keyboard shortcuts and interactions
+// ferret keyboard shortcuts and interactions
 (function() {
   'use strict';
 
@@ -1292,7 +1292,7 @@ Keyboard shortcuts and minor interactions. ~100 lines.
 
 ### Step 4: Create askama templates
 
-**`indexrs-web/templates/index.html`** — Main page shell. htmx loads search results as fragments.
+**`ferret-indexer-web/templates/index.html`** — Main page shell. htmx loads search results as fragments.
 
 ```html
 <!DOCTYPE html>
@@ -1300,12 +1300,12 @@ Keyboard shortcuts and minor interactions. ~100 lines.
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>indexrs</title>
+  <title>ferret</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="header">
-    <span class="header__title">indexrs</span>
+    <span class="header__title">ferret</span>
     <div class="header__controls">
       <select class="repo-select" id="repo-select"
               hx-get="/search-results"
@@ -1363,7 +1363,7 @@ Keyboard shortcuts and minor interactions. ~100 lines.
 </html>
 ```
 
-**`indexrs-web/templates/search_results.html`** — HTML fragment returned for htmx search requests.
+**`ferret-indexer-web/templates/search_results.html`** — HTML fragment returned for htmx search requests.
 
 ```html
 {% if !files.is_empty() %}
@@ -1444,7 +1444,7 @@ Keyboard shortcuts and minor interactions. ~100 lines.
 {% endif %}
 ```
 
-**`indexrs-web/templates/file_preview.html`** — Full file preview page.
+**`ferret-indexer-web/templates/file_preview.html`** — Full file preview page.
 
 ```html
 <!DOCTYPE html>
@@ -1452,12 +1452,12 @@ Keyboard shortcuts and minor interactions. ~100 lines.
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ path }} - indexrs</title>
+  <title>{{ path }} - ferret</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="header">
-    <span class="header__title">indexrs</span>
+    <span class="header__title">ferret</span>
   </div>
 
   <div class="back-link">
@@ -1485,7 +1485,7 @@ Keyboard shortcuts and minor interactions. ~100 lines.
 </html>
 ```
 
-### Step 5: Create `indexrs-web/src/static_files.rs`
+### Step 5: Create `ferret-indexer-web/src/static_files.rs`
 
 ```rust
 use axum::http::{header, StatusCode};
@@ -1515,7 +1515,7 @@ pub async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
 }
 ```
 
-### Step 6: Create `indexrs-web/src/ui.rs`
+### Step 6: Create `ferret-indexer-web/src/ui.rs`
 
 Handlers for the web UI pages. These proxy to the daemon and render HTML via askama.
 
@@ -1580,7 +1580,7 @@ fn default_page() -> usize { 1 }
 #[derive(Template)]
 #[template(path = "search_results.html")]
 struct SearchResultsTemplate {
-    files: Vec<indexrs_core::search::FileMatch>,
+    files: Vec<ferret_indexer_core::search::FileMatch>,
     repo: String,
     query: String,
     total_matches: usize,
@@ -1734,7 +1734,7 @@ Start the server, then use Playwright MCP tools:
 ### Step 10: Commit
 
 ```bash
-git add indexrs-web/static/ indexrs-web/templates/ indexrs-web/src/static_files.rs indexrs-web/src/ui.rs indexrs-web/src/lib.rs
+git add ferret-indexer-web/static/ ferret-indexer-web/templates/ ferret-indexer-web/src/static_files.rs ferret-indexer-web/src/ui.rs ferret-indexer-web/src/lib.rs
 git commit -m "feat(web): add frontend assets, templates, and UI routes"
 ```
 
@@ -1742,18 +1742,18 @@ git commit -m "feat(web): add frontend assets, templates, and UI routes"
 
 ## Task 3: SSE Streaming + CLI Web Subcommand (Agent C)
 
-**Goal:** Add SSE streaming endpoints for live search and status updates, plus the `indexrs web` CLI subcommand.
+**Goal:** Add SSE streaming endpoints for live search and status updates, plus the `ferret web` CLI subcommand.
 
 ### Files
 
-- Create: `indexrs-web/src/sse.rs`
-- Modify: `indexrs-web/src/lib.rs` (add module + routes)
-- Create: `indexrs-cli/src/web.rs`
-- Modify: `indexrs-cli/src/args.rs` (add Web subcommand)
-- Modify: `indexrs-cli/src/main.rs` (dispatch Web command)
-- Modify: `indexrs-cli/Cargo.toml` (add indexrs-web dependency)
+- Create: `ferret-indexer-web/src/sse.rs`
+- Modify: `ferret-indexer-web/src/lib.rs` (add module + routes)
+- Create: `ferret-indexer-cli/src/web.rs`
+- Modify: `ferret-indexer-cli/src/args.rs` (add Web subcommand)
+- Modify: `ferret-indexer-cli/src/main.rs` (dispatch Web command)
+- Modify: `ferret-indexer-cli/Cargo.toml` (add ferret-indexer-web dependency)
 
-### Step 1: Create `indexrs-web/src/sse.rs`
+### Step 1: Create `ferret-indexer-web/src/sse.rs`
 
 SSE endpoints for streaming search results and status updates.
 
@@ -1767,8 +1767,8 @@ use futures::stream::Stream;
 use serde::Deserialize;
 use tokio_stream::StreamExt;
 
-use indexrs_daemon::types::DaemonRequest;
-use indexrs_daemon::{JsonSearchFrame, ensure_daemon};
+use ferret_indexer_daemon::types::DaemonRequest;
+use ferret_indexer_daemon::{JsonSearchFrame, ensure_daemon};
 use crate::error::ApiError;
 use crate::AppState;
 
@@ -1833,8 +1833,8 @@ pub async fn search_stream(
     // Create an async stream that reads TLV frames and yields SSE events.
     let event_stream = async_stream::stream! {
         loop {
-            match indexrs_daemon::wire::read_response(&mut reader).await {
-                Ok(indexrs_daemon::types::DaemonResponse::Json { payload }) => {
+            match ferret_indexer_daemon::wire::read_response(&mut reader).await {
+                Ok(ferret_indexer_daemon::types::DaemonResponse::Json { payload }) => {
                     match serde_json::from_str::<JsonSearchFrame>(&payload) {
                         Ok(JsonSearchFrame::Result { .. }) => {
                             yield Ok(Event::default().event("result").data(payload));
@@ -1847,11 +1847,11 @@ pub async fn search_stream(
                         }
                     }
                 }
-                Ok(indexrs_daemon::types::DaemonResponse::Done { .. }) => {
+                Ok(ferret_indexer_daemon::types::DaemonResponse::Done { .. }) => {
                     yield Ok(Event::default().event("done").data("{}"));
                     break;
                 }
-                Ok(indexrs_daemon::types::DaemonResponse::Error { message }) => {
+                Ok(ferret_indexer_daemon::types::DaemonResponse::Error { message }) => {
                     yield Ok(Event::default().event("error").data(message));
                     break;
                 }
@@ -1888,7 +1888,7 @@ pub async fn status_stream(
             let request = DaemonRequest::Status;
             match ensure_daemon(&daemon_bin, &repo_root).await {
                 Ok(stream) => {
-                    match indexrs_daemon::send_json_request(stream, &request).await {
+                    match ferret_indexer_daemon::send_json_request(stream, &request).await {
                         Ok(result) => {
                             if let Some(payload) = result.payloads.first() {
                                 yield Ok(Event::default().event("status").data(payload.clone()));
@@ -1918,7 +1918,7 @@ pub async fn status_stream(
 }
 ```
 
-**Note on dependencies:** This module requires `async-stream` and `tokio-stream` crates. Add to `indexrs-web/Cargo.toml`:
+**Note on dependencies:** This module requires `async-stream` and `tokio-stream` crates. Add to `ferret-indexer-web/Cargo.toml`:
 
 ```toml
 async-stream = "0.3"
@@ -1941,15 +1941,15 @@ Add routes in `build_router()`:
 .route("/repos/{name}/status/stream", get(sse::status_stream))
 ```
 
-### Step 3: Add indexrs-web dependency to CLI
+### Step 3: Add ferret-indexer-web dependency to CLI
 
-In `indexrs-cli/Cargo.toml`, add:
+In `ferret-indexer-cli/Cargo.toml`, add:
 
 ```toml
-indexrs-web = { path = "../indexrs-web" }
+ferret-indexer-web = { path = "../ferret-indexer-web" }
 ```
 
-### Step 4: Create `indexrs-cli/src/web.rs`
+### Step 4: Create `ferret-indexer-cli/src/web.rs`
 
 The `web` subcommand handler. Reads repos.toml, builds the repo map, and starts the server.
 
@@ -1957,8 +1957,8 @@ The `web` subcommand handler. Reads repos.toml, builds the repo map, and starts 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use indexrs_core::error::IndexError;
-use indexrs_core::registry;
+use ferret_indexer_core::error::IndexError;
+use ferret_indexer_core::registry;
 
 /// Run the web server with all registered repos.
 pub async fn run_web(port: u16) -> Result<(), IndexError> {
@@ -1971,12 +1971,12 @@ pub async fn run_web(port: u16) -> Result<(), IndexError> {
     }
 
     if repos.is_empty() {
-        eprintln!("warning: no repos registered. Use 'indexrs repos add <path>' to add one.");
+        eprintln!("warning: no repos registered. Use 'ferret repos add <path>' to add one.");
     }
 
     let daemon_bin = std::env::current_exe().map_err(IndexError::Io)?;
 
-    indexrs_web::start_server(repos, daemon_bin, port)
+    ferret_indexer_web::start_server(repos, daemon_bin, port)
         .await
         .map_err(|e| IndexError::Io(std::io::Error::other(e.to_string())))
 }
@@ -1984,7 +1984,7 @@ pub async fn run_web(port: u16) -> Result<(), IndexError> {
 
 ### Step 5: Add Web subcommand to CLI args
 
-In `indexrs-cli/src/args.rs`, add to the `Command` enum:
+In `ferret-indexer-cli/src/args.rs`, add to the `Command` enum:
 
 ```rust
 /// Start the web interface
@@ -2022,7 +2022,7 @@ Expected: PASS
 Start the server via CLI:
 
 ```bash
-cargo run -p indexrs-cli -- web --port 4040
+cargo run -p ferret-indexer-cli -- web --port 4040
 ```
 
 Use Playwright MCP:
@@ -2044,8 +2044,8 @@ return new Promise((resolve) => {
 ### Step 9: Commit
 
 ```bash
-git add indexrs-web/src/sse.rs indexrs-web/src/lib.rs indexrs-web/Cargo.toml \
-        indexrs-cli/src/web.rs indexrs-cli/src/args.rs indexrs-cli/src/main.rs indexrs-cli/Cargo.toml
+git add ferret-indexer-web/src/sse.rs ferret-indexer-web/src/lib.rs ferret-indexer-web/Cargo.toml \
+        ferret-indexer-cli/src/web.rs ferret-indexer-cli/src/args.rs ferret-indexer-cli/src/main.rs ferret-indexer-cli/Cargo.toml
 git commit -m "feat(web): add SSE streaming endpoints and CLI web subcommand"
 ```
 
@@ -2064,7 +2064,7 @@ git merge feat/web-frontend     # likely conflicts in lib.rs — resolve by comb
 git merge feat/web-streaming-cli # likely conflicts in lib.rs — resolve by combining routes
 ```
 
-The primary merge conflicts will be in `indexrs-web/src/lib.rs` (the `build_router()` function and module declarations). Resolve by combining all module declarations and all routes from all three branches.
+The primary merge conflicts will be in `ferret-indexer-web/src/lib.rs` (the `build_router()` function and module declarations). Resolve by combining all module declarations and all routes from all three branches.
 
 ### Step 2: Verify full compilation
 
@@ -2084,9 +2084,9 @@ Start the server:
 
 ```bash
 # Ensure the repo is initialized and registered
-cargo run -p indexrs-cli -- init
-cargo run -p indexrs-cli -- repos add . --name indexrs
-cargo run -p indexrs-cli -- web --port 4040
+cargo run -p ferret-indexer-cli -- init
+cargo run -p ferret-indexer-cli -- repos add . --name ferret
+cargo run -p ferret-indexer-cli -- web --port 4040
 ```
 
 **Test 1: Health endpoint**
@@ -2095,15 +2095,15 @@ cargo run -p indexrs-cli -- web --port 4040
 
 **Test 2: Repo listing**
 - `browser_navigate` to `http://localhost:4040/api/v1/repos`
-- Verify JSON contains repo with name "indexrs"
+- Verify JSON contains repo with name "ferret"
 
 **Test 3: Search API**
-- `browser_navigate` to `http://localhost:4040/api/v1/repos/indexrs/search?q=fn+main`
+- `browser_navigate` to `http://localhost:4040/api/v1/repos/ferret/search?q=fn+main`
 - Verify JSON has `stats`, `results`, `pagination` fields
 - Verify `stats.total_matches > 0`
 
 **Test 4: File retrieval API**
-- `browser_navigate` to `http://localhost:4040/api/v1/repos/indexrs/files/src/main.rs`
+- `browser_navigate` to `http://localhost:4040/api/v1/repos/ferret/files/src/main.rs`
 - Verify JSON has `path`, `language`, `lines` fields
 
 **Test 5: Web UI loads**
@@ -2130,7 +2130,7 @@ cargo run -p indexrs-cli -- web --port 4040
 **Test 9: SSE search stream**
 - `browser_evaluate` to test:
 ```javascript
-const resp = await fetch('/api/v1/repos/indexrs/search/stream?q=fn+main');
+const resp = await fetch('/api/v1/repos/ferret/search/stream?q=fn+main');
 const reader = resp.body.getReader();
 const decoder = new TextDecoder();
 let text = '';
@@ -2187,7 +2187,7 @@ New crates added to the workspace:
 1. **Each agent works in their own worktree.** Never push to main directly.
 2. **Before starting work**, run `cargo check --workspace` to verify the foundation (Task 0) is clean.
 3. **Askama template syntax** varies by version. Consult askama docs for the exact version used. Key patterns: `{% for x in &items %}`, `{{ x }}`, `{% if condition %}`.
-4. **rust-embed `#[folder]`** path is relative to the crate root (i.e., `indexrs-web/`). So `#[folder = "static/"]` refers to `indexrs-web/static/`.
+4. **rust-embed `#[folder]`** path is relative to the crate root (i.e., `ferret-indexer-web/`). So `#[folder = "static/"]` refers to `ferret-indexer-web/static/`.
 5. **The web server binds to `127.0.0.1` only** — never `0.0.0.0`. This is a local dev tool.
 6. **Playwright MCP testing**: Install browser first with `browser_install` tool. Use `browser_navigate` + `browser_snapshot` for visual checks, `browser_evaluate` for programmatic assertions.
 7. **htmx vendoring**: Download from unpkg or cdnjs. Do not use a CDN link in HTML — everything must work offline.

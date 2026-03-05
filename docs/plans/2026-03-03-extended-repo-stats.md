@@ -4,22 +4,22 @@
 
 **Goal:** Extend the daemon `StatusResponse` with five new fields (index disk size, last indexed time, language breakdown, tombstone ratio, path validity) and display them on the web repos overview page.
 
-**Architecture:** The daemon's `DaemonRequest::Status` handler already has access to the `SegmentManager` snapshot, `repo_root`, and `indexrs_dir`. We compute the new stats in the handler (mirroring patterns from `indexrs-cli/src/status.rs`), add fields to `StatusResponse`, propagate through the web proxy, and render on the repos page. The `dir_size()` utility is moved to `indexrs-core` so both the CLI and daemon can use it.
+**Architecture:** The daemon's `DaemonRequest::Status` handler already has access to the `SegmentManager` snapshot, `repo_root`, and `ferret_dir`. We compute the new stats in the handler (mirroring patterns from `ferret-indexer-cli/src/status.rs`), add fields to `StatusResponse`, propagate through the web proxy, and render on the repos page. The `dir_size()` utility is moved to `ferret-indexer-core` so both the CLI and daemon can use it.
 
 **Tech Stack:** Rust (serde, askama templates), CSS, existing daemon/web infrastructure.
 
 ---
 
-### Task 1: Move `dir_size` utility to `indexrs-core`
+### Task 1: Move `dir_size` utility to `ferret-indexer-core`
 
-The CLI's `status.rs:181-196` has a `dir_size()` function. Move it to `indexrs-core` so the daemon handler can use it too.
+The CLI's `status.rs:181-196` has a `dir_size()` function. Move it to `ferret-indexer-core` so the daemon handler can use it too.
 
 **Files:**
-- Create: `indexrs-core/src/disk.rs`
-- Modify: `indexrs-core/src/lib.rs`
-- Modify: `indexrs-cli/src/status.rs`
+- Create: `ferret-indexer-core/src/disk.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
+- Modify: `ferret-indexer-cli/src/status.rs`
 
-**Step 1: Create `indexrs-core/src/disk.rs`**
+**Step 1: Create `ferret-indexer-core/src/disk.rs`**
 
 ```rust
 use std::path::Path;
@@ -44,7 +44,7 @@ pub fn dir_size(path: &Path) -> u64 {
 }
 ```
 
-**Step 2: Export from `indexrs-core/src/lib.rs`**
+**Step 2: Export from `ferret-indexer-core/src/lib.rs`**
 
 Add after the existing `pub mod content;` line:
 ```rust
@@ -56,12 +56,12 @@ Add in the `pub use` section:
 pub use disk::dir_size;
 ```
 
-**Step 3: Update CLI `status.rs` to use `indexrs_core::dir_size`**
+**Step 3: Update CLI `status.rs` to use `ferret_indexer_core::dir_size`**
 
-In `indexrs-cli/src/status.rs`, remove the local `dir_size` function (lines 181-196) and update the import at the top to include `dir_size`:
+In `ferret-indexer-cli/src/status.rs`, remove the local `dir_size` function (lines 181-196) and update the import at the top to include `dir_size`:
 
 ```rust
-use indexrs_core::{Language, SegmentManager, dir_size, search_segments};
+use ferret_indexer_core::{Language, SegmentManager, dir_size, search_segments};
 ```
 
 Update the call at line 137: `let disk_bytes = dir_size(&segments_dir);` — this already matches the signature, no change needed.
@@ -74,7 +74,7 @@ Run: `cargo clippy --workspace -- -D warnings`
 **Step 5: Commit**
 
 ```
-feat(core): move dir_size utility to indexrs-core for reuse
+feat(core): move dir_size utility to ferret-indexer-core for reuse
 ```
 
 ---
@@ -84,7 +84,7 @@ feat(core): move dir_size utility to indexrs-core for reuse
 Add five new fields to the daemon protocol's `StatusResponse` struct with backward-compatible defaults.
 
 **Files:**
-- Modify: `indexrs-daemon/src/json_protocol.rs:36-41`
+- Modify: `ferret-indexer-daemon/src/json_protocol.rs:36-41`
 
 **Step 1: Update `StatusResponse` struct**
 
@@ -96,7 +96,7 @@ pub struct StatusResponse {
     pub status: String,
     pub files_indexed: usize,
     pub segments: usize,
-    /// Total bytes on disk for the index directory (.indexrs/segments/).
+    /// Total bytes on disk for the index directory (.ferret_index/segments/).
     #[serde(default)]
     pub index_bytes: u64,
     /// Unix epoch seconds of the most recently modified file in the index.
@@ -135,10 +135,10 @@ feat(daemon): extend StatusResponse with disk size, last indexed, languages, tom
 
 ### Task 3: Compute new stats in the daemon Status handler
 
-Update the `DaemonRequest::Status` handler in `indexrs-cli/src/daemon.rs` to populate the new fields.
+Update the `DaemonRequest::Status` handler in `ferret-indexer-cli/src/daemon.rs` to populate the new fields.
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:892-931` (the `DaemonRequest::Status` match arm)
+- Modify: `ferret-indexer-cli/src/daemon.rs:892-931` (the `DaemonRequest::Status` match arm)
 
 **Step 1: Replace the Status handler**
 
@@ -188,8 +188,8 @@ DaemonRequest::Status => {
         total_tombstoned as f32 / total_entries as f32
     };
 
-    let segments_dir = indexrs_dir.join("segments");
-    let index_bytes = indexrs_core::dir_size(&segments_dir);
+    let segments_dir = ferret_dir.join("segments");
+    let index_bytes = ferret_indexer_core::dir_size(&segments_dir);
     let path_valid = repo_root.is_dir();
 
     let status = if caught_up.load(Ordering::Relaxed) {
@@ -241,10 +241,10 @@ feat(daemon): compute extended stats in Status handler
 
 ### Task 4: Update the daemon Status test
 
-The existing daemon integration test at `indexrs-cli/src/daemon.rs` (around line 2108) checks `files_indexed` and `segments`. Add assertions for the new fields.
+The existing daemon integration test at `ferret-indexer-cli/src/daemon.rs` (around line 2108) checks `files_indexed` and `segments`. Add assertions for the new fields.
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs` (test near line 2108-2119)
+- Modify: `ferret-indexer-cli/src/daemon.rs` (test near line 2108-2119)
 
 **Step 1: Add assertions for new fields after the existing assertions**
 
@@ -299,9 +299,9 @@ test(daemon): add assertions for extended StatusResponse fields
 Update the web layer to propagate and display the new fields.
 
 **Files:**
-- Modify: `indexrs-web/src/ui.rs` — update `RepoOverviewItem` struct and `repos_page` handler
-- Modify: `indexrs-web/templates/repos.html` — display new stats
-- Modify: `indexrs-web/static/style.css` — styles for new UI elements
+- Modify: `ferret-indexer-web/src/ui.rs` — update `RepoOverviewItem` struct and `repos_page` handler
+- Modify: `ferret-indexer-web/templates/repos.html` — display new stats
+- Modify: `ferret-indexer-web/static/style.css` — styles for new UI elements
 
 **Step 1: Update `RepoOverviewItem` in `ui.rs`**
 
@@ -540,10 +540,10 @@ feat(web): display extended repo stats on overview page
 
 ### Task 6: Update SSE fallback strings
 
-The SSE status stream in `indexrs-web/src/sse.rs` has hardcoded fallback JSON strings that only include the original 3 fields. Update them to include the new fields with zero/default values.
+The SSE status stream in `ferret-indexer-web/src/sse.rs` has hardcoded fallback JSON strings that only include the original 3 fields. Update them to include the new fields with zero/default values.
 
 **Files:**
-- Modify: `indexrs-web/src/sse.rs:156-168`
+- Modify: `ferret-indexer-web/src/sse.rs:156-168`
 
 **Step 1: Update fallback strings**
 

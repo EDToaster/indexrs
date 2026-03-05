@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Create a file watcher module (`indexrs-core/src/watcher.rs`) that uses `notify-debouncer-full` for live change detection with gitignore support.
+**Goal:** Create a file watcher module (`ferret-indexer-core/src/watcher.rs`) that uses `notify-debouncer-full` for live change detection with gitignore support.
 
 **Architecture:** The `FileWatcher` struct wraps `notify-debouncer-full`'s `Debouncer` with a 200ms debounce window. It translates debounced `notify` events into our own `ChangeEvent`/`ChangeKind` types. Gitignore filtering is done via the `ignore` crate's `gitignore::Gitignore` matcher, applied as a post-filter on incoming events before sending them through the channel.
 
@@ -13,11 +13,11 @@
 ### Task 1: Add `Watcher` error variant to `IndexError`
 
 **Files:**
-- Modify: `indexrs-core/src/error.rs`
+- Modify: `ferret-indexer-core/src/error.rs`
 
 **Step 1: Add the `Watcher` variant**
 
-Add a new variant to `IndexError` in `indexrs-core/src/error.rs` after the `Walk` variant:
+Add a new variant to `IndexError` in `ferret-indexer-core/src/error.rs` after the `Walk` variant:
 
 ```rust
     /// An error from the file-system watcher subsystem.
@@ -27,13 +27,13 @@ Add a new variant to `IndexError` in `indexrs-core/src/error.rs` after the `Walk
 
 **Step 2: Run tests to verify nothing is broken**
 
-Run: `cargo test -p indexrs-core -- error`
+Run: `cargo test -p ferret-indexer-core -- error`
 Expected: All existing error tests PASS
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/src/error.rs
+git add ferret-indexer-core/src/error.rs
 git commit -m "feat(core): add Watcher error variant to IndexError (HHC-37)"
 ```
 
@@ -42,12 +42,12 @@ git commit -m "feat(core): add Watcher error variant to IndexError (HHC-37)"
 ### Task 2: Create `ChangeEvent` and `ChangeKind` types with unit tests
 
 **Files:**
-- Create: `indexrs-core/src/watcher.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/watcher.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 **Step 1: Write the failing test**
 
-Create `indexrs-core/src/watcher.rs` with only the test module:
+Create `ferret-indexer-core/src/watcher.rs` with only the test module:
 
 ```rust
 //! File watcher with debounced change detection.
@@ -165,7 +165,7 @@ pub struct ChangeEvent {
 
 **Step 3: Wire up the module in `lib.rs`**
 
-Add `pub mod watcher;` and re-exports to `indexrs-core/src/lib.rs`:
+Add `pub mod watcher;` and re-exports to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod watcher;
@@ -181,13 +181,13 @@ pub use watcher::{ChangeEvent, ChangeKind};
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-core -- watcher`
+Run: `cargo test -p ferret-indexer-core -- watcher`
 Expected: All 6 tests PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/watcher.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/watcher.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(core): add ChangeEvent and ChangeKind types (HHC-37)"
 ```
 
@@ -196,8 +196,8 @@ git commit -m "feat(core): add ChangeEvent and ChangeKind types (HHC-37)"
 ### Task 3: Implement `FileWatcher` struct with `new`, `start`, `stop`
 
 **Files:**
-- Modify: `indexrs-core/src/watcher.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Modify: `ferret-indexer-core/src/watcher.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 **Step 1: Write the failing tests for FileWatcher**
 
@@ -252,7 +252,7 @@ Add these tests to the existing `tests` module in `watcher.rs`:
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-core -- watcher`
+Run: `cargo test -p ferret-indexer-core -- watcher`
 Expected: FAIL — `FileWatcher` not found
 
 **Step 3: Implement `FileWatcher`**
@@ -412,13 +412,13 @@ pub use watcher::{ChangeEvent, ChangeKind, FileWatcher};
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-core -- watcher`
+Run: `cargo test -p ferret-indexer-core -- watcher`
 Expected: All tests PASS
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-core/src/watcher.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/watcher.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(core): implement FileWatcher with debounced events (HHC-37)"
 ```
 
@@ -427,7 +427,7 @@ git commit -m "feat(core): implement FileWatcher with debounced events (HHC-37)"
 ### Task 4: Add integration tests for actual file events (marked `#[ignore]`)
 
 **Files:**
-- Modify: `indexrs-core/src/watcher.rs`
+- Modify: `ferret-indexer-core/src/watcher.rs`
 
 **Step 1: Add integration tests**
 
@@ -549,18 +549,18 @@ Add these tests to the `tests` module in `watcher.rs`. They are marked `#[ignore
 
 **Step 2: Run unit tests (non-ignored) to verify no regressions**
 
-Run: `cargo test -p indexrs-core -- watcher`
+Run: `cargo test -p ferret-indexer-core -- watcher`
 Expected: All non-ignored tests PASS; ignored tests are skipped
 
 **Step 3: Optionally verify ignored tests work locally**
 
-Run: `cargo test -p indexrs-core -- watcher --ignored`
+Run: `cargo test -p ferret-indexer-core -- watcher --ignored`
 Expected: All 4 integration tests PASS (may occasionally be flaky)
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/watcher.rs
+git add ferret-indexer-core/src/watcher.rs
 git commit -m "test(core): add integration tests for FileWatcher (HHC-37)"
 ```
 
@@ -572,12 +572,12 @@ git commit -m "test(core): add integration tests for FileWatcher (HHC-37)"
 
 **Step 1: Run all tests**
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 Expected: All non-ignored tests PASS
 
 **Step 2: Run clippy**
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 Expected: No warnings
 
 **Step 3: Fix any issues found by clippy or tests**

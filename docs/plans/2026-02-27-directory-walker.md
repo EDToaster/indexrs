@@ -4,7 +4,7 @@
 
 **Goal:** Create a configurable, parallel directory walker that respects `.gitignore` rules and returns `(PathBuf, std::fs::Metadata)` pairs for every discovered file.
 
-**Architecture:** Single module `walker.rs` exposes a `WalkerBuilder` (config) and a `Walker` (iterator). `WalkerBuilder` wraps `ignore::WalkBuilder`, adding `.indexrsignore` as a custom ignore filename and hard-skipping `.git/` and `.indexrs/` directories. The `Walker::run` method collects entries sequentially; `Walker::run_parallel` uses `ignore::WalkParallel` for multi-threaded traversal. Both return `Vec<WalkedFile>` where `WalkedFile { path, metadata }`.
+**Architecture:** Single module `walker.rs` exposes a `WalkerBuilder` (config) and a `Walker` (iterator). `WalkerBuilder` wraps `ignore::WalkBuilder`, adding `.ferretignore` as a custom ignore filename and hard-skipping `.git/` and `.ferret_index/` directories. The `Walker::run` method collects entries sequentially; `Walker::run_parallel` uses `ignore::WalkParallel` for multi-threaded traversal. Both return `Vec<WalkedFile>` where `WalkedFile { path, metadata }`.
 
 **Tech Stack:** Rust 2024, `ignore` 0.4 (already in Cargo.toml), `thiserror` (existing `IndexError`), `tempfile` (dev-dependency, already present)
 
@@ -13,11 +13,11 @@
 ## Task 1: Add `WalkError` variant to `IndexError`
 
 **Files:**
-- Modify: `indexrs-core/src/error.rs`
+- Modify: `ferret-indexer-core/src/error.rs`
 
 **Step 1: Add the new variant**
 
-In `indexrs-core/src/error.rs`, add a `Walk` variant to `IndexError` that wraps a `String`:
+In `ferret-indexer-core/src/error.rs`, add a `Walk` variant to `IndexError` that wraps a `String`:
 
 ```rust
 /// An error occurred while walking the directory tree.
@@ -29,13 +29,13 @@ Add it after the existing `SegmentNotFound` variant.
 
 **Step 2: Verify compilation**
 
-Run: `cargo check -p indexrs-core`
+Run: `cargo check -p ferret-indexer-core`
 Expected: success
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/src/error.rs
+git add ferret-indexer-core/src/error.rs
 git commit -m "feat(walker): add Walk variant to IndexError"
 ```
 
@@ -44,12 +44,12 @@ git commit -m "feat(walker): add Walk variant to IndexError"
 ## Task 2: Create `walker.rs` with types and `WalkerBuilder`
 
 **Files:**
-- Create: `indexrs-core/src/walker.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/walker.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 **Step 1: Create walker.rs with core types and builder**
 
-Create `indexrs-core/src/walker.rs`:
+Create `ferret-indexer-core/src/walker.rs`:
 
 ```rust
 //! Directory walker with `.gitignore` support.
@@ -57,12 +57,12 @@ Create `indexrs-core/src/walker.rs`:
 //! Uses the [`ignore`] crate (from the ripgrep ecosystem) to recursively walk a
 //! repository tree while respecting `.gitignore`, `.git/info/exclude`, global
 //! gitignore, negation patterns, directory-only patterns, and nested `.gitignore`
-//! files.  An additional `.indexrsignore` file is also honoured.
+//! files.  An additional `.ferretignore` file is also honoured.
 //!
 //! # Quick start
 //!
 //! ```no_run
-//! use indexrs_core::walker::WalkerBuilder;
+//! use ferret_indexer_core::walker::WalkerBuilder;
 //!
 //! let files = WalkerBuilder::new("/path/to/repo")
 //!     .build()
@@ -94,9 +94,9 @@ pub struct WalkedFile {
 
 /// Builder for configuring a directory [`Walker`].
 ///
-/// Wraps [`ignore::WalkBuilder`] with sensible defaults for indexrs:
-/// - `.git/` and `.indexrs/` directories are always skipped
-/// - `.indexrsignore` files are honoured (highest precedence among ignore files)
+/// Wraps [`ignore::WalkBuilder`] with sensible defaults for ferret:
+/// - `.git/` and `.ferret_index/` directories are always skipped
+/// - `.ferretignore` files are honoured (highest precedence among ignore files)
 /// - All standard gitignore sources are enabled
 pub struct DirectoryWalkerBuilder {
     root: PathBuf,
@@ -138,18 +138,18 @@ impl DirectoryWalkerBuilder {
         builder.git_exclude(true);
         builder.hidden(true);
 
-        // Honour .indexrsignore files.
-        builder.add_custom_ignore_filename(".indexrsignore");
+        // Honour .ferretignore files.
+        builder.add_custom_ignore_filename(".ferretignore");
 
         // Thread count for parallel mode.
         builder.threads(self.threads);
 
-        // Hard-skip .git/ and .indexrs/ directories, plus apply extra excludes.
+        // Hard-skip .git/ and .ferret_index/ directories, plus apply extra excludes.
         let extra = self.extra_ignore_patterns.clone();
         builder.filter_entry(move |entry| {
             let name = entry.file_name().to_string_lossy();
             if entry.file_type().map_or(false, |ft| ft.is_dir()) {
-                if name == ".git" || name == ".indexrs" {
+                if name == ".git" || name == ".ferret_index" {
                     return false;
                 }
             }
@@ -370,7 +370,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // .git/ and .indexrs/ skipping
+    // .git/ and .ferret_index/ skipping
     // ---------------------------------------------------------------
 
     #[test]
@@ -399,10 +399,10 @@ mod tests {
     }
 
     #[test]
-    fn test_indexrs_dir_skipped() {
+    fn test_ferret_dir_skipped() {
         let tmp = TempDir::new().unwrap();
         create_file(tmp.path(), "keep.rs", "fn main() {}");
-        create_file(tmp.path(), ".indexrs/index.dat", "binary data");
+        create_file(tmp.path(), ".ferret_index/index.dat", "binary data");
 
         let files = DirectoryWalkerBuilder::new(tmp.path())
             .build()
@@ -423,13 +423,13 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // .indexrsignore support
+    // .ferretignore support
     // ---------------------------------------------------------------
 
     #[test]
-    fn test_indexrsignore_respected() {
+    fn test_ferretignore_respected() {
         let tmp = TempDir::new().unwrap();
-        create_file(tmp.path(), ".indexrsignore", "*.dat\n");
+        create_file(tmp.path(), ".ferretignore", "*.dat\n");
         create_file(tmp.path(), "keep.rs", "fn main() {}");
         create_file(tmp.path(), "data.dat", "should be ignored");
 
@@ -451,7 +451,7 @@ mod tests {
         assert!(names.contains(&"keep.rs".to_string()));
         assert!(
             !names.contains(&"data.dat".to_string()),
-            "data.dat should be ignored by .indexrsignore"
+            "data.dat should be ignored by .ferretignore"
         );
     }
 
@@ -560,7 +560,7 @@ mod tests {
 
 **Step 2: Register the module in lib.rs**
 
-Add `pub mod walker;` to `indexrs-core/src/lib.rs` and add a re-export:
+Add `pub mod walker;` to `ferret-indexer-core/src/lib.rs` and add a re-export:
 
 ```rust
 pub mod walker;
@@ -571,29 +571,29 @@ pub use walker::{DirectoryWalkerBuilder, WalkedFile, Walker};
 
 **Step 3: Verify compilation**
 
-Run: `cargo check -p indexrs-core`
+Run: `cargo check -p ferret-indexer-core`
 Expected: success
 
 **Step 4: Run tests**
 
-Run: `cargo test -p indexrs-core -- walker`
+Run: `cargo test -p ferret-indexer-core -- walker`
 Expected: all tests pass
 
 **Step 5: Run clippy**
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 Expected: no warnings
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-core/src/walker.rs indexrs-core/src/lib.rs indexrs-core/src/error.rs
+git add ferret-indexer-core/src/walker.rs ferret-indexer-core/src/lib.rs ferret-indexer-core/src/error.rs
 git commit -m "feat(walker): add directory walker with .gitignore support
 
 Adds DirectoryWalkerBuilder / Walker that wraps the ignore crate to walk
 a repository tree while respecting .gitignore, .git/info/exclude, global
-gitignore, and a custom .indexrsignore file.  Supports both sequential
-and parallel traversal.  Skips .git/ and .indexrs/ directories.
+gitignore, and a custom .ferretignore file.  Supports both sequential
+and parallel traversal.  Skips .git/ and .ferret_index/ directories.
 
 Ref: HHC-35"
 ```

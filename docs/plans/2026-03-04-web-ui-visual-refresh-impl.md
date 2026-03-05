@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add micro-interactions, glassmorphism header, card depth, loading skeletons, VS Code-style code blocks, gradient accents, and smooth expand/collapse to the indexrs web UI.
+**Goal:** Add micro-interactions, glassmorphism header, card depth, loading skeletons, VS Code-style code blocks, gradient accents, and smooth expand/collapse to the ferret web UI.
 
-**Architecture:** All changes are pure CSS in `indexrs-web/static/style.css` with minimal HTML tweaks in askama templates and a few lines of JS in `app.js`. No new dependencies.
+**Architecture:** All changes are pure CSS in `ferret-indexer-web/static/style.css` with minimal HTML tweaks in askama templates and a few lines of JS in `app.js`. No new dependencies.
 
 **Tech Stack:** CSS custom properties, CSS keyframe animations, htmx swap classes, askama templates
 
@@ -13,8 +13,8 @@
 ### Task 1: Motion Foundation — CSS Variables & Keyframes
 
 **Files:**
-- Modify: `indexrs-web/static/style.css:1-34` (`:root` block)
-- Modify: `indexrs-web/static/style.css:37-62` (`[data-theme="dark"]` block)
+- Modify: `ferret-indexer-web/static/style.css:1-34` (`:root` block)
+- Modify: `ferret-indexer-web/static/style.css:37-62` (`[data-theme="dark"]` block)
 
 **Step 1: Add motion variables to `:root`**
 
@@ -102,13 +102,13 @@ Also add stagger for `.symbol-result`:
 
 **Step 5: Run cargo check to verify no build breakage**
 
-Run: `cargo check -p indexrs-web`
+Run: `cargo check -p ferret-indexer-web`
 Expected: compiles (CSS is embedded, no Rust changes)
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-web/static/style.css
+git add ferret-indexer-web/static/style.css
 git commit -m "feat(web): add motion foundation — CSS variables, keyframes, staggered fade-in"
 ```
 
@@ -117,7 +117,7 @@ git commit -m "feat(web): add motion foundation — CSS variables, keyframes, st
 ### Task 2: Glassmorphism Header
 
 **Files:**
-- Modify: `indexrs-web/static/style.css:96-104` (`.header` rule)
+- Modify: `ferret-indexer-web/static/style.css:96-104` (`.header` rule)
 
 **Step 1: Add glassmorphism properties to `.header`**
 
@@ -158,7 +158,7 @@ Run the web server and check both light/dark modes. Content should scroll behind
 **Step 4: Commit**
 
 ```bash
-git add indexrs-web/static/style.css
+git add ferret-indexer-web/static/style.css
 git commit -m "feat(web): glassmorphism header with backdrop blur"
 ```
 
@@ -167,7 +167,7 @@ git commit -m "feat(web): glassmorphism header with backdrop blur"
 ### Task 3: Card Depth & Hover States
 
 **Files:**
-- Modify: `indexrs-web/static/style.css` — `.file-result`, `.file-header`, `.repo-card`, `.search-input`, `.mode-btn`, `.pagination button`
+- Modify: `ferret-indexer-web/static/style.css` — `.file-result`, `.file-header`, `.repo-card`, `.search-input`, `.mode-btn`, `.pagination button`
 
 **Step 1: Add hover elevation to file result cards**
 
@@ -255,7 +255,7 @@ Update `.mode-btn` and `.pagination button`:
 **Step 6: Commit**
 
 ```bash
-git add indexrs-web/static/style.css
+git add ferret-indexer-web/static/style.css
 git commit -m "feat(web): card depth, hover elevation, and button press effects"
 ```
 
@@ -264,9 +264,9 @@ git commit -m "feat(web): card depth, hover elevation, and button press effects"
 ### Task 4: Loading Skeleton
 
 **Files:**
-- Modify: `indexrs-web/static/style.css` (add skeleton styles)
-- Modify: `indexrs-web/templates/index.html` (add skeleton HTML)
-- Modify: `indexrs-web/static/app.js` (show/hide skeleton on htmx events)
+- Modify: `ferret-indexer-web/static/style.css` (add skeleton styles)
+- Modify: `ferret-indexer-web/templates/index.html` (add skeleton HTML)
+- Modify: `ferret-indexer-web/static/app.js` (show/hide skeleton on htmx events)
 
 **Step 1: Add shimmer keyframe and skeleton styles to CSS**
 
@@ -318,7 +318,7 @@ Add near the spinner styles (after line 527):
 
 **Step 2: Add skeleton HTML to index.html**
 
-In `indexrs-web/templates/index.html`, inside the `.results-wrap` div, add before `<div id="results">`:
+In `ferret-indexer-web/templates/index.html`, inside the `.results-wrap` div, add before `<div id="results">`:
 
 ```html
         <div class="skeleton" id="search-skeleton">
@@ -351,13 +351,13 @@ Note: there's already an `htmx:afterSwap` handler at line 211-216. Merge the ske
 
 **Step 4: Verify the build**
 
-Run: `cargo check -p indexrs-web`
+Run: `cargo check -p ferret-indexer-web`
 Expected: compiles (template changes need askama to be happy)
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-web/static/style.css indexrs-web/templates/index.html indexrs-web/static/app.js
+git add ferret-indexer-web/static/style.css ferret-indexer-web/templates/index.html ferret-indexer-web/static/app.js
 git commit -m "feat(web): loading skeleton shimmer during search"
 ```
 
@@ -366,7 +366,7 @@ git commit -m "feat(web): loading skeleton shimmer during search"
 ### Task 5: VS Code-style Code Blocks
 
 **Files:**
-- Modify: `indexrs-web/static/style.css` — `.code-lines`, `.code-line--match`, `.code-line`, `.line-number`
+- Modify: `ferret-indexer-web/static/style.css` — `.code-lines`, `.code-line--match`, `.code-line`, `.line-number`
 
 **Step 1: Add rounded corners and inner shadow to code blocks**
 
@@ -438,7 +438,7 @@ Add a new rule for file preview code lines:
 **Step 5: Commit**
 
 ```bash
-git add indexrs-web/static/style.css
+git add ferret-indexer-web/static/style.css
 git commit -m "feat(web): VS Code-style code blocks — rounded corners, inner shadow, match accent bar"
 ```
 
@@ -447,7 +447,7 @@ git commit -m "feat(web): VS Code-style code blocks — rounded corners, inner s
 ### Task 6: Gradient Accents
 
 **Files:**
-- Modify: `indexrs-web/static/style.css` — `.mode-btn--active`, `.badge--ok`, `.pagination .current`
+- Modify: `ferret-indexer-web/static/style.css` — `.mode-btn--active`, `.badge--ok`, `.pagination .current`
 
 **Step 1: Gradient on active mode button**
 
@@ -500,7 +500,7 @@ Update `.pagination .current` (line 312-318):
 **Step 4: Commit**
 
 ```bash
-git add indexrs-web/static/style.css
+git add ferret-indexer-web/static/style.css
 git commit -m "feat(web): gradient accents on active states, status badge pulse"
 ```
 
@@ -509,8 +509,8 @@ git commit -m "feat(web): gradient accents on active states, status badge pulse"
 ### Task 7: Smooth Expand/Collapse & Modal Animations
 
 **Files:**
-- Modify: `indexrs-web/static/style.css` — `.help-overlay`, `.help-content`, `.quickopen-overlay`, `.quickopen-modal`, `.segments-table-wrap`
-- Modify: `indexrs-web/static/app.js` — toggle help/quickopen with animation classes
+- Modify: `ferret-indexer-web/static/style.css` — `.help-overlay`, `.help-content`, `.quickopen-overlay`, `.quickopen-modal`, `.segments-table-wrap`
+- Modify: `ferret-indexer-web/static/app.js` — toggle help/quickopen with animation classes
 
 **Step 1: Add modal entrance animations**
 
@@ -599,7 +599,7 @@ In the repos template, remove the inline `style="display:none"` from the segment
 **Step 7: Commit**
 
 ```bash
-git add indexrs-web/static/style.css indexrs-web/static/app.js indexrs-web/templates/repos.html
+git add ferret-indexer-web/static/style.css ferret-indexer-web/static/app.js ferret-indexer-web/templates/repos.html
 git commit -m "feat(web): smooth modal animations and expand/collapse transitions"
 ```
 
@@ -608,7 +608,7 @@ git commit -m "feat(web): smooth modal animations and expand/collapse transition
 ### Task 8: Final Polish & Visual QA
 
 **Files:**
-- Modify: `indexrs-web/static/style.css` (any tweaks)
+- Modify: `ferret-indexer-web/static/style.css` (any tweaks)
 
 **Step 1: Run clippy and format check**
 

@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 cargo check --workspace          # Type-check all crates
 cargo test --workspace           # Run all tests (unit + doc-tests)
-cargo test -p indexrs-core       # Test only the core library
-cargo test -p indexrs-core -- test_name  # Run a single test by name
+cargo test -p ferret-indexer-core       # Test only the core library
+cargo test -p ferret-indexer-core -- test_name  # Run a single test by name
 cargo clippy --workspace -- -D warnings  # Lint (CI treats warnings as errors)
 cargo fmt --all -- --check       # Check formatting
 cargo fmt --all                  # Auto-format
@@ -16,38 +16,38 @@ cargo fmt --all                  # Auto-format
 
 Run the end-to-end demo (indexes a directory, searches it):
 ```bash
-cargo run -p indexrs-core --example demo -- <directory> <query>
+cargo run -p ferret-indexer-core --example demo -- <directory> <query>
 ```
 
 Build a real on-disk index using the segment manager:
 ```bash
-cargo run -p indexrs-core --example build_index --release -- <directory>
+cargo run -p ferret-indexer-core --example build_index --release -- <directory>
 ```
 
 Estimate index disk space and peak RAM for a directory:
 ```bash
-cargo run -p indexrs-core --example bench_space --release -- <directory> [segment-budget-mb]
+cargo run -p ferret-indexer-core --example bench_space --release -- <directory> [segment-budget-mb]
 ```
 
 Start the web interface (requires at least one registered repo):
 ```bash
-cargo run -p indexrs-cli -- web                # default port 4040
-cargo run -p indexrs-cli -- web --port 8080    # custom port
+cargo run -p ferret-indexer-cli -- web                # default port 4040
+cargo run -p ferret-indexer-cli -- web --port 8080    # custom port
 ```
 
 ## Web Interface E2E Testing
 
-The web interface (`indexrs web`) can be tested end-to-end using Playwright MCP tools. This requires a running server with at least one indexed repo.
+The web interface (`ferret web`) can be tested end-to-end using Playwright MCP tools. This requires a running server with at least one indexed repo.
 
 ### Setup
 
 ```bash
 # 1. Initialize and register a test repo
-cargo run -p indexrs-cli -- init
-cargo run -p indexrs-cli -- repos add . --name test-repo
+cargo run -p ferret-indexer-cli -- init
+cargo run -p ferret-indexer-cli -- repos add . --name test-repo
 
 # 2. Start the web server (runs in foreground, use background for automated tests)
-cargo run -p indexrs-cli -- web --port 4040
+cargo run -p ferret-indexer-cli -- web --port 4040
 ```
 
 ### Playwright MCP test workflow
@@ -95,7 +95,7 @@ The web server is a stateless proxy — it does **not** own `SegmentManager` ins
 Browser → HTTP → Web Server (axum) → Unix Socket → Daemon → SegmentManager
 ```
 
-Key modules in `indexrs-web/src/`:
+Key modules in `ferret-web/src/`:
 - `lib.rs` — `AppState`, `build_router()`, `start_server()`, route wiring
 - `api.rs` — JSON API handlers (search, files, status, repos CRUD, refresh)
 - `proxy.rs` — daemon proxy helpers (`search()`, `get_file()`, `status()`, `daemon_health()`)
@@ -106,16 +106,16 @@ Key modules in `indexrs-web/src/`:
 
 ## Architecture
 
-indexrs is a local code indexing service for fast substring search, inspired by zoekt/codesearch. It uses **trigram indexing**: every 3-byte sequence in source files maps to posting lists of file IDs and byte offsets. Search works by extracting trigrams from the query, intersecting posting lists to find candidate files, then verifying matches against actual content.
+ferret is a local code indexing service for fast substring search, inspired by zoekt/codesearch. It uses **trigram indexing**: every 3-byte sequence in source files maps to posting lists of file IDs and byte offsets. Search works by extracting trigrams from the query, intersecting posting lists to find candidate files, then verifying matches against actual content.
 
 ### Workspace Crates
 
-- **`indexrs-core`** — Library with all indexing/search logic (35 modules). No binary targets.
-- **`indexrs-cli`** — CLI binary (`clap` + `tokio`). Subcommands: init, search, files, symbols, preview, status, reindex, estimate, repos, web, mcp. The `mcp` subcommand runs the MCP server over stdio (gated behind the `mcp` cargo feature, enabled by default). The `web` subcommand starts the web interface. The `repos` subcommand manages multi-repo registration (list/add/remove).
-- **`indexrs-daemon`** — Daemon protocol library. TLV wire format, Unix socket client helpers (`ensure_daemon`, `send_json_request`), structured JSON response types (`JsonSearchFrame`, `FileResponse`, `StatusResponse`, `HealthResponse`).
-- **`indexrs-web`** — Web interface library (`axum` + `htmx` + `askama`). Proxies all operations to per-repo daemons over Unix sockets. JSON API at `/api/v1/`, server-rendered HTML UI at `/`, SSE streaming for live search and status.
+- **`ferret-indexer-core`** — Library with all indexing/search logic (35 modules). No binary targets.
+- **`ferret-indexer-cli`** — CLI binary (`clap` + `tokio`). Subcommands: init, search, files, symbols, preview, status, reindex, estimate, repos, web, mcp. The `mcp` subcommand runs the MCP server over stdio (gated behind the `mcp` cargo feature, enabled by default). The `web` subcommand starts the web interface. The `repos` subcommand manages multi-repo registration (list/add/remove).
+- **`ferret-indexer-daemon`** — Daemon protocol library. TLV wire format, Unix socket client helpers (`ensure_daemon`, `send_json_request`), structured JSON response types (`JsonSearchFrame`, `FileResponse`, `StatusResponse`, `HealthResponse`).
+- **`ferret-indexer-web`** — Web interface library (`axum` + `htmx` + `askama`). Proxies all operations to per-repo daemons over Unix sockets. JSON API at `/api/v1/`, server-rendered HTML UI at `/`, SSE streaming for live search and status.
 
-### Core Data Pipeline (indexrs-core)
+### Core Data Pipeline (ferret-indexer-core)
 
 The indexing pipeline flows: **files → trigrams → posting lists → binary format → disk**. Search reverses it: **query → trigram extraction → posting list intersection → candidate verification**.
 
@@ -135,7 +135,7 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 
 #### M2 Modules (File Walking & Change Detection)
 
-- `walker.rs` — `DirectoryWalkerBuilder` wraps `ignore::WalkBuilder` with `.gitignore` and `.indexrsignore` support. Always skips `.git/` and `.indexrs/`. Supports sequential and parallel walking with custom exclude patterns.
+- `walker.rs` — `DirectoryWalkerBuilder` wraps `ignore::WalkBuilder` with `.gitignore` and `.ferretignore` support. Always skips `.git/` and `.ferret_index/`. Supports sequential and parallel walking with custom exclude patterns.
 - `binary.rs` — Binary file detection: null-byte check in first 8 KB, comprehensive extension list (images, compiled, archives, media, fonts, bytecode), configurable max size (default 1 MB). `should_index_file()` combines all heuristics.
 - `changes.rs` — Shared change-event types: `ChangeKind` enum (`Created`, `Modified`, `Deleted`, `Renamed`) and `ChangeEvent` struct (relative path + kind).
 - `watcher.rs` — `FileWatcher` wraps `notify_debouncer_full` for filesystem event monitoring. 200 ms debounce, filters through `.gitignore` rules. Returns batched `ChangeEvent`s via `mpsc::Receiver`.
@@ -144,7 +144,7 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 
 #### M3 Modules (Segment Storage & Incremental Updates)
 
-- `segment.rs` — `InputFile` (file to index), `SegmentWriter` (builds segment dirs atomically from files using M1 pipeline, uses file-only posting mode), `Segment` (loads segment from disk with trigram/metadata/content readers). Segments live under `.indexrs/segments/seg_NNNN/`.
+- `segment.rs` — `InputFile` (file to index), `SegmentWriter` (builds segment dirs atomically from files using M1 pipeline, uses file-only posting mode), `Segment` (loads segment from disk with trigram/metadata/content readers). Segments live under `.ferret_index/segments/seg_NNNN/`.
 - `tombstone.rs` — `TombstoneSet` bitmap of deleted `FileId`s per segment. Binary persistence to `tombstones.bin` (TOMB magic). `needs_tombstone()`/`needs_new_entry()` helpers map `ChangeKind` to operations.
 - `index_state.rs` — `IndexState` with `Mutex<Arc<Vec<Arc<Segment>>>>` for snapshot isolation. Lock-free reads via `Arc::clone()`, writer mutex for publishing.
 - `multi_search.rs` — `search_segments()` queries all segments in a snapshot, filters tombstoned entries, verifies content matches with line/column tracking, deduplicates across segments (newest wins).
@@ -153,7 +153,7 @@ The indexing pipeline flows: **files → trigrams → posting lists → binary f
 - `checkpoint.rs` — Checkpoint persistence for daemon indexing state. Records last indexed commit/mtime so the daemon can catch up incrementally on restart. Atomic writes via temp-file-then-rename.
 - `catchup.rs` — Catch-up logic for daemon startup. Detects changes since last checkpoint via git (fast path) or hash-based diff (fallback), applies them to the segment manager, writes a new checkpoint.
 - `hash_diff.rs` — Hash-based diff fallback for catch-up when git is unavailable. Walks the file tree, computes hashes, and compares against segment metadata to emit `ChangeEvent`s.
-- `registry.rs` — Repo registry configuration for multi-repo support. TOML file (`~/.config/indexrs/repos.toml`) listing known repositories by name and path.
+- `registry.rs` — Repo registry configuration for multi-repo support. TOML file (`~/.config/ferret/repos.toml`) listing known repositories by name and path.
 - `reindex_progress.rs` — Structured progress events emitted during reindex operations. Sent as JSON over the daemon wire protocol.
 - `disk.rs` — Utility for recursively computing directory sizes on disk.
 
@@ -202,7 +202,7 @@ Plus **paths.bin** — contiguous UTF-8 path strings (no separators; offsets fro
 ### On-Disk Segment Layout
 
 ```
-.indexrs/
+.ferret_index/
   segments/
     seg_0001/
       meta.bin        # File metadata entries
@@ -217,7 +217,7 @@ Plus **paths.bin** — contiguous UTF-8 path strings (no separators; offsets fro
 
 ## Project Tracking
 
-Linear project name: indexrs (team: HHC). Design docs live in `docs/design/`, implementation plans in `docs/plans/`.
+Linear project name: ferret (team: HHC). Design docs live in `docs/design/`, implementation plans in `docs/plans/`.
 
 ### Milestone Status
 
@@ -236,7 +236,7 @@ Linear project name: indexrs (team: HHC). Design docs live in `docs/design/`, im
 - Index files use magic numbers and version fields for forward compatibility
 - Writers use atomic temp-file-then-rename pattern for crash safety
 - Git change detection shells out to `git` CLI (no libgit2 dependency)
-- Directory walker honors `.gitignore` and `.indexrsignore` files; always skips `.git/` and `.indexrs/`
+- Directory walker honors `.gitignore` and `.ferretignore` files; always skips `.git/` and `.ferret_index/`
 
 # ALWAYS BEFORE COMMITTING CHANGES
 

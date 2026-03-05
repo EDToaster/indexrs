@@ -13,10 +13,10 @@ fmt:
 	cargo fmt --all -- --check
 
 lint-css:
-	npx stylelint 'indexrs-web/static/**/*.css'
+	npx stylelint 'ferret-web/static/**/*.css'
 
 lint-html:
-	djlint indexrs-web/templates/ --lint
+	djlint ferret-web/templates/ --lint
 
 lint: clippy fmt lint-css lint-html
 

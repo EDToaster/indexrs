@@ -6,15 +6,15 @@
 
 **Architecture:** The daemon already has the socket infrastructure, request/response types, and a `SegmentManager`. The stub at `daemon.rs:143-158` currently returns `Done { total: 0 }` for both Search and Files. We replace that stub with calls to the existing `search_cmd::run_search` and `files::run_files` functions, capturing their output into a `Vec<u8>` buffer, splitting into lines, and sending each as a `DaemonResponse::Line`. A final `DaemonResponse::Done` reports total lines and elapsed time.
 
-**Tech Stack:** Rust, tokio, serde_json, indexrs-core (SegmentManager, SearchOptions, MatchPattern)
+**Tech Stack:** Rust, tokio, serde_json, ferret-indexer-core (SegmentManager, SearchOptions, MatchPattern)
 
 ---
 
 ### Task 1: Extract `handle_search` function
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:143-158`
-- Test: `indexrs-cli/src/daemon.rs` (existing `test_daemon_ping_pong` pattern)
+- Modify: `ferret-indexer-cli/src/daemon.rs:143-158`
+- Test: `ferret-indexer-cli/src/daemon.rs` (existing `test_daemon_ping_pong` pattern)
 
 **Step 1: Write the failing test**
 
@@ -23,14 +23,14 @@ Add a test that starts a daemon with indexed content, sends a Search request, an
 ```rust
 #[tokio::test]
 async fn test_daemon_search_returns_results() {
-    use indexrs_core::segment::InputFile;
+    use ferret_indexer_core::segment::InputFile;
 
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
     // Build an index with searchable content.
-    let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = ferret_indexer_core::SegmentManager::new(&ferret_dir).unwrap();
     manager
         .index_files(vec![InputFile {
             path: "src/main.rs".to_string(),
@@ -106,7 +106,7 @@ async fn test_daemon_search_returns_results() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-cli -- test_daemon_search_returns_results --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_daemon_search_returns_results --nocapture`
 Expected: FAIL — the daemon returns `Done { total: 0 }` with no `Line` responses, so `lines` is empty and the assert fails.
 
 **Step 3: Implement `handle_search`**
@@ -229,13 +229,13 @@ Also update the imports at the top of `daemon.rs` — add `Instant` to the exist
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-cli -- test_daemon_search_returns_results --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_daemon_search_returns_results --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): wire up Search handler to real index queries"
 ```
 
@@ -244,20 +244,20 @@ git commit -m "feat(daemon): wire up Search handler to real index queries"
 ### Task 2: Extract `handle_files` function
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs`
+- Modify: `ferret-indexer-cli/src/daemon.rs`
 
 **Step 1: Write the failing test**
 
 ```rust
 #[tokio::test]
 async fn test_daemon_files_returns_results() {
-    use indexrs_core::segment::InputFile;
+    use ferret_indexer_core::segment::InputFile;
 
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
-    let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = ferret_indexer_core::SegmentManager::new(&ferret_dir).unwrap();
     manager
         .index_files(vec![
             InputFile {
@@ -333,7 +333,7 @@ async fn test_daemon_files_returns_results() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-cli -- test_daemon_files_returns_results --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_daemon_files_returns_results --nocapture`
 Expected: FAIL — same stub returns `Done { total: 0 }`.
 
 **Step 3: Implement `handle_files_request`**
@@ -425,13 +425,13 @@ DaemonRequest::Files {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-cli -- test_daemon_files_returns_results --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_daemon_files_returns_results --nocapture`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): wire up Files handler to real index queries"
 ```
 
@@ -440,7 +440,7 @@ git commit -m "feat(daemon): wire up Files handler to real index queries"
 ### Task 3: Add error handling for daemon request handlers
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs`
+- Modify: `ferret-indexer-cli/src/daemon.rs`
 
 **Step 1: Write the failing test**
 
@@ -450,13 +450,13 @@ Test that an invalid regex in a Search request returns a `DaemonResponse::Error`
 #[tokio::test]
 async fn test_daemon_search_invalid_regex_returns_error() {
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
     // Create a minimal valid index (empty is fine for error testing).
-    let manager = indexrs_core::SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = ferret_indexer_core::SegmentManager::new(&ferret_dir).unwrap();
     manager
-        .index_files(vec![indexrs_core::segment::InputFile {
+        .index_files(vec![ferret_indexer_core::segment::InputFile {
             path: "test.rs".to_string(),
             content: b"fn test() {}\n".to_vec(),
             mtime: 100,
@@ -514,7 +514,7 @@ async fn test_daemon_search_invalid_regex_returns_error() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-cli -- test_daemon_search_invalid_regex_returns_error --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_daemon_search_invalid_regex_returns_error --nocapture`
 Expected: FAIL — the handler panics or returns something other than `DaemonResponse::Error`.
 
 **Step 3: Wrap handler calls with error catching**
@@ -642,13 +642,13 @@ Apply the same pattern for the `DaemonRequest::Files` arm.
 
 **Step 4: Run all daemon tests**
 
-Run: `cargo test -p indexrs-cli -- test_daemon --nocapture`
+Run: `cargo test -p ferret-indexer-cli -- test_daemon --nocapture`
 Expected: All 3 new tests + existing `test_daemon_ping_pong` + `test_try_connect_no_daemon` pass.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): add error handling for search/files handlers"
 ```
 
@@ -657,7 +657,7 @@ git commit -m "feat(daemon): add error handling for search/files handlers"
 ### Task 4: Remove `#[allow(unused)]` from daemon module
 
 **Files:**
-- Modify: `indexrs-cli/src/main.rs:3`
+- Modify: `ferret-indexer-cli/src/main.rs:3`
 
 **Step 1: Remove the annotation**
 
@@ -676,7 +676,7 @@ mod daemon;
 
 **Step 2: Run clippy to check for warnings**
 
-Run: `cargo clippy -p indexrs-cli -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-cli -- -D warnings`
 Expected: PASS (no unused warnings since daemon now imports `search_cmd`, `files`, `color`, `output`, `args` which are all used).
 
 **Step 3: Run the full test suite**
@@ -691,6 +691,6 @@ Run: `cargo fmt --all`
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/main.rs
 git commit -m "chore: remove allow(unused) from daemon module"
 ```

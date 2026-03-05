@@ -4,24 +4,24 @@
 
 **Goal:** Implement the MCP server foundation (HHC-58, HHC-63, HHC-65) -- server setup with stdio transport, plain-text response formatter, and error handling with helpful messages.
 
-**Architecture:** The `indexrs-mcp` crate gets 4 new modules: `server.rs` (rmcp ServerHandler with IndexrsServer struct), `formatter.rs` (plain-text rendering optimized for LLMs), `errors.rs` (MCP error helpers returning CallToolResult with is_error=true), and `tools/mod.rs` (empty placeholder). The server uses the `#[tool(tool_box)]` macro pattern from rmcp for tool registration. All modules expose public interfaces for Phase 2 agents to build tools/resources on.
+**Architecture:** The `ferret-mcp` crate gets 4 new modules: `server.rs` (rmcp ServerHandler with FerretServer struct), `formatter.rs` (plain-text rendering optimized for LLMs), `errors.rs` (MCP error helpers returning CallToolResult with is_error=true), and `tools/mod.rs` (empty placeholder). The server uses the `#[tool(tool_box)]` macro pattern from rmcp for tool registration. All modules expose public interfaces for Phase 2 agents to build tools/resources on.
 
-**Tech Stack:** Rust, rmcp 0.1.5 (with server + transport-io + macros features), schemars 0.8, tokio, indexrs-core
+**Tech Stack:** Rust, rmcp 0.1.5 (with server + transport-io + macros features), schemars 0.8, tokio, ferret-indexer-core
 
 ---
 
 ### Task 1: Add schemars dependency to Cargo.toml
 
 **Files:**
-- Modify: `indexrs-mcp/Cargo.toml`
+- Modify: `ferret-mcp/Cargo.toml`
 
 **Step 1: Add schemars dependency**
 
-Add `schemars = "0.8"` to `[dependencies]` in `indexrs-mcp/Cargo.toml`. Also ensure `rmcp` has the `macros` feature enabled. The final Cargo.toml should be:
+Add `schemars = "0.8"` to `[dependencies]` in `ferret-mcp/Cargo.toml`. Also ensure `rmcp` has the `macros` feature enabled. The final Cargo.toml should be:
 
 ```toml
 [package]
-name = "indexrs-mcp"
+name = "ferret-mcp"
 version = "0.1.0"
 edition = "2024"
 
@@ -32,19 +32,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-indexrs-core = { path = "../indexrs-core" }
+ferret-indexer-core = { path = "../ferret-indexer-core" }
 schemars = "0.8"
 ```
 
 **Step 2: Verify it compiles**
 
-Run: `cargo check -p indexrs-mcp`
+Run: `cargo check -p ferret-mcp`
 Expected: Compiles successfully
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-mcp/Cargo.toml
+git add ferret-mcp/Cargo.toml
 git commit -m "chore(mcp): add schemars and macros feature to dependencies"
 ```
 
@@ -53,12 +53,12 @@ git commit -m "chore(mcp): add schemars and macros feature to dependencies"
 ### Task 2: Create errors.rs module with MCP error helpers
 
 **Files:**
-- Create: `indexrs-mcp/src/errors.rs`
-- Modify: `indexrs-mcp/src/main.rs` (add `mod errors;`)
+- Create: `ferret-mcp/src/errors.rs`
+- Modify: `ferret-mcp/src/main.rs` (add `mod errors;`)
 
 **Step 1: Write tests for error helpers**
 
-Create `indexrs-mcp/src/errors.rs` with tests first (TDD). The error helpers return `CallToolResult` with `is_error: Some(true)` and text content matching the design doc error formats.
+Create `ferret-mcp/src/errors.rs` with tests first (TDD). The error helpers return `CallToolResult` with `is_error: Some(true)` and text content matching the design doc error formats.
 
 ```rust
 //! MCP error handling with helpful messages.
@@ -167,11 +167,11 @@ mod tests {
 
     #[test]
     fn test_repo_not_found_with_repos() {
-        let result = repo_not_found("foo", &["indexrs".into(), "myproject".into()]);
+        let result = repo_not_found("foo", &["ferret".into(), "myproject".into()]);
         assert_eq!(result.is_error, Some(true));
         let text = extract_text(&result);
         assert!(text.contains("\"foo\""));
-        assert!(text.contains("indexrs"));
+        assert!(text.contains("ferret"));
         assert!(text.contains("myproject"));
     }
 
@@ -284,18 +284,18 @@ Add `pub mod errors;` to `main.rs` (keep the existing main function).
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-mcp`
+Run: `cargo test -p ferret-mcp`
 Expected: All error tests pass
 
 **Step 4: Run clippy and fmt**
 
-Run: `cargo clippy -p indexrs-mcp -- -D warnings && cargo fmt --all -- --check`
+Run: `cargo clippy -p ferret-mcp -- -D warnings && cargo fmt --all -- --check`
 Expected: No warnings, formatting OK
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-mcp/src/errors.rs indexrs-mcp/src/main.rs
+git add ferret-mcp/src/errors.rs ferret-mcp/src/main.rs
 git commit -m "feat(mcp): add error helpers with helpful MCP error messages (HHC-65)"
 ```
 
@@ -304,14 +304,14 @@ git commit -m "feat(mcp): add error helpers with helpful MCP error messages (HHC
 ### Task 3: Create formatter.rs module with plain-text response formatting
 
 **Files:**
-- Create: `indexrs-mcp/src/formatter.rs`
-- Modify: `indexrs-mcp/src/main.rs` (add `pub mod formatter;`)
+- Create: `ferret-mcp/src/formatter.rs`
+- Modify: `ferret-mcp/src/main.rs` (add `pub mod formatter;`)
 
 This module formats search results as plain text optimized for LLM consumption (~40% fewer tokens than JSON), matching the design doc format.
 
 **Step 1: Write the formatter module with tests**
 
-Create `indexrs-mcp/src/formatter.rs`. The module provides:
+Create `ferret-mcp/src/formatter.rs`. The module provides:
 - `format_search_results()` - main search result formatter
 - `format_file_list()` - file listing formatter
 - `format_file_content()` - single file content formatter
@@ -348,32 +348,32 @@ See the code block below for the full implementation. Key details:
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-mcp`
+Run: `cargo test -p ferret-mcp`
 Expected: All tests pass
 
 **Step 4: Run clippy and fmt**
 
-Run: `cargo clippy -p indexrs-mcp -- -D warnings && cargo fmt --all -- --check`
+Run: `cargo clippy -p ferret-mcp -- -D warnings && cargo fmt --all -- --check`
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-mcp/src/formatter.rs indexrs-mcp/src/main.rs
+git add ferret-mcp/src/formatter.rs ferret-mcp/src/main.rs
 git commit -m "feat(mcp): add plain-text response formatter for LLM-optimized output (HHC-63)"
 ```
 
 ---
 
-### Task 4: Create tools/mod.rs placeholder and server.rs with IndexrsServer
+### Task 4: Create tools/mod.rs placeholder and server.rs with FerretServer
 
 **Files:**
-- Create: `indexrs-mcp/src/tools/mod.rs`
-- Create: `indexrs-mcp/src/server.rs`
-- Modify: `indexrs-mcp/src/main.rs` (add modules, update main function)
+- Create: `ferret-mcp/src/tools/mod.rs`
+- Create: `ferret-mcp/src/server.rs`
+- Modify: `ferret-mcp/src/main.rs` (add modules, update main function)
 
 **Step 1: Create empty tools module**
 
-Create `indexrs-mcp/src/tools/mod.rs` as an empty placeholder:
+Create `ferret-mcp/src/tools/mod.rs` as an empty placeholder:
 
 ```rust
 //! MCP tool implementations.
@@ -386,7 +386,7 @@ Create `indexrs-mcp/src/tools/mod.rs` as an empty placeholder:
 //! - reindex
 ```
 
-**Step 2: Create server.rs with IndexrsServer**
+**Step 2: Create server.rs with FerretServer**
 
 The server holds shared state (IndexState, root paths) and implements `ServerHandler` via the `#[tool(tool_box)]` macro. It declares tools and resources capabilities.
 
@@ -394,27 +394,27 @@ The server holds shared state (IndexState, root paths) and implements `ServerHan
 use std::sync::Arc;
 use rmcp::{ServerHandler, tool};
 use rmcp::model::{ServerCapabilities, ServerInfo, Implementation};
-use indexrs_core::IndexState;
+use ferret_indexer_core::IndexState;
 
 #[derive(Clone)]
-pub struct IndexrsServer {
+pub struct FerretServer {
     pub index_state: Arc<IndexState>,
     pub root_path: Option<std::path::PathBuf>,
 }
 
-impl IndexrsServer {
+impl FerretServer {
     pub fn new(index_state: Arc<IndexState>, root_path: Option<std::path::PathBuf>) -> Self {
         Self { index_state, root_path }
     }
 }
 
 #[tool(tool_box)]
-impl IndexrsServer {
+impl FerretServer {
     // Phase 2 agents will add tool methods here
 }
 
 #[tool(tool_box)]
-impl ServerHandler for IndexrsServer {
+impl ServerHandler for FerretServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
@@ -427,7 +427,7 @@ impl ServerHandler for IndexrsServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation {
-                name: "indexrs".to_owned(),
+                name: "ferret".to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
             },
             ..Default::default()
@@ -447,7 +447,7 @@ pub mod formatter;
 pub mod server;
 pub mod tools;
 
-use server::IndexrsServer;
+use server::FerretServer;
 
 #[tokio::main]
 async fn main() {
@@ -459,8 +459,8 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
 
-    let index_state = std::sync::Arc::new(indexrs_core::IndexState::new());
-    let server = IndexrsServer::new(index_state, None);
+    let index_state = std::sync::Arc::new(ferret_indexer_core::IndexState::new());
+    let server = FerretServer::new(index_state, None);
 
     let service = server
         .serve(stdio())
@@ -473,12 +473,12 @@ async fn main() {
 
 **Step 4: Verify it compiles**
 
-Run: `cargo check -p indexrs-mcp`
+Run: `cargo check -p ferret-mcp`
 Expected: Compiles
 
 **Step 5: Run clippy and fmt**
 
-Run: `cargo clippy -p indexrs-mcp -- -D warnings && cargo fmt --all -- --check`
+Run: `cargo clippy -p ferret-mcp -- -D warnings && cargo fmt --all -- --check`
 
 **Step 6: Run all workspace tests**
 
@@ -488,8 +488,8 @@ Expected: All tests pass
 **Step 7: Commit**
 
 ```bash
-git add indexrs-mcp/src/server.rs indexrs-mcp/src/tools/mod.rs indexrs-mcp/src/main.rs
-git commit -m "feat(mcp): set up rmcp server with stdio transport and IndexrsServer (HHC-58)"
+git add ferret-mcp/src/server.rs ferret-mcp/src/tools/mod.rs ferret-mcp/src/main.rs
+git commit -m "feat(mcp): set up rmcp server with stdio transport and FerretServer (HHC-58)"
 ```
 
 ---

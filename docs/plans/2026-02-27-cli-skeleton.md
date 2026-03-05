@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Create the CLI argument parsing skeleton with clap for all indexrs subcommands.
+**Goal:** Create the CLI argument parsing skeleton with clap for all ferret subcommands.
 
 **Architecture:** Two-file structure — args.rs defines all clap types, main.rs dispatches. Subcommands are stubs that print TODO messages.
 
@@ -10,12 +10,12 @@
 
 ---
 
-## Task 1: Set up workspace and indexrs-cli crate structure
+## Task 1: Set up workspace and ferret-indexer-cli crate structure
 
-Create the cargo workspace with `indexrs-cli` as a member. Create the directory structure:
+Create the cargo workspace with `ferret-indexer-cli` as a member. Create the directory structure:
 
 ```
-indexrs-cli/
+ferret-indexer-cli/
 ├── Cargo.toml
 └── src/
     ├── main.rs
@@ -32,20 +32,20 @@ Replace the single-package Cargo.toml with a workspace root:
 [workspace]
 resolver = "2"
 members = [
-    "indexrs-cli",
+    "ferret-indexer-cli",
 ]
 ```
 
-### 1b. Create `indexrs-cli/Cargo.toml`
+### 1b. Create `ferret-indexer-cli/Cargo.toml`
 
-**File:** `indexrs-cli/Cargo.toml`
+**File:** `ferret-indexer-cli/Cargo.toml`
 
 ```toml
 [package]
-name = "indexrs-cli"
+name = "ferret-indexer-cli"
 version = "0.1.0"
 edition = "2024"
-description = "CLI binary for indexrs local code search"
+description = "CLI binary for ferret local code search"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "color"] }
@@ -54,8 +54,8 @@ tokio = { version = "1", features = ["full"] }
 
 ### 1c. Create placeholder files
 
-- `indexrs-cli/src/main.rs` — minimal `fn main() {}`
-- `indexrs-cli/src/args.rs` — empty module
+- `ferret-indexer-cli/src/main.rs` — minimal `fn main() {}`
+- `ferret-indexer-cli/src/args.rs` — empty module
 
 ### 1d. Remove old `src/main.rs`
 
@@ -64,7 +64,7 @@ The old single-crate src/ is no longer needed with the workspace layout.
 ### Verify
 
 ```
-cargo check -p indexrs-cli
+cargo check -p ferret-indexer-cli
 ```
 
 Expected: compiles successfully.
@@ -73,7 +73,7 @@ Expected: compiles successfully.
 
 ## Task 2: Define CLI args in `args.rs`
 
-**File:** `indexrs-cli/src/args.rs`
+**File:** `ferret-indexer-cli/src/args.rs`
 
 Define all clap derive structs and enums:
 
@@ -93,14 +93,14 @@ All fields should have doc comments (these become help text). Use appropriate cl
 ### Verify
 
 ```
-cargo check -p indexrs-cli
+cargo check -p ferret-indexer-cli
 ```
 
 ---
 
 ## Task 3: Wire up `main.rs` with dispatch
 
-**File:** `indexrs-cli/src/main.rs`
+**File:** `ferret-indexer-cli/src/main.rs`
 
 1. `mod args;` to import the args module
 2. Parse CLI with `Cli::parse()`
@@ -110,17 +110,17 @@ cargo check -p indexrs-cli
 ### Verify
 
 ```
-cargo check -p indexrs-cli
-cargo run -p indexrs-cli -- --help
-cargo run -p indexrs-cli -- search --help
-cargo run -p indexrs-cli -- search "test"
-cargo run -p indexrs-cli -- files --help
-cargo run -p indexrs-cli -- symbols --help
-cargo run -p indexrs-cli -- preview --help
-cargo run -p indexrs-cli -- preview somefile.rs
-cargo run -p indexrs-cli -- status
-cargo run -p indexrs-cli -- reindex
-cargo run -p indexrs-cli -- reindex --full
+cargo check -p ferret-indexer-cli
+cargo run -p ferret-indexer-cli -- --help
+cargo run -p ferret-indexer-cli -- search --help
+cargo run -p ferret-indexer-cli -- search "test"
+cargo run -p ferret-indexer-cli -- files --help
+cargo run -p ferret-indexer-cli -- symbols --help
+cargo run -p ferret-indexer-cli -- preview --help
+cargo run -p ferret-indexer-cli -- preview somefile.rs
+cargo run -p ferret-indexer-cli -- status
+cargo run -p ferret-indexer-cli -- reindex
+cargo run -p ferret-indexer-cli -- reindex --full
 ```
 
 Expected:
@@ -135,12 +135,12 @@ Expected:
 
 Stage and commit:
 - `Cargo.toml` (workspace root)
-- `indexrs-cli/Cargo.toml`
-- `indexrs-cli/src/args.rs`
-- `indexrs-cli/src/main.rs`
+- `ferret-indexer-cli/Cargo.toml`
+- `ferret-indexer-cli/src/args.rs`
+- `ferret-indexer-cli/src/main.rs`
 - `docs/plans/2026-02-27-cli-skeleton.md`
 
 Remove old files:
 - `src/main.rs` (no longer needed)
 
-Commit message: "Add CLI skeleton with clap for indexrs-cli"
+Commit message: "Add CLI skeleton with clap for ferret-indexer-cli"

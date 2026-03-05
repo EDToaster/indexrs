@@ -2,7 +2,7 @@
 
 ## Overview
 
-indexrs exposes its code index to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io). The MCP interface is the primary way LLMs interact with the index -- it must be optimized for token efficiency, discoverability, and practical usefulness in coding workflows.
+ferret exposes its code index to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io). The MCP interface is the primary way LLMs interact with the index -- it must be optimized for token efficiency, discoverability, and practical usefulness in coding workflows.
 
 Transport: stdio (for local integration with Claude Code, Cursor, etc.)
 
@@ -299,7 +299,7 @@ Report on the current state of the index.
 {
   "name": "index_status",
   "title": "Index Status",
-  "description": "Get the current status of the indexrs service, including which repositories are indexed, how many files and symbols are tracked, last index time, and whether reindexing is in progress.",
+  "description": "Get the current status of the ferret service, including which repositories are indexed, how many files and symbols are tracked, last index time, and whether reindexing is in progress.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -319,11 +319,11 @@ Report on the current state of the index.
 **Response format (overview):**
 
 ```
-indexrs status: healthy
+ferret status: healthy
 Uptime: 4h 32m
 
 Repositories:
-  indexrs       /Users/howard/src/indexrs      12 files    248 symbols   indexed 2m ago
+  ferret       /Users/howard/src/ferret      12 files    248 symbols   indexed 2m ago
   myproject     /Users/howard/src/myproject   1,847 files  42,310 symbols indexed 5m ago
 
 Total: 2 repos, 1,859 files, 42,558 symbols
@@ -402,41 +402,41 @@ Resources provide direct access to indexed data via URI. These are useful for LL
 
 | URI | Description |
 |-----|-------------|
-| `indexrs://status` | Overall index status (same as `index_status` tool with no args) |
+| `ferret://status` | Overall index status (same as `index_status` tool with no args) |
 
 ### 2.2 Resource Templates
 
 | URI Template | Description | MIME Type |
 |---|---|---|
-| `indexrs://repo/{repo}/file/{path}` | Contents of a specific indexed file | Detected per-file (e.g., `text/x-rust`) |
-| `indexrs://repo/{repo}/tree` | Directory tree listing of a repository | `text/plain` |
-| `indexrs://repo/{repo}/symbols` | All symbols in a repository (outline) | `text/plain` |
-| `indexrs://repo/{repo}/status` | Detailed status of a specific repository | `text/plain` |
+| `ferret://repo/{repo}/file/{path}` | Contents of a specific indexed file | Detected per-file (e.g., `text/x-rust`) |
+| `ferret://repo/{repo}/tree` | Directory tree listing of a repository | `text/plain` |
+| `ferret://repo/{repo}/symbols` | All symbols in a repository (outline) | `text/plain` |
+| `ferret://repo/{repo}/status` | Detailed status of a specific repository | `text/plain` |
 
 **Resource template definitions:**
 
 ```json
 [
   {
-    "uriTemplate": "indexrs://repo/{repo}/file/{+path}",
+    "uriTemplate": "ferret://repo/{repo}/file/{+path}",
     "name": "Indexed File",
     "description": "Contents of a file as stored in the index. The path is relative to the repository root.",
     "mimeType": "text/plain"
   },
   {
-    "uriTemplate": "indexrs://repo/{repo}/tree",
+    "uriTemplate": "ferret://repo/{repo}/tree",
     "name": "Repository Tree",
     "description": "Directory tree listing of all indexed files in a repository. Useful for understanding project structure.",
     "mimeType": "text/plain"
   },
   {
-    "uriTemplate": "indexrs://repo/{repo}/symbols",
+    "uriTemplate": "ferret://repo/{repo}/symbols",
     "name": "Repository Symbols",
     "description": "Outline of all symbols (functions, types, constants, etc.) in a repository, grouped by file.",
     "mimeType": "text/plain"
   },
   {
-    "uriTemplate": "indexrs://repo/{repo}/status",
+    "uriTemplate": "ferret://repo/{repo}/status",
     "name": "Repository Index Status",
     "description": "Detailed indexing status for a specific repository.",
     "mimeType": "text/plain"
@@ -444,7 +444,7 @@ Resources provide direct access to indexed data via URI. These are useful for LL
 ]
 ```
 
-**Example: `indexrs://repo/myproject/tree` response:**
+**Example: `ferret://repo/myproject/tree` response:**
 
 ```
 myproject/ (1,847 files)
@@ -471,7 +471,7 @@ myproject/ (1,847 files)
   Cargo.lock
 ```
 
-**Example: `indexrs://repo/myproject/symbols` response:**
+**Example: `ferret://repo/myproject/symbols` response:**
 
 ```
 myproject symbols (42,310 total)
@@ -569,7 +569,7 @@ Errors are returned using MCP's `isError: true` response field with a human-read
 
 | Error | When | Response |
 |---|---|---|
-| `repository_not_found` | `repo` parameter doesn't match any indexed repository | `Error: Repository "foo" not found. Indexed repositories: indexrs, myproject` |
+| `repository_not_found` | `repo` parameter doesn't match any indexed repository | `Error: Repository "foo" not found. Indexed repositories: ferret, myproject` |
 | `file_not_found` | `get_file` path doesn't exist in the index | `Error: File "src/missing.rs" not found in repository "myproject". Did you mean "src/main.rs"?` |
 | `invalid_query` | Malformed regex, unbalanced parens, empty query | `Error: Invalid regex in query: unmatched '(' at position 5` |
 | `invalid_parameter` | Out-of-range parameter value | `Error: context_lines must be between 0 and 10, got 25` |
@@ -596,13 +596,13 @@ This is a warning, not an error -- results are still returned.
 
 ### Example 1: Finding and Understanding a Function
 
-An LLM is asked "how does the trigram search work in indexrs?"
+An LLM is asked "how does the trigram search work in ferret?"
 
 **Step 1:** Search for the relevant code.
 
 ```
 Tool: search_symbols
-Arguments: { "query": "trigram", "repo": "indexrs" }
+Arguments: { "query": "trigram", "repo": "ferret" }
 ```
 
 Response:
@@ -634,7 +634,7 @@ Found 5 symbols matching "trigram"
 
 ```
 Tool: get_file
-Arguments: { "path": "src/search/engine.rs", "repo": "indexrs", "start_line": 10, "end_line": 60 }
+Arguments: { "path": "src/search/engine.rs", "repo": "ferret", "start_line": 10, "end_line": 60 }
 ```
 
 Response:
@@ -666,7 +666,7 @@ Tool: search_code
 Arguments: {
   "query": "/\\.unwrap\\(\\)/",
   "language": "rust",
-  "repo": "indexrs",
+  "repo": "ferret",
   "context_lines": 1,
   "max_results": 50
 }
@@ -793,7 +793,7 @@ GitHub code search uses qualifiers (`symbol:`, `path:`, `content:`) within a sin
 
 ### Why `get_file` instead of just using resources?
 
-Both are provided. Resources (`indexrs://repo/{repo}/file/{+path}`) work well for proactive context loading. The `get_file` tool adds line-range support, which is important for large files -- an LLM can request just lines 40-80 after seeing a search result pointing to line 44.
+Both are provided. Resources (`ferret://repo/{repo}/file/{+path}`) work well for proactive context loading. The `get_file` tool adds line-range support, which is important for large files -- an LLM can request just lines 40-80 after seeing a search result pointing to line 44.
 
 ### Why offset pagination over cursor-based?
 

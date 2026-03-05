@@ -1,6 +1,6 @@
 # Web Interface Design
 
-This document covers the REST API and web UI for indexrs. The web interface is designed for local use by a single developer -- it should feel fast, lightweight, and keyboard-driven.
+This document covers the REST API and web UI for ferret. The web interface is designed for local use by a single developer -- it should feel fast, lightweight, and keyboard-driven.
 
 IMPORTANT: make sure every dependency added here is up to date!
 
@@ -42,7 +42,7 @@ GraphQL adds complexity (schema definitions, resolver boilerplate, client librar
 
 ### Proxy model: web server talks to per-repo daemons
 
-The web server does **not** own `SegmentManager` instances. Instead, it proxies all search, file, and index operations to the existing per-repo daemons over Unix sockets. This avoids divergence between the daemon and web server (two `SegmentManager` instances fighting over the same `.indexrs/` directory) and gets mutual exclusion for free via the daemon's internal writer mutex.
+The web server does **not** own `SegmentManager` instances. Instead, it proxies all search, file, and index operations to the existing per-repo daemons over Unix sockets. This avoids divergence between the daemon and web server (two `SegmentManager` instances fighting over the same `.ferret_index/` directory) and gets mutual exclusion for free via the daemon's internal writer mutex.
 
 ```
 Browser → HTTP → Web Server → Unix Socket → Daemon → SegmentManager
@@ -52,7 +52,7 @@ CLI ─────────────────────────�
                                 (unchanged)
 ```
 
-On startup, the web server reads the repo registry config (`~/.config/indexrs/repos.toml`, see `docs/design/multi-repo.md`) and calls `ensure_daemon()` for each registered repo. The web server holds a map of `repo_name → repo_root` and opens a new Unix socket connection per request.
+On startup, the web server reads the repo registry config (`~/.config/ferret/repos.toml`, see `docs/design/multi-repo.md`) and calls `ensure_daemon()` for each registered repo. The web server holds a map of `repo_name → repo_root` and opens a new Unix socket connection per request.
 
 The CLI is unaffected -- it continues to auto-start its own per-repo daemon via `ensure_daemon()` as it does today.
 
@@ -146,7 +146,7 @@ Multiple filters are ANDed. Bare text without a filter prefix is treated as a li
   },
   "results": [
     {
-      "repo": "indexrs",
+      "repo": "ferret",
       "path": "src/main.rs",
       "language": "Rust",
       "matches": [
@@ -192,10 +192,10 @@ Each SSE event:
 
 ```
 event: result
-data: {"repo":"indexrs","path":"src/main.rs","matches":[...]}
+data: {"repo":"ferret","path":"src/main.rs","matches":[...]}
 
 event: result
-data: {"repo":"indexrs","path":"src/server.rs","matches":[...]}
+data: {"repo":"ferret","path":"src/server.rs","matches":[...]}
 
 event: stats
 data: {"total_matches":142,"files_searched":8923,"duration_ms":12}
@@ -224,7 +224,7 @@ Retrieve a single file's contents with syntax highlighting metadata.
 
 ```json
 {
-  "repo": "indexrs",
+  "repo": "ferret",
   "path": "src/main.rs",
   "language": "Rust",
   "size_bytes": 1234,
@@ -264,8 +264,8 @@ Returns the current state of the index for a specific repo.
   "status": "ready",
   "repos": [
     {
-      "name": "indexrs",
-      "path": "/Users/howard/src/indexrs",
+      "name": "ferret",
+      "path": "/Users/howard/src/ferret",
       "files_indexed": 156,
       "last_indexed_at": "2026-02-27T10:30:00Z",
       "index_duration_ms": 450
@@ -306,13 +306,13 @@ Trigger a manual reindex for a specific repo. Normally the file watcher handles 
 ```json
 {
   "message": "Reindex started",
-  "repo": "indexrs"
+  "repo": "ferret"
 }
 ```
 
 #### `GET /api/v1/repos`
 
-List registered repositories (from `~/.config/indexrs/repos.toml`). Includes live status from each repo's daemon.
+List registered repositories (from `~/.config/ferret/repos.toml`). Includes live status from each repo's daemon.
 
 **Response: `200 OK`**
 
@@ -320,8 +320,8 @@ List registered repositories (from `~/.config/indexrs/repos.toml`). Includes liv
 {
   "repos": [
     {
-      "name": "indexrs",
-      "path": "/Users/howard/src/indexrs",
+      "name": "ferret",
+      "path": "/Users/howard/src/ferret",
       "status": "ready",
       "files_indexed": 156
     },
@@ -350,7 +350,7 @@ Register a repository. Writes to the config file and starts a daemon for it.
 }
 ```
 
-If `name` is omitted, the directory name is used. The repo must already be initialized (`indexrs init`).
+If `name` is omitted, the directory name is used. The repo must already be initialized (`ferret init`).
 
 **Response: `201 Created`**
 
@@ -397,7 +397,7 @@ The UI has two views: Search (default) and File Preview.
 
 ```
 +----------------------------------------------------------------------+
-| indexrs                           [v indexrs ▾] [ready] [2 repos]    |
+| ferret                           [v ferret ▾] [ready] [2 repos]    |
 +----------------------------------------------------------------------+
 | [/ ] Search: language:rust fn handle_______________|                 |
 |      [Rust] [x]  [path:src/] [x]                                    |
@@ -447,7 +447,7 @@ Navigated to by clicking a file path in search results, or via `/api/v1/files/..
 
 ```
 +----------------------------------------------------------------------+
-| indexrs                                          [ready] [2 repos]   |
+| ferret                                          [ready] [2 repos]   |
 +----------------------------------------------------------------------+
 | < Back to results    src/server/handler.rs               Rust  106L  |
 +----------------------------------------------------------------------+
@@ -626,13 +626,13 @@ This keeps deployment to a single binary. No separate static file directory to m
 
 The web server binds to `127.0.0.1` only (not `0.0.0.0`) since this is a local tool. Default port is `4040` (configurable). On startup it:
 
-1. Reads the repo registry from `~/.config/indexrs/repos.toml`
+1. Reads the repo registry from `~/.config/ferret/repos.toml`
 2. Calls `ensure_daemon()` for each registered repo (auto-starts daemons as needed)
 3. Prints startup info:
 
 ```
-indexrs web interface: http://localhost:4040
-  repos: indexrs, frontend (2 repos)
+ferret web interface: http://localhost:4040
+  repos: ferret, frontend (2 repos)
 ```
 
 ### axum router sketch

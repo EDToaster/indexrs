@@ -32,7 +32,7 @@ The fix refactors `apply_changes` into a three-phase pipeline that mirrors `init
 The zero-copy `MetadataReader` currently only has `get(file_id)` and `iter_all()`. We need a lightweight path-based lookup that avoids deserializing the full entry — just extract path bytes and compare, returning the `FileId` on match.
 
 **Files:**
-- Modify: `indexrs-core/src/metadata.rs` (add method + tests)
+- Modify: `ferret-indexer-core/src/metadata.rs` (add method + tests)
 
 **Step 1: Write the failing test**
 
@@ -59,7 +59,7 @@ fn test_reader_find_file_id_by_path() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_reader_find_file_id_by_path`
+Run: `cargo test -p ferret-indexer-core -- test_reader_find_file_id_by_path`
 Expected: FAIL — method does not exist
 
 **Step 3: Write the implementation**
@@ -99,7 +99,7 @@ pub fn find_file_id_by_path(&self, path: &str) -> Option<FileId> {
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-core -- test_reader_find_file_id_by_path`
+Run: `cargo test -p ferret-indexer-core -- test_reader_find_file_id_by_path`
 Expected: PASS
 
 **Step 5: Commit**
@@ -115,7 +115,7 @@ feat(core): add find_file_id_by_path to MetadataReader
 The current `find_file_in_segments` is called once per change, each time scanning all entries in all segments. Replace it with a batch approach: build a HashMap<path, Vec<(seg_idx, FileId)>> for all paths-to-tombstone in one pass over the segments.
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs` (replace `find_file_in_segments` + add test)
+- Modify: `ferret-indexer-core/src/segment_manager.rs` (replace `find_file_in_segments` + add test)
 
 **Step 1: Write the failing test**
 
@@ -125,7 +125,7 @@ Add a new test to the `mod tests` block in `segment_manager.rs`:
 #[test]
 fn test_batch_find_files_in_segments() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
 
     let manager = SegmentManager::new(&base_dir).unwrap();
 
@@ -175,7 +175,7 @@ fn test_batch_find_files_in_segments() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_batch_find_files_in_segments`
+Run: `cargo test -p ferret-indexer-core -- test_batch_find_files_in_segments`
 Expected: FAIL — method does not exist
 
 **Step 3: Write the implementation**
@@ -260,7 +260,7 @@ for change in changes {
 
 **Step 4: Run tests to verify everything passes**
 
-Run: `cargo test -p indexrs-core -- test_batch_find_files_in_segments test_apply_changes`
+Run: `cargo test -p ferret-indexer-core -- test_batch_find_files_in_segments test_apply_changes`
 Expected: ALL PASS — batch lookup produces identical results
 
 **Step 5: Run full test suite for regressions**
@@ -281,7 +281,7 @@ perf(core): replace O(N×M) tombstone lookup with batch HashMap scan
 The file reading loop currently runs sequentially. Refactor it to use `rayon::par_iter()` for the I/O-bound file reading and filtering phase, then collect results. Progress reporting moves to after the parallel phase.
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs` (both `apply_changes` and `apply_changes_with_progress`)
+- Modify: `ferret-indexer-core/src/segment_manager.rs` (both `apply_changes` and `apply_changes_with_progress`)
 
 **Step 1: Write the failing test (performance regression test)**
 
@@ -291,7 +291,7 @@ Add a test that verifies `apply_changes` handles a moderate batch correctly (ens
 #[test]
 fn test_apply_changes_bulk_creates() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
 
@@ -318,7 +318,7 @@ fn test_apply_changes_bulk_creates() {
 #[test]
 fn test_apply_changes_bulk_mixed() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
 
@@ -379,7 +379,7 @@ fn test_apply_changes_bulk_mixed() {
 
 **Step 2: Run tests to confirm they pass with current code (baseline)**
 
-Run: `cargo test -p indexrs-core -- test_apply_changes_bulk`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes_bulk`
 Expected: PASS (these test correctness, not speed)
 
 **Step 3: Refactor the file-reading loop to use rayon**
@@ -471,7 +471,7 @@ Note: `on_progress` must be `Fn` (not `FnMut`) and `Send + Sync` — it already 
 
 **Step 4: Run all existing tests**
 
-Run: `cargo test -p indexrs-core -- test_apply_changes`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes`
 Expected: ALL PASS
 
 **Step 5: Commit**
@@ -487,7 +487,7 @@ perf(core): parallelize file reading in apply_changes with rayon
 Currently both `apply_changes` methods build a single segment for all new files. For large batches (thousands of files), this means a single-threaded build. Refactor to use the same budget-based batching + parallel rayon builds as `index_files_with_progress`.
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 **Step 1: Write the failing test**
 
@@ -495,7 +495,7 @@ Currently both `apply_changes` methods build a single segment for all new files.
 #[test]
 fn test_apply_changes_large_batch_creates_multiple_segments() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
 
@@ -545,7 +545,7 @@ fn test_apply_changes_large_batch_creates_multiple_segments() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_apply_changes_large_batch_creates_multiple_segments`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes_large_batch_creates_multiple_segments`
 Expected: FAIL — method `apply_changes_with_budget` does not exist
 
 **Step 3: Write the implementation**
@@ -599,7 +599,7 @@ For `apply_changes_with_progress`, use `build_with_progress` with an `AtomicUsiz
 
 **Step 4: Run tests**
 
-Run: `cargo test -p indexrs-core -- test_apply_changes`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes`
 Expected: ALL PASS
 
 **Step 5: Commit**
@@ -615,7 +615,7 @@ perf(core): add budget-based parallel segment building to apply_changes
 Add tests that exercise edge cases and verify the optimizations don't break correctness.
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs` (add tests)
+- Modify: `ferret-indexer-core/src/segment_manager.rs` (add tests)
 
 **Step 1: Write the tests**
 
@@ -623,7 +623,7 @@ Add tests that exercise edge cases and verify the optimizations don't break corr
 #[test]
 fn test_apply_changes_skips_directories() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(repo_dir.join("subdir")).unwrap();
 
@@ -651,7 +651,7 @@ fn test_apply_changes_skips_directories() {
 #[test]
 fn test_apply_changes_skips_missing_files() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
 
@@ -672,7 +672,7 @@ fn test_apply_changes_skips_missing_files() {
 #[test]
 fn test_apply_changes_file_in_multiple_segments() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
 
@@ -728,11 +728,11 @@ fn test_apply_changes_with_progress_skips_directories() {
 
     let dir = tempfile::tempdir().unwrap();
     let repo_dir = dir.path();
-    let indexrs_dir = repo_dir.join(".indexrs");
-    fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = repo_dir.join(".ferret_index");
+    fs::create_dir_all(ferret_dir.join("segments")).unwrap();
     fs::create_dir_all(repo_dir.join("a_dir")).unwrap();
 
-    let manager = SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = SegmentManager::new(&ferret_dir).unwrap();
 
     let changes = vec![ChangeEvent {
         path: PathBuf::from("a_dir"),
@@ -754,7 +754,7 @@ fn test_apply_changes_with_progress_skips_directories() {
 #[test]
 fn test_apply_changes_empty_is_noop() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
 
@@ -767,7 +767,7 @@ fn test_apply_changes_empty_is_noop() {
 #[test]
 fn test_apply_changes_skips_binary_files() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
 
@@ -801,7 +801,7 @@ fn test_apply_changes_skips_binary_files() {
 
 **Step 2: Run all tests**
 
-Run: `cargo test -p indexrs-core -- test_apply_changes`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes`
 Expected: ALL PASS
 
 **Step 3: Run full workspace tests + clippy**
@@ -832,7 +832,7 @@ Expected: ALL PASS
 **Step 2: Manual smoke test**
 
 ```bash
-cargo run -p indexrs-cli -- reindex --repo ~/carrot
+cargo run -p ferret-indexer-cli -- reindex --repo ~/carrot
 ```
 
 Expected: Progress bar appears promptly after "Found N changes", reindex completes.

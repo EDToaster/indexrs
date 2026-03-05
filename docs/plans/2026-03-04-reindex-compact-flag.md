@@ -1,8 +1,8 @@
-# `--compact` Flag for `indexrs reindex` Implementation Plan
+# `--compact` Flag for `ferret reindex` Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a `--compact` CLI flag to `indexrs reindex` that forces compaction after reindex, mutually exclusive with `--full`.
+**Goal:** Add a `--compact` CLI flag to `ferret reindex` that forces compaction after reindex, mutually exclusive with `--full`.
 
 **Architecture:** Thread a `force_compact: bool` from CLI args → `DaemonRequest::Reindex` → `run_catchup_with_progress()` → compaction logic. When `true`, always compact after reindex regardless of `should_compact()` heuristic.
 
@@ -13,7 +13,7 @@
 ### Task 1: Add `compact` field to `DaemonRequest::Reindex`
 
 **Files:**
-- Modify: `indexrs-daemon/src/types.rs:91`
+- Modify: `ferret-indexer-daemon/src/types.rs:91`
 
 **Step 1: Add the field**
 
@@ -32,14 +32,14 @@ to:
 
 `#[serde(default)]` ensures backward compatibility — a bare `{"type":"Reindex"}` without `compact` deserializes `compact` as `false`.
 
-**Step 2: Run `cargo check -p indexrs-daemon`**
+**Step 2: Run `cargo check -p ferret-indexer-daemon`**
 
 Expected: PASS (types only; callers haven't been updated yet, but this crate compiles standalone).
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-daemon/src/types.rs
+git add ferret-indexer-daemon/src/types.rs
 git commit -m "feat(daemon): add compact field to Reindex request"
 ```
 
@@ -48,12 +48,12 @@ git commit -m "feat(daemon): add compact field to Reindex request"
 ### Task 2: Add `force_compact` parameter to `run_catchup_with_progress`
 
 **Files:**
-- Modify: `indexrs-core/src/catchup.rs:29-44` (function signatures)
-- Modify: `indexrs-core/src/lib.rs:47` (re-export unchanged, but verify)
+- Modify: `ferret-indexer-core/src/catchup.rs:29-44` (function signatures)
+- Modify: `ferret-indexer-core/src/lib.rs:47` (re-export unchanged, but verify)
 
 **Step 1: Write a failing test**
 
-Add to `indexrs-core/src/catchup.rs` in the `#[cfg(test)] mod tests` block:
+Add to `ferret-indexer-core/src/catchup.rs` in the `#[cfg(test)] mod tests` block:
 
 ```rust
     #[test]
@@ -62,21 +62,21 @@ Add to `indexrs-core/src/catchup.rs` in the `#[cfg(test)] mod tests` block:
         let repo = dir.path();
         init_git_repo(repo);
 
-        let indexrs_dir = repo.join(".indexrs");
-        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-        let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+        let ferret_dir = repo.join(".ferret_index");
+        fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+        let manager = Arc::new(SegmentManager::new(&ferret_dir).unwrap());
 
         // Write checkpoint at current HEAD.
         let git = GitChangeDetector::new(repo.to_path_buf());
         let head = git.get_head_sha().unwrap();
         let cp = Checkpoint::new(Some(head), 0);
-        write_checkpoint(&indexrs_dir, &cp).unwrap();
+        write_checkpoint(&ferret_dir, &cp).unwrap();
 
         // Create a file so there's a change to apply.
         fs::write(repo.join("compact_test.rs"), "fn compact() {}").unwrap();
 
         let events = std::sync::Mutex::new(Vec::new());
-        let _changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, true, |ev| {
+        let _changes = run_catchup_with_progress(repo, &ferret_dir, &manager, true, |ev| {
             events.lock().unwrap().push(ev);
         })
         .unwrap();
@@ -92,7 +92,7 @@ Add to `indexrs-core/src/catchup.rs` in the `#[cfg(test)] mod tests` block:
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_catchup_force_compact_emits_compacting_event`
+Run: `cargo test -p ferret-indexer-core -- test_catchup_force_compact_emits_compacting_event`
 Expected: FAIL — `run_catchup_with_progress` doesn't accept `force_compact` parameter yet.
 
 **Step 3: Update function signatures**
@@ -101,10 +101,10 @@ In `catchup.rs`, update `run_catchup` (line 29) to pass `false`:
 ```rust
 pub fn run_catchup(
     repo_root: &Path,
-    indexrs_dir: &Path,
+    ferret_dir: &Path,
     manager: &Arc<SegmentManager>,
 ) -> Result<Vec<ChangeEvent>> {
-    run_catchup_with_progress(repo_root, indexrs_dir, manager, false, |_| {})
+    run_catchup_with_progress(repo_root, ferret_dir, manager, false, |_| {})
 }
 ```
 
@@ -112,7 +112,7 @@ Update `run_catchup_with_progress` (line 39) to accept `force_compact`:
 ```rust
 pub fn run_catchup_with_progress<F: Fn(ReindexProgress) + Send + Sync>(
     repo_root: &Path,
-    indexrs_dir: &Path,
+    ferret_dir: &Path,
     manager: &Arc<SegmentManager>,
     force_compact: bool,
     on_progress: F,
@@ -147,18 +147,18 @@ Also: when `force_compact` is true but changes were empty (the `NoChanges` branc
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-core -- test_catchup_force_compact`
+Run: `cargo test -p ferret-indexer-core -- test_catchup_force_compact`
 Expected: PASS
 
 **Step 5: Run all catchup tests to check no regressions**
 
-Run: `cargo test -p indexrs-core -- test_catchup`
+Run: `cargo test -p ferret-indexer-core -- test_catchup`
 Expected: All PASS (existing tests pass `false` via `run_catchup`).
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-core/src/catchup.rs
+git add ferret-indexer-core/src/catchup.rs
 git commit -m "feat(core): add force_compact param to run_catchup_with_progress"
 ```
 
@@ -167,7 +167,7 @@ git commit -m "feat(core): add force_compact param to run_catchup_with_progress"
 ### Task 3: Update daemon handler to pass `compact` through
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:1338-1351`
+- Modify: `ferret-indexer-cli/src/daemon.rs:1338-1351`
 
 **Step 1: Update the match arm**
 
@@ -182,11 +182,11 @@ to:
 
 Change line 1347 from:
 ```rust
-                    indexrs_core::run_catchup_with_progress(&repo, &idir, &mgr, |ev| {
+                    ferret_indexer_core::run_catchup_with_progress(&repo, &idir, &mgr, |ev| {
 ```
 to:
 ```rust
-                    indexrs_core::run_catchup_with_progress(&repo, &idir, &mgr, compact, |ev| {
+                    ferret_indexer_core::run_catchup_with_progress(&repo, &idir, &mgr, compact, |ev| {
 ```
 
 **Step 2: Verify compilation**
@@ -197,7 +197,7 @@ Expected: PASS
 **Step 3: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): pass compact flag from Reindex request to catchup"
 ```
 
@@ -206,9 +206,9 @@ git commit -m "feat(daemon): pass compact flag from Reindex request to catchup"
 ### Task 4: Add `--compact` CLI flag (mutually exclusive with `--full`)
 
 **Files:**
-- Modify: `indexrs-cli/src/args.rs:166-171`
-- Modify: `indexrs-cli/src/main.rs:242-251`
-- Modify: `indexrs-cli/src/reindex_display.rs:15-28`
+- Modify: `ferret-indexer-cli/src/args.rs:166-171`
+- Modify: `ferret-indexer-cli/src/main.rs:242-251`
+- Modify: `ferret-indexer-cli/src/reindex_display.rs:15-28`
 
 **Step 1: Add the flag to args.rs**
 
@@ -296,7 +296,7 @@ Expected: PASS
 
 **Step 5: Verify mutual exclusivity**
 
-Run: `cargo run -p indexrs-cli -- reindex --full --compact`
+Run: `cargo run -p ferret-indexer-cli -- reindex --full --compact`
 Expected: clap error: "the argument '--full' cannot be used with '--compact'"
 
 **Step 6: Run all tests**
@@ -312,7 +312,7 @@ Expected: No warnings
 **Step 8: Commit**
 
 ```bash
-git add indexrs-cli/src/args.rs indexrs-cli/src/main.rs indexrs-cli/src/reindex_display.rs
+git add ferret-indexer-cli/src/args.rs ferret-indexer-cli/src/main.rs ferret-indexer-cli/src/reindex_display.rs
 git commit -m "feat(cli): add --compact flag to reindex command"
 ```
 

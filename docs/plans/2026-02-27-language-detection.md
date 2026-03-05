@@ -4,7 +4,7 @@
 
 **Goal:** Expand the `Language` enum to support 25+ additional languages with extension-based detection, a `from_path` convenience method, and full backward compatibility.
 
-**Architecture:** The existing `Language` enum in `indexrs-core/src/types.rs` gets new variants appended. The `to_u16`/`from_u16` mapping preserves existing values 0-10 and 0xFFFF, assigning new values starting at 11. A new `from_path()` method extracts the extension from a `Path` and delegates to the existing `from_extension()`. Filename-based detection (e.g., `Dockerfile`) is handled in `from_path()` since these files have no extension.
+**Architecture:** The existing `Language` enum in `ferret-indexer-core/src/types.rs` gets new variants appended. The `to_u16`/`from_u16` mapping preserves existing values 0-10 and 0xFFFF, assigning new values starting at 11. A new `from_path()` method extracts the extension from a `Path` and delegates to the existing `from_extension()`. Filename-based detection (e.g., `Dockerfile`) is handled in `from_path()` since these files have no extension.
 
 **Tech Stack:** Rust, `std::path::Path`
 
@@ -13,7 +13,7 @@
 ### Task 1: Add new Language variants and update u16 encoding
 
 **Files:**
-- Modify: `indexrs-core/src/types.rs:78-133` (enum definition, `to_u16`, `from_u16`)
+- Modify: `ferret-indexer-core/src/types.rs:78-133` (enum definition, `to_u16`, `from_u16`)
 
 **Step 1: Write the failing test for new variants u16 roundtrip**
 
@@ -75,7 +75,7 @@ fn test_backward_compat_u16_values() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core test_new_language_u16_roundtrip -- --nocapture`
+Run: `cargo test -p ferret-indexer-core test_new_language_u16_roundtrip -- --nocapture`
 Expected: FAIL — compiler error, variants do not exist yet
 
 **Step 3: Add new enum variants and update to_u16/from_u16**
@@ -172,7 +172,7 @@ In `from_u16()`, add matching arms before the `_` wildcard:
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-core test_new_language_u16_roundtrip test_backward_compat -- --nocapture`
+Run: `cargo test -p ferret-indexer-core test_new_language_u16_roundtrip test_backward_compat -- --nocapture`
 Expected: FAIL — Display impl is not exhaustive yet (compiler error). We fix that in Task 2.
 
 ---
@@ -180,7 +180,7 @@ Expected: FAIL — Display impl is not exhaustive yet (compiler error). We fix t
 ### Task 2: Update Display impl and from_extension for new variants
 
 **Files:**
-- Modify: `indexrs-core/src/types.rs:148-183` (from_extension, Display)
+- Modify: `ferret-indexer-core/src/types.rs:148-183` (from_extension, Display)
 
 **Step 1: Write the failing tests for new extensions and display**
 
@@ -286,7 +286,7 @@ fn test_new_language_display() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core test_new_language -- --nocapture`
+Run: `cargo test -p ferret-indexer-core test_new_language -- --nocapture`
 Expected: FAIL — compiler error, non-exhaustive match in Display
 
 **Step 3: Update Display impl and from_extension**
@@ -352,13 +352,13 @@ Language::Nix => write!(f, "Nix"),
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-core -- --nocapture`
+Run: `cargo test -p ferret-indexer-core -- --nocapture`
 Expected: ALL PASS (including old tests)
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/types.rs
+git add ferret-indexer-core/src/types.rs
 git commit -m "feat: expand Language enum with 25 new language variants
 
 Add YAML, TOML, JSON, XML, HTML, CSS, SCSS, Sass, SQL, Protobuf,
@@ -372,7 +372,7 @@ and 0xFFFF are unchanged for backward compatibility."
 ### Task 3: Add from_path convenience method
 
 **Files:**
-- Modify: `indexrs-core/src/types.rs` (add `use std::path::Path`, add `from_path` method)
+- Modify: `ferret-indexer-core/src/types.rs` (add `use std::path::Path`, add `from_path` method)
 
 **Step 1: Write the failing test**
 
@@ -428,7 +428,7 @@ fn test_from_path_dockerfile() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core test_from_path -- --nocapture`
+Run: `cargo test -p ferret-indexer-core test_from_path -- --nocapture`
 Expected: FAIL — `from_path` method does not exist
 
 **Step 3: Implement from_path**
@@ -447,7 +447,7 @@ Add this method to the `impl Language` block:
 ///
 /// ```
 /// use std::path::Path;
-/// use indexrs_core::Language;
+/// use ferret_indexer_core::Language;
 ///
 /// assert_eq!(Language::from_path(Path::new("src/main.rs")), Language::Rust);
 /// assert_eq!(Language::from_path(Path::new("Dockerfile")), Language::Dockerfile);
@@ -470,13 +470,13 @@ pub fn from_path(path: &Path) -> Language {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-core -- --nocapture`
+Run: `cargo test -p ferret-indexer-core -- --nocapture`
 Expected: ALL PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/types.rs
+git add ferret-indexer-core/src/types.rs
 git commit -m "feat: add Language::from_path() convenience method
 
 Extracts the file extension from a Path and delegates to
@@ -489,8 +489,8 @@ Dockerfile."
 ### Task 4: Update existing roundtrip tests and metadata tests for completeness
 
 **Files:**
-- Modify: `indexrs-core/src/types.rs` (update `test_language_u16_roundtrip`)
-- Modify: `indexrs-core/src/metadata.rs` (update `test_roundtrip_all_languages`)
+- Modify: `ferret-indexer-core/src/types.rs` (update `test_language_u16_roundtrip`)
+- Modify: `ferret-indexer-core/src/metadata.rs` (update `test_roundtrip_all_languages`)
 
 **Step 1: Update existing roundtrip test to include all variants**
 
@@ -500,18 +500,18 @@ In `metadata.rs`, update `test_roundtrip_all_languages` to include all new varia
 
 **Step 2: Run all tests**
 
-Run: `cargo test -p indexrs-core -- --nocapture`
+Run: `cargo test -p ferret-indexer-core -- --nocapture`
 Expected: ALL PASS
 
 **Step 3: Run clippy**
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 Expected: No warnings
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/types.rs indexrs-core/src/metadata.rs
+git add ferret-indexer-core/src/types.rs ferret-indexer-core/src/metadata.rs
 git commit -m "test: update roundtrip tests to cover all 37 Language variants"
 ```
 

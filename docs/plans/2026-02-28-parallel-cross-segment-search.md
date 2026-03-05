@@ -13,7 +13,7 @@
 ### Task 1: Parallelize `search_segments_with_options`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs:175-252` (the `search_segments_with_options` function)
+- Modify: `ferret-indexer-core/src/multi_search.rs:175-252` (the `search_segments_with_options` function)
 
 **Step 1: Rewrite `search_segments_with_options` to use `par_iter`**
 
@@ -130,7 +130,7 @@ pub fn search_segments_with_options(
 
 **Step 2: Run tests to verify**
 
-Run: `cargo test -p indexrs-core --lib -- multi_search`
+Run: `cargo test -p ferret-indexer-core --lib -- multi_search`
 Expected: All existing tests pass (the behavior is identical, just parallelized).
 
 ---
@@ -138,7 +138,7 @@ Expected: All existing tests pass (the behavior is identical, just parallelized)
 ### Task 2: Parallelize `search_segments_with_pattern_and_options`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs:698-769` (the `search_segments_with_pattern_and_options` function)
+- Modify: `ferret-indexer-core/src/multi_search.rs:698-769` (the `search_segments_with_pattern_and_options` function)
 
 **Step 1: Apply the same parallel pattern to the pattern-based search**
 
@@ -247,7 +247,7 @@ pub fn search_segments_with_pattern_and_options(
 
 **Step 2: Run all tests**
 
-Run: `cargo test -p indexrs-core --lib -- multi_search`
+Run: `cargo test -p ferret-indexer-core --lib -- multi_search`
 Expected: All existing tests pass.
 
 ---
@@ -276,7 +276,7 @@ Expected: All tests pass.
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs
+git add ferret-indexer-core/src/multi_search.rs
 git commit -m "perf: parallelize cross-segment search with rayon par_iter
 
 Switch search_segments_with_options and search_segments_with_pattern_and_options

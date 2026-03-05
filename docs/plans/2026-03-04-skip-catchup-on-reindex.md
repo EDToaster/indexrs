@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** When `indexrs reindex` spawns a new daemon, skip the automatic startup catchup so only the explicit reindex runs — eliminating redundant work.
+**Goal:** When `ferret reindex` spawns a new daemon, skip the automatic startup catchup so only the explicit reindex runs — eliminating redundant work.
 
 **Architecture:** Thread a `--skip-catchup` flag from `spawn_daemon_process` through to `start_daemon`. When the flag is set, the daemon skips Phase 1 catchup and immediately marks `caught_up = true`, proceeding directly to the live watcher. The reindex CLI path passes this flag; all other daemon-spawning paths (search, files, status, etc.) continue to catchup normally.
 
@@ -13,7 +13,7 @@
 ### Task 1: Add `--skip-catchup` flag to `DaemonStart` CLI variant
 
 **Files:**
-- Modify: `indexrs-cli/src/args.rs:197-198`
+- Modify: `ferret-indexer-cli/src/args.rs:197-198`
 
 **Step 1: Add the flag to the `DaemonStart` variant**
 
@@ -41,14 +41,14 @@ In `main.rs:280-284`, update the match arm to destructure and pass `skip_catchup
         }
 ```
 
-**Step 3: Run `cargo check -p indexrs-cli`**
+**Step 3: Run `cargo check -p ferret-indexer-cli`**
 
 Expected: Compile error — `start_daemon` doesn't accept the new parameter yet. That's fine, we fix it in Task 2.
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-cli/src/args.rs indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/args.rs ferret-indexer-cli/src/main.rs
 git commit -m "feat(cli): add --skip-catchup flag to daemon-start command"
 ```
 
@@ -57,8 +57,8 @@ git commit -m "feat(cli): add --skip-catchup flag to daemon-start command"
 ### Task 2: Update `start_daemon` to accept and honor `skip_catchup`
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:96` (function signature)
-- Modify: `indexrs-cli/src/daemon.rs:114-163` (catchup block)
+- Modify: `ferret-indexer-cli/src/daemon.rs:96` (function signature)
+- Modify: `ferret-indexer-cli/src/daemon.rs:114-163` (catchup block)
 
 **Step 1: Change the `start_daemon` signature**
 
@@ -79,7 +79,7 @@ Replace the background catchup+watcher spawn block (`daemon.rs:114-164`) with a 
         let cu = caught_up.clone();
         let rf = reindex_flag.clone();
         let repo = repo_root.to_path_buf();
-        let idir = indexrs_dir.clone();
+        let idir = ferret_dir.clone();
         tokio::spawn(async move {
             if !skip_catchup {
                 // Phase 1: catch-up.
@@ -87,7 +87,7 @@ Replace the background catchup+watcher spawn block (`daemon.rs:114-164`) with a 
                     let repo = repo.clone();
                     let idir = idir.clone();
                     let mgr = mgr.clone();
-                    move || indexrs_core::run_catchup(&repo, &idir, &mgr)
+                    move || ferret_indexer_core::run_catchup(&repo, &idir, &mgr)
                 })
                 .await
                 {
@@ -127,7 +127,7 @@ Replace the background catchup+watcher spawn block (`daemon.rs:114-164`) with a 
     }
 ```
 
-**Step 3: Run `cargo check -p indexrs-cli`**
+**Step 3: Run `cargo check -p ferret-indexer-cli`**
 
 Expected: Compiles cleanly.
 
@@ -138,7 +138,7 @@ Expected: No warnings.
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(daemon): honor --skip-catchup flag to skip startup catch-up"
 ```
 
@@ -147,13 +147,13 @@ git commit -m "feat(daemon): honor --skip-catchup flag to skip startup catch-up"
 ### Task 3: Thread `skip_catchup` through `spawn_daemon_process` and `ensure_daemon`
 
 **Files:**
-- Modify: `indexrs-daemon/src/client.rs:28-70` (add `skip_catchup` param to `spawn_daemon_process` and `ensure_daemon`)
-- Modify: `indexrs-cli/src/daemon.rs:1401-1404` (CLI's `ensure_daemon` wrapper)
-- Modify: `indexrs-cli/src/reindex_display.rs:18` (pass `true`)
+- Modify: `ferret-indexer-daemon/src/client.rs:28-70` (add `skip_catchup` param to `spawn_daemon_process` and `ensure_daemon`)
+- Modify: `ferret-indexer-cli/src/daemon.rs:1401-1404` (CLI's `ensure_daemon` wrapper)
+- Modify: `ferret-indexer-cli/src/reindex_display.rs:18` (pass `true`)
 
 **Step 1: Update `spawn_daemon_process` to accept and pass `--skip-catchup`**
 
-In `indexrs-daemon/src/client.rs:31`, add the parameter and conditionally append the flag:
+In `ferret-indexer-daemon/src/client.rs:31`, add the parameter and conditionally append the flag:
 
 ```rust
 pub fn spawn_daemon_process(
@@ -177,7 +177,7 @@ pub fn spawn_daemon_process(
 
 **Step 2: Update `ensure_daemon` in `client.rs` to accept and pass `skip_catchup`**
 
-In `indexrs-daemon/src/client.rs:47`:
+In `ferret-indexer-daemon/src/client.rs:47`:
 
 ```rust
 pub async fn ensure_daemon(
@@ -212,7 +212,7 @@ pub async fn ensure_daemon(
 
 **Step 3: Update the CLI's `ensure_daemon` wrapper in `daemon.rs`**
 
-At `indexrs-cli/src/daemon.rs:1401-1405`, add the parameter:
+At `ferret-indexer-cli/src/daemon.rs:1401-1405`, add the parameter:
 
 ```rust
 pub async fn ensure_daemon(
@@ -220,15 +220,15 @@ pub async fn ensure_daemon(
     skip_catchup: bool,
 ) -> Result<UnixStream, IndexError> {
     let exe = std::env::current_exe().map_err(IndexError::Io)?;
-    indexrs_daemon::client::ensure_daemon(&exe, repo_root, skip_catchup).await
+    ferret_indexer_daemon::client::ensure_daemon(&exe, repo_root, skip_catchup).await
 }
 ```
 
 **Step 4: Fix all callers of `ensure_daemon` to pass `false`**
 
-Search for all calls to `ensure_daemon(` in `indexrs-cli/src/` and add `, false` (except the reindex caller which gets `true`). These are the non-reindex paths (search, files, symbols, status, etc.).
+Search for all calls to `ensure_daemon(` in `ferret-indexer-cli/src/` and add `, false` (except the reindex caller which gets `true`). These are the non-reindex paths (search, files, symbols, status, etc.).
 
-Run: `rg 'ensure_daemon\(' indexrs-cli/src/` to find them all.
+Run: `rg 'ensure_daemon\(' ferret-indexer-cli/src/` to find them all.
 
 For each call like `ensure_daemon(&repo_root).await?`, change to `ensure_daemon(&repo_root, false).await?`.
 
@@ -253,10 +253,10 @@ Expected: All tests pass.
 **Step 8: Commit**
 
 ```bash
-git add indexrs-daemon/src/client.rs indexrs-cli/src/daemon.rs indexrs-cli/src/reindex_display.rs
+git add ferret-indexer-daemon/src/client.rs ferret-indexer-cli/src/daemon.rs ferret-indexer-cli/src/reindex_display.rs
 git commit -m "feat(reindex): skip daemon catch-up when reindex is the caller
 
-When 'indexrs reindex' spawns a new daemon, it passes --skip-catchup so
+When 'ferret reindex' spawns a new daemon, it passes --skip-catchup so
 the daemon skips Phase 1 catch-up. The explicit Reindex request then
 does the only catch-up, eliminating redundant work."
 ```

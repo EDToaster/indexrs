@@ -13,7 +13,7 @@
 ### Task 1: Parallelize the three git subprocess calls in detect_changes
 
 **Files:**
-- Modify: `indexrs-core/src/git_diff.rs:69-103` (the `detect_changes` method)
+- Modify: `ferret-indexer-core/src/git_diff.rs:69-103` (the `detect_changes` method)
 
 **Step 1: Refactor detect_changes to use std::thread::scope**
 
@@ -78,7 +78,7 @@ pub fn detect_changes(&self) -> Result<Vec<ChangeEvent>> {
 
     let mut events: Vec<ChangeEvent> = changes
         .into_iter()
-        .filter(|(path, _)| !is_indexrs_path(path))
+        .filter(|(path, _)| !is_ferret_path(path))
         .map(|(path, kind)| ChangeEvent { path, kind })
         .collect();
 
@@ -93,7 +93,7 @@ pub fn detect_changes(&self) -> Result<Vec<ChangeEvent>> {
 
 Run:
 ```bash
-cd /Users/howard/src/indexrs/.claude/worktrees/parallel-git-subprocesses && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check && cargo test --workspace
+cd /Users/howard/src/ferret/.claude/worktrees/parallel-git-subprocesses && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check && cargo test --workspace
 ```
 
 Expected: All pass. The existing tests cover parsing and integration behavior, so no new tests needed -- the parallelization is a pure internal refactor that preserves identical observable behavior.
@@ -101,6 +101,6 @@ Expected: All pass. The existing tests cover parsing and integration behavior, s
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/src/git_diff.rs
+git add ferret-indexer-core/src/git_diff.rs
 git commit -m "perf: parallelize git subprocess calls in detect_changes"
 ```

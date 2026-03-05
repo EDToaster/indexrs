@@ -13,7 +13,7 @@
 ### Task 1: Add `compact_with_budget()` skeleton with failing test
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 **Step 1: Write the failing test**
 
@@ -23,7 +23,7 @@ Add at the bottom of `mod tests` in `segment_manager.rs`:
 #[test]
 fn test_compact_with_budget_produces_multiple_segments() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     // Create 3 segments with ~30 bytes of content each
@@ -62,7 +62,7 @@ fn test_compact_with_budget_produces_multiple_segments() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_compact_with_budget_produces_multiple_segments`
+Run: `cargo test -p ferret-indexer-core -- test_compact_with_budget_produces_multiple_segments`
 Expected: FAIL — `compact_with_budget` method does not exist.
 
 **Step 3: Add the method stub**
@@ -163,13 +163,13 @@ Add `use crate::metadata::FileMetadata;` to the imports at the top of the file i
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-core -- test_compact_with_budget_produces_multiple_segments`
+Run: `cargo test -p ferret-indexer-core -- test_compact_with_budget_produces_multiple_segments`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat: add compact_with_budget() for bounded-memory compaction"
 ```
 
@@ -178,7 +178,7 @@ git commit -m "feat: add compact_with_budget() for bounded-memory compaction"
 ### Task 2: Wire `compact()` to delegate to `compact_with_budget()`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 **Step 1: Write the failing test**
 
@@ -189,7 +189,7 @@ Add to `mod tests`:
 fn test_compact_still_merges_to_single_segment() {
     // Verify compact() still produces a single segment (backward compat)
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     for i in 0..3 {
@@ -224,13 +224,13 @@ pub fn compact(&self) -> Result<(), IndexError> {
 
 **Step 3: Run all existing compact tests to verify backward compatibility**
 
-Run: `cargo test -p indexrs-core -- test_compact`
+Run: `cargo test -p ferret-indexer-core -- test_compact`
 Expected: ALL PASS — `test_compact_merges_segments`, `test_compact_excludes_tombstoned`, `test_compact_cleans_old_dirs`, `test_compact_empty_index`, `test_compact_single_segment_no_tombstones` should all still pass.
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "refactor: delegate compact() to compact_with_budget(0)"
 ```
 
@@ -239,7 +239,7 @@ git commit -m "refactor: delegate compact() to compact_with_budget(0)"
 ### Task 3: Add a default budget constant and `compact_background()` support
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 **Step 1: Add the constant**
 
@@ -268,13 +268,13 @@ pub fn compact_background(self: &Arc<Self>) -> tokio::task::JoinHandle<Result<()
 
 **Step 3: Run background compact test**
 
-Run: `cargo test -p indexrs-core -- test_compact_background`
+Run: `cargo test -p ferret-indexer-core -- test_compact_background`
 Expected: PASS
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat: add DEFAULT_COMPACTION_BUDGET, use in compact_background()"
 ```
 
@@ -283,7 +283,7 @@ git commit -m "feat: add DEFAULT_COMPACTION_BUDGET, use in compact_background()"
 ### Task 4: Add comprehensive edge case tests
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 **Step 1: Write the tests**
 
@@ -293,7 +293,7 @@ Add to `mod tests`:
 #[test]
 fn test_compact_with_budget_zero_means_unlimited() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     for i in 0..3 {
@@ -317,7 +317,7 @@ fn test_compact_with_budget_zero_means_unlimited() {
 #[test]
 fn test_compact_with_budget_large_budget_merges_all() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     for i in 0..5 {
@@ -341,7 +341,7 @@ fn test_compact_with_budget_large_budget_merges_all() {
 #[test]
 fn test_compact_with_budget_excludes_tombstoned() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let repo_dir = dir.path().join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
 
@@ -385,7 +385,7 @@ fn test_compact_with_budget_excludes_tombstoned() {
 #[test]
 fn test_compact_with_budget_cleans_old_dirs() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let segments_dir = base_dir.join("segments");
 
     let manager = SegmentManager::new(&base_dir).unwrap();
@@ -424,7 +424,7 @@ fn test_compact_with_budget_cleans_old_dirs() {
 #[test]
 fn test_compact_with_budget_empty_index() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     manager.compact_with_budget(1024).unwrap();
@@ -436,7 +436,7 @@ fn test_compact_with_budget_empty_index() {
 #[test]
 fn test_compact_with_budget_single_segment_no_tombstones() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     manager
@@ -460,7 +460,7 @@ fn test_compact_with_budget_searchable_after() {
     use crate::multi_search::search_segments;
 
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs");
+    let base_dir = dir.path().join(".ferret_index");
     let manager = SegmentManager::new(&base_dir).unwrap();
 
     for i in 0..4 {
@@ -485,13 +485,13 @@ fn test_compact_with_budget_searchable_after() {
 
 **Step 2: Run all tests**
 
-Run: `cargo test -p indexrs-core -- test_compact`
+Run: `cargo test -p ferret-indexer-core -- test_compact`
 Expected: ALL PASS
 
 **Step 3: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "test: add comprehensive edge case tests for compact_with_budget()"
 ```
 

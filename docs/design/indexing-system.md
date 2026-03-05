@@ -1,8 +1,8 @@
-# indexrs Indexing System Design
+# ferret Indexing System Design
 
 ## Overview
 
-indexrs is a local code indexing service that maintains a persistent index of files in
+ferret is a local code indexing service that maintains a persistent index of files in
 large repositories, enabling fast code search with capabilities comparable to GitHub's
 code search. This document specifies the index architecture, storage format, incremental
 update strategy, query engine, and crate dependencies.
@@ -277,11 +277,11 @@ struct IndexState {
 
 ### 3.1 On-Disk Layout
 
-The index lives in `.indexrs/` within the repo root (or a configurable location). The
+The index lives in `.ferret_index/` within the repo root (or a configurable location). The
 directory contains:
 
 ```
-.indexrs/
+.ferret_index/
   index.meta          # Index header: version, config, last commit SHA
   segments/
     seg_0001/
@@ -573,7 +573,7 @@ more efficient for our use case.
 ## 6. Architecture Diagram
 
 ```
-                              indexrs Architecture
+                              ferret Architecture
 
   +------------------------------------------------------------------+
   |                        FILE CHANGE DETECTION                      |
@@ -625,7 +625,7 @@ more efficient for our use case.
                                               |
                                               v
   +------------------------------------------------------------------+
-  |                     STORAGE (.indexrs/)                            |
+  |                     STORAGE (.ferret_index/)                            |
   |                                                                    |
   |   segments/seg_NNNN/                                              |
   |     meta.bin | trigrams.bin | content.zst | symbols.bin           |
@@ -678,7 +678,7 @@ more efficient for our use case.
   |   MCP Server     |  |   Web Server     |  |   CLI (fzf)      |
   |   (rmcp)         |  |   (axum)         |  |   (stdout)       |
   |                  |  |                  |  |                  |
-  |   Tools:         |  |   GET /search    |  |   indexrs search |
+  |   Tools:         |  |   GET /search    |  |   ferret search |
   |   - search       |  |   GET /symbols   |  |   "query"        |
   |   - symbols      |  |   GET /file      |  |   | fzf          |
   |   - file_content |  |   WebSocket for  |  |                  |

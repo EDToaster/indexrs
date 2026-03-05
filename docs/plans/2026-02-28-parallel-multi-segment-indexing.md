@@ -13,7 +13,7 @@
 ### Task 1: Parallelize `index_files_with_budget()`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs:210-257` (`index_files_with_budget` method)
+- Modify: `ferret-indexer-core/src/segment_manager.rs:210-257` (`index_files_with_budget` method)
 
 **Step 1: Refactor `index_files_with_budget()` to pre-split batches then build in parallel**
 
@@ -110,18 +110,18 @@ Then remove the local `use rayon::prelude::*;` from inside the method body, sinc
 
 **Step 3: Run existing tests to verify nothing is broken**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/parallel-multi-segment-indexing && cargo test -p indexrs-core -- segment_manager`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/parallel-multi-segment-indexing && cargo test -p ferret-indexer-core -- segment_manager`
 Expected: All existing tests pass (the batching logic is unchanged, only the build loop is parallelized).
 
 **Step 4: Run clippy and fmt**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/parallel-multi-segment-indexing && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/parallel-multi-segment-indexing && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "perf: parallelize segment building in index_files_with_budget via rayon"
 ```
 
@@ -130,7 +130,7 @@ git commit -m "perf: parallelize segment building in index_files_with_budget via
 ### Task 2: Parallelize `index_files_with_progress()`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs:272-316` (`index_files_with_progress` method)
+- Modify: `ferret-indexer-core/src/segment_manager.rs:272-316` (`index_files_with_progress` method)
 
 **Step 1: Refactor `index_files_with_progress()` to use parallel builds with atomic progress counter**
 
@@ -216,18 +216,18 @@ Note: The progress callback firing pattern changes slightly -- previously it was
 
 **Step 2: Run existing tests**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/parallel-multi-segment-indexing && cargo test -p indexrs-core -- segment_manager`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/parallel-multi-segment-indexing && cargo test -p ferret-indexer-core -- segment_manager`
 Expected: All tests pass. The `test_index_files_with_progress` test verifies that progress is reported for each file -- the final count should still match.
 
 **Step 3: Run clippy and fmt**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/parallel-multi-segment-indexing && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/parallel-multi-segment-indexing && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`
 Expected: PASS
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "perf: parallelize index_files_with_progress via rayon"
 ```
 
@@ -237,7 +237,7 @@ git commit -m "perf: parallelize index_files_with_progress via rayon"
 
 **Step 1: Run the full workspace test suite**
 
-Run: `cd /Users/howard/src/indexrs/.claude/worktrees/parallel-multi-segment-indexing && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check && cargo test --workspace`
+Run: `cd /Users/howard/src/ferret/.claude/worktrees/parallel-multi-segment-indexing && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check && cargo test --workspace`
 Expected: All checks pass.
 
 **Step 2: Final commit if any fixups were needed**

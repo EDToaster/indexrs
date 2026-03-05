@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement the `indexrs files`, `indexrs search`, and `indexrs preview` subcommands with ANSI-colored, streaming, fzf-friendly output, plus SIGPIPE handling, an on-demand daemon, and shell integration recipes.
+**Goal:** Implement the `ferret files`, `ferret search`, and `ferret preview` subcommands with ANSI-colored, streaming, fzf-friendly output, plus SIGPIPE handling, an on-demand daemon, and shell integration recipes.
 
-**Architecture:** The CLI (`indexrs-cli`) gets new modules for color formatting (`color.rs`), streaming output (`output.rs`), and repo/index discovery (`repo.rs`). Each subcommand lives in its own module (`files.rs`, `search_cmd.rs`, `preview.rs`). The daemon (`daemon.rs`) listens on a Unix domain socket, auto-starts on first CLI query, and idles out after 5 minutes. All commands work in both direct mode (no daemon) and daemon mode.
+**Architecture:** The CLI (`ferret-indexer-cli`) gets new modules for color formatting (`color.rs`), streaming output (`output.rs`), and repo/index discovery (`repo.rs`). Each subcommand lives in its own module (`files.rs`, `search_cmd.rs`, `preview.rs`). The daemon (`daemon.rs`) listens on a Unix domain socket, auto-starts on first CLI query, and idles out after 5 minutes. All commands work in both direct mode (no daemon) and daemon mode.
 
-**Tech Stack:** Rust, clap 4, tokio, nu-ansi-term (ANSI colors), libc (SIGPIPE), globset (path filtering), syntect (preview fallback), serde_json (daemon protocol), indexrs-core (all indexing/search APIs).
+**Tech Stack:** Rust, clap 4, tokio, nu-ansi-term (ANSI colors), libc (SIGPIPE), globset (path filtering), syntect (preview fallback), serde_json (daemon protocol), ferret-indexer-core (all indexing/search APIs).
 
 **Linear Issues:** HHC-52, HHC-53, HHC-54, HHC-55, HHC-56, HHC-57
 
@@ -17,13 +17,13 @@
 ### Task 1: Add CLI Dependencies and Create Color Module (HHC-55)
 
 **Files:**
-- Modify: `indexrs-cli/Cargo.toml`
-- Create: `indexrs-cli/src/color.rs`
-- Modify: `indexrs-cli/src/main.rs` (add `mod color;`)
+- Modify: `ferret-indexer-cli/Cargo.toml`
+- Create: `ferret-indexer-cli/src/color.rs`
+- Modify: `ferret-indexer-cli/src/main.rs` (add `mod color;`)
 
 **Step 1: Write tests for the color module**
 
-Create `indexrs-cli/src/color.rs` with tests at the bottom:
+Create `ferret-indexer-cli/src/color.rs` with tests at the bottom:
 
 ```rust
 #[cfg(test)]
@@ -117,18 +117,18 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-cli -- color`
+Run: `cargo test -p ferret-indexer-cli -- color`
 Expected: compilation error — `ColorConfig` not defined yet.
 
 **Step 3: Add dependency and implement color module**
 
-Add to `indexrs-cli/Cargo.toml`:
+Add to `ferret-indexer-cli/Cargo.toml`:
 
 ```toml
 nu-ansi-term = "0.50"
 ```
 
-Implement `indexrs-cli/src/color.rs`:
+Implement `ferret-indexer-cli/src/color.rs`:
 
 ```rust
 use nu_ansi_term::{Color, Style};
@@ -227,13 +227,13 @@ Add `mod color;` to `main.rs`.
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- color`
+Run: `cargo test -p ferret-indexer-cli -- color`
 Expected: all tests PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/color.rs indexrs-cli/src/main.rs indexrs-cli/Cargo.toml
+git add ferret-indexer-cli/src/color.rs ferret-indexer-cli/src/main.rs ferret-indexer-cli/Cargo.toml
 git commit -m "feat(cli): add color module with ANSI formatting for files and search output (HHC-55)"
 ```
 
@@ -242,13 +242,13 @@ git commit -m "feat(cli): add color module with ANSI formatting for files and se
 ### Task 2: Streaming Writer, SIGPIPE Handling, and Exit Codes (HHC-55)
 
 **Files:**
-- Modify: `indexrs-cli/Cargo.toml` (add `libc`)
-- Create: `indexrs-cli/src/output.rs`
-- Modify: `indexrs-cli/src/main.rs` (add `mod output;`, SIGPIPE setup)
+- Modify: `ferret-indexer-cli/Cargo.toml` (add `libc`)
+- Create: `ferret-indexer-cli/src/output.rs`
+- Modify: `ferret-indexer-cli/src/main.rs` (add `mod output;`, SIGPIPE setup)
 
 **Step 1: Write tests for StreamingWriter and ExitCode**
 
-Create `indexrs-cli/src/output.rs` with tests:
+Create `ferret-indexer-cli/src/output.rs` with tests:
 
 ```rust
 #[cfg(test)]
@@ -299,18 +299,18 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-cli -- output`
+Run: `cargo test -p ferret-indexer-cli -- output`
 Expected: compilation error.
 
 **Step 3: Add libc dependency and implement output module**
 
-Add to `indexrs-cli/Cargo.toml`:
+Add to `ferret-indexer-cli/Cargo.toml`:
 
 ```toml
 libc = "0.2"
 ```
 
-Implement `indexrs-cli/src/output.rs`:
+Implement `ferret-indexer-cli/src/output.rs`:
 
 ```rust
 use std::io::{self, BufWriter, Write};
@@ -386,13 +386,13 @@ Add `mod output;` to `main.rs` and call `output::setup_sigpipe()` as the first l
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- output`
+Run: `cargo test -p ferret-indexer-cli -- output`
 Expected: all tests PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/output.rs indexrs-cli/src/main.rs indexrs-cli/Cargo.toml
+git add ferret-indexer-cli/src/output.rs ferret-indexer-cli/src/main.rs ferret-indexer-cli/Cargo.toml
 git commit -m "feat(cli): add streaming writer, SIGPIPE handling, and exit codes (HHC-55)"
 ```
 
@@ -401,11 +401,11 @@ git commit -m "feat(cli): add streaming writer, SIGPIPE handling, and exit codes
 ### Task 3: Update CLI Arguments to Match Design Doc (HHC-52, HHC-53, HHC-54)
 
 **Files:**
-- Modify: `indexrs-cli/src/args.rs`
+- Modify: `ferret-indexer-cli/src/args.rs`
 
 **Step 1: Run existing CLI parse tests (if any) as baseline**
 
-Run: `cargo test -p indexrs-cli`
+Run: `cargo test -p ferret-indexer-cli`
 Expected: PASS (existing stubs compile).
 
 **Step 2: Update args.rs with complete CLI options**
@@ -418,7 +418,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 /// Local code search index — fast grep, file, and symbol search for your repositories.
 #[derive(Debug, Parser)]
-#[command(name = "indexrs", version, about = "Local code search index")]
+#[command(name = "ferret", version, about = "Local code search index")]
 pub struct Cli {
     /// Color output mode
     #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
@@ -582,13 +582,13 @@ Update the `match cli.command` block in `main.rs` to destructure the new fields 
 
 **Step 4: Verify compilation**
 
-Run: `cargo check -p indexrs-cli`
+Run: `cargo check -p ferret-indexer-cli`
 Expected: compiles with no errors.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/args.rs indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/args.rs ferret-indexer-cli/src/main.rs
 git commit -m "feat(cli): update CLI args to match fzf interface design doc (HHC-52, HHC-53, HHC-54)"
 ```
 
@@ -597,12 +597,12 @@ git commit -m "feat(cli): update CLI args to match fzf interface design doc (HHC
 ### Task 4: Repo Discovery Module
 
 **Files:**
-- Create: `indexrs-cli/src/repo.rs`
-- Modify: `indexrs-cli/src/main.rs` (add `mod repo;`)
+- Create: `ferret-indexer-cli/src/repo.rs`
+- Modify: `ferret-indexer-cli/src/main.rs` (add `mod repo;`)
 
 **Step 1: Write tests for repo discovery**
 
-Create `indexrs-cli/src/repo.rs` with tests:
+Create `ferret-indexer-cli/src/repo.rs` with tests:
 
 ```rust
 #[cfg(test)]
@@ -619,10 +619,10 @@ mod tests {
     }
 
     #[test]
-    fn test_find_repo_root_with_indexrs_dir() {
+    fn test_find_repo_root_with_ferret_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let indexrs_dir = dir.path().join(".indexrs");
-        fs::create_dir(&indexrs_dir).unwrap();
+        let ferret_dir = dir.path().join(".ferret_index");
+        fs::create_dir(&ferret_dir).unwrap();
 
         let subdir = dir.path().join("src").join("deep");
         fs::create_dir_all(&subdir).unwrap();
@@ -647,10 +647,10 @@ mod tests {
     }
 
     #[test]
-    fn test_find_repo_root_prefers_indexrs_over_git() {
+    fn test_find_repo_root_prefers_ferret_over_git() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join(".git")).unwrap();
-        fs::create_dir(dir.path().join(".indexrs")).unwrap();
+        fs::create_dir(dir.path().join(".ferret_index")).unwrap();
 
         let result = find_repo_root_from(dir.path());
         assert!(result.is_ok());
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn test_find_repo_root_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        // No .git or .indexrs anywhere
+        // No .git or .ferret_index anywhere
         let result = find_repo_root_from(dir.path());
         assert!(result.is_err());
     }
@@ -669,20 +669,20 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-cli -- repo`
+Run: `cargo test -p ferret-indexer-cli -- repo`
 Expected: compilation error.
 
 **Step 3: Implement repo discovery**
 
 ```rust
 use std::path::{Path, PathBuf};
-use indexrs_core::error::IndexError;
-use indexrs_core::SegmentManager;
+use ferret_indexer_core::error::IndexError;
+use ferret_indexer_core::SegmentManager;
 
 /// Find the repository root directory.
 ///
 /// If `repo_arg` is provided, uses that directly.
-/// Otherwise, walks up from the current directory looking for `.indexrs/` or `.git/`.
+/// Otherwise, walks up from the current directory looking for `.ferret_index/` or `.git/`.
 pub fn find_repo_root(repo_arg: Option<&Path>) -> Result<PathBuf, IndexError> {
     if let Some(repo) = repo_arg {
         return Ok(repo.to_path_buf());
@@ -691,28 +691,28 @@ pub fn find_repo_root(repo_arg: Option<&Path>) -> Result<PathBuf, IndexError> {
     find_repo_root_from(&cwd)
 }
 
-/// Walk up from `start` looking for `.indexrs/` or `.git/`.
+/// Walk up from `start` looking for `.ferret_index/` or `.git/`.
 fn find_repo_root_from(start: &Path) -> Result<PathBuf, IndexError> {
     let mut dir = start.to_path_buf();
     loop {
-        if dir.join(".indexrs").is_dir() || dir.join(".git").exists() {
+        if dir.join(".ferret_index").is_dir() || dir.join(".git").exists() {
             return Ok(dir);
         }
         if !dir.pop() {
             return Err(IndexError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                "not inside a git repository or indexrs project",
+                "not inside a git repository or ferret project",
             )));
         }
     }
 }
 
-/// Load a SegmentManager from the `.indexrs/` directory inside repo_root.
+/// Load a SegmentManager from the `.ferret_index/` directory inside repo_root.
 ///
-/// Creates `.indexrs/segments/` if it doesn't exist.
+/// Creates `.ferret_index/segments/` if it doesn't exist.
 pub fn load_index(repo_root: &Path) -> Result<SegmentManager, IndexError> {
-    let indexrs_dir = repo_root.join(".indexrs");
-    SegmentManager::new(&indexrs_dir)
+    let ferret_dir = repo_root.join(".ferret_index");
+    SegmentManager::new(&ferret_dir)
 }
 ```
 
@@ -720,43 +720,43 @@ Add `mod repo;` to `main.rs`.
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- repo`
+Run: `cargo test -p ferret-indexer-cli -- repo`
 Expected: all tests PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/repo.rs indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/repo.rs ferret-indexer-cli/src/main.rs
 git commit -m "feat(cli): add repo discovery module for finding index root (HHC-55)"
 ```
 
 ---
 
-### Task 5: `indexrs files` Command (HHC-52)
+### Task 5: `ferret files` Command (HHC-52)
 
 **Files:**
-- Modify: `indexrs-cli/Cargo.toml` (add `globset`)
-- Create: `indexrs-cli/src/files.rs`
-- Modify: `indexrs-cli/src/main.rs` (add `mod files;`, wire up command)
+- Modify: `ferret-indexer-cli/Cargo.toml` (add `globset`)
+- Create: `ferret-indexer-cli/src/files.rs`
+- Modify: `ferret-indexer-cli/src/main.rs` (add `mod files;`, wire up command)
 
 **Step 1: Write tests for the files command**
 
-Create `indexrs-cli/src/files.rs` with tests:
+Create `ferret-indexer-cli/src/files.rs` with tests:
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indexrs_core::segment::{InputFile, SegmentWriter};
-    use indexrs_core::types::SegmentId;
-    use indexrs_core::SegmentManager;
+    use ferret_indexer_core::segment::{InputFile, SegmentWriter};
+    use ferret_indexer_core::types::SegmentId;
+    use ferret_indexer_core::SegmentManager;
     use std::sync::Arc;
 
     /// Build an index with test files and return the SegmentManager.
     fn build_test_index(dir: &Path) -> SegmentManager {
-        let indexrs_dir = dir.join(".indexrs");
-        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-        let manager = SegmentManager::new(&indexrs_dir).unwrap();
+        let ferret_dir = dir.join(".ferret_index");
+        std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+        let manager = SegmentManager::new(&ferret_dir).unwrap();
         manager
             .index_files(vec![
                 InputFile {
@@ -870,28 +870,28 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-cli -- files`
+Run: `cargo test -p ferret-indexer-cli -- files`
 Expected: compilation error.
 
 **Step 3: Add globset dependency and implement files module**
 
-Add to `indexrs-cli/Cargo.toml`:
+Add to `ferret-indexer-cli/Cargo.toml`:
 
 ```toml
 globset = "0.4"
 ```
 
-Implement `indexrs-cli/src/files.rs`:
+Implement `ferret-indexer-cli/src/files.rs`:
 
 ```rust
 use std::collections::HashMap;
 use std::path::Path;
 
 use globset::{Glob, GlobMatcher};
-use indexrs_core::error::IndexError;
-use indexrs_core::index_state::SegmentList;
-use indexrs_core::metadata::FileMetadata;
-use indexrs_core::types::SegmentId;
+use ferret_indexer_core::error::IndexError;
+use ferret_indexer_core::index_state::SegmentList;
+use ferret_indexer_core::metadata::FileMetadata;
+use ferret_indexer_core::types::SegmentId;
 
 use crate::args::SortOrder;
 use crate::color::ColorConfig;
@@ -1005,19 +1005,19 @@ Wire up in `main.rs`: replace the `Command::Files` arm with a call to `files::ru
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- files`
+Run: `cargo test -p ferret-indexer-cli -- files`
 Expected: all tests PASS.
 
 **Step 5: Run clippy**
 
-Run: `cargo clippy -p indexrs-cli -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-cli -- -D warnings`
 Expected: no warnings.
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-cli/src/files.rs indexrs-cli/src/main.rs indexrs-cli/Cargo.toml
-git commit -m "feat(cli): implement 'indexrs files' with filtering, sorting, and ANSI colors (HHC-52)"
+git add ferret-indexer-cli/src/files.rs ferret-indexer-cli/src/main.rs ferret-indexer-cli/Cargo.toml
+git commit -m "feat(cli): implement 'ferret files' with filtering, sorting, and ANSI colors (HHC-52)"
 ```
 
 ---
@@ -1025,20 +1025,20 @@ git commit -m "feat(cli): implement 'indexrs files' with filtering, sorting, and
 ### Task 6: Add `search_segments_with_pattern_and_options` to Core
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
-- Modify: `indexrs-core/src/lib.rs` (re-export)
+- Modify: `ferret-indexer-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/lib.rs` (re-export)
 
 The existing `search_segments_with_pattern` doesn't accept `SearchOptions` (no context lines, no max_results). The CLI search command needs both pattern control (regex, case sensitivity) AND options (context, limits).
 
 **Step 1: Write test for the new function**
 
-Add to `indexrs-core/src/multi_search.rs` tests:
+Add to `ferret-indexer-core/src/multi_search.rs` tests:
 
 ```rust
 #[test]
 fn test_search_segments_with_pattern_and_options() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -1068,12 +1068,12 @@ fn test_search_segments_with_pattern_and_options() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_search_segments_with_pattern_and_options`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_with_pattern_and_options`
 Expected: compilation error — function doesn't exist.
 
 **Step 3: Implement `search_segments_with_pattern_and_options`**
 
-Add to `indexrs-core/src/multi_search.rs` (after `search_segments_with_pattern`):
+Add to `ferret-indexer-core/src/multi_search.rs` (after `search_segments_with_pattern`):
 
 Refactor `search_single_segment_with_pattern` to accept a `context_lines` parameter, and add the new public function:
 
@@ -1095,7 +1095,7 @@ pub fn search_segments_with_pattern_and_options(
 
 The internal `search_single_segment_with_pattern` needs to accept `context_lines: u32` and pass it to `ContentVerifier::new(pattern.clone(), context_lines)`.
 
-Add the new function to `indexrs-core/src/lib.rs` re-exports:
+Add the new function to `ferret-indexer-core/src/lib.rs` re-exports:
 
 ```rust
 pub use multi_search::{
@@ -1106,44 +1106,44 @@ pub use multi_search::{
 
 **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p indexrs-core -- test_search_segments_with_pattern_and_options`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_with_pattern_and_options`
 Expected: PASS.
 
 **Step 5: Run full core test suite**
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 Expected: all tests PASS (no regressions).
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-core/src/multi_search.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/multi_search.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(core): add search_segments_with_pattern_and_options for CLI search (HHC-53)"
 ```
 
 ---
 
-### Task 7: `indexrs search` Command (HHC-53)
+### Task 7: `ferret search` Command (HHC-53)
 
 **Files:**
-- Create: `indexrs-cli/src/search_cmd.rs`
-- Modify: `indexrs-cli/src/main.rs` (add `mod search_cmd;`, wire up)
+- Create: `ferret-indexer-cli/src/search_cmd.rs`
+- Modify: `ferret-indexer-cli/src/main.rs` (add `mod search_cmd;`, wire up)
 
 **Step 1: Write tests for search command**
 
-Create `indexrs-cli/src/search_cmd.rs` with tests:
+Create `ferret-indexer-cli/src/search_cmd.rs` with tests:
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indexrs_core::segment::InputFile;
-    use indexrs_core::SegmentManager;
+    use ferret_indexer_core::segment::InputFile;
+    use ferret_indexer_core::SegmentManager;
 
     fn build_test_index(dir: &Path) -> SegmentManager {
-        let indexrs_dir = dir.join(".indexrs");
-        std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-        let manager = SegmentManager::new(&indexrs_dir).unwrap();
+        let ferret_dir = dir.join(".ferret_index");
+        std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+        let manager = SegmentManager::new(&ferret_dir).unwrap();
         manager
             .index_files(vec![
                 InputFile {
@@ -1250,7 +1250,7 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-cli -- search_cmd`
+Run: `cargo test -p ferret-indexer-cli -- search_cmd`
 Expected: compilation error.
 
 **Step 3: Implement search command**
@@ -1259,10 +1259,10 @@ Expected: compilation error.
 use std::path::Path;
 
 use globset::{Glob, GlobMatcher};
-use indexrs_core::error::IndexError;
-use indexrs_core::index_state::SegmentList;
-use indexrs_core::search::{MatchPattern, SearchOptions};
-use indexrs_core::multi_search::search_segments_with_pattern_and_options;
+use ferret_indexer_core::error::IndexError;
+use ferret_indexer_core::index_state::SegmentList;
+use ferret_indexer_core::search::{MatchPattern, SearchOptions};
+use ferret_indexer_core::multi_search::search_segments_with_pattern_and_options;
 
 use crate::color::ColorConfig;
 use crate::output::{ExitCode, StreamingWriter};
@@ -1385,28 +1385,28 @@ Wire up in `main.rs`.
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- search_cmd`
+Run: `cargo test -p ferret-indexer-cli -- search_cmd`
 Expected: all tests PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/search_cmd.rs indexrs-cli/src/main.rs
-git commit -m "feat(cli): implement 'indexrs search' with vimgrep output and ANSI colors (HHC-53)"
+git add ferret-indexer-cli/src/search_cmd.rs ferret-indexer-cli/src/main.rs
+git commit -m "feat(cli): implement 'ferret search' with vimgrep output and ANSI colors (HHC-53)"
 ```
 
 ---
 
-### Task 8: `indexrs preview` Command (HHC-54)
+### Task 8: `ferret preview` Command (HHC-54)
 
 **Files:**
-- Modify: `indexrs-cli/Cargo.toml` (add `syntect`)
-- Create: `indexrs-cli/src/preview.rs`
-- Modify: `indexrs-cli/src/main.rs` (add `mod preview;`, wire up)
+- Modify: `ferret-indexer-cli/Cargo.toml` (add `syntect`)
+- Create: `ferret-indexer-cli/src/preview.rs`
+- Modify: `ferret-indexer-cli/src/main.rs` (add `mod preview;`, wire up)
 
 **Step 1: Write tests for preview command**
 
-Create `indexrs-cli/src/preview.rs` with tests:
+Create `ferret-indexer-cli/src/preview.rs` with tests:
 
 ```rust
 #[cfg(test)]
@@ -1488,25 +1488,25 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-cli -- preview`
+Run: `cargo test -p ferret-indexer-cli -- preview`
 Expected: compilation error.
 
 **Step 3: Implement preview command**
 
-Add to `indexrs-cli/Cargo.toml`:
+Add to `ferret-indexer-cli/Cargo.toml`:
 
 ```toml
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
 ```
 
-Implement `indexrs-cli/src/preview.rs`:
+Implement `ferret-indexer-cli/src/preview.rs`:
 
 ```rust
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
-use indexrs_core::error::IndexError;
+use ferret_indexer_core::error::IndexError;
 
 pub struct PreviewOptions {
     pub file: PathBuf,
@@ -1620,14 +1620,14 @@ Wire up in `main.rs`.
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- preview`
+Run: `cargo test -p ferret-indexer-cli -- preview`
 Expected: all tests PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-cli/src/preview.rs indexrs-cli/src/main.rs indexrs-cli/Cargo.toml
-git commit -m "feat(cli): implement 'indexrs preview' with bat delegation and built-in fallback (HHC-54)"
+git add ferret-indexer-cli/src/preview.rs ferret-indexer-cli/src/main.rs ferret-indexer-cli/Cargo.toml
+git commit -m "feat(cli): implement 'ferret preview' with bat delegation and built-in fallback (HHC-54)"
 ```
 
 ---
@@ -1635,7 +1635,7 @@ git commit -m "feat(cli): implement 'indexrs preview' with bat delegation and bu
 ### Task 9: Wire Up main.rs and Integration Test (HHC-52, HHC-53, HHC-54, HHC-55)
 
 **Files:**
-- Modify: `indexrs-cli/src/main.rs` (complete wiring)
+- Modify: `ferret-indexer-cli/src/main.rs` (complete wiring)
 
 **Step 1: Implement the full main.rs dispatch**
 
@@ -1687,7 +1687,7 @@ async fn main() {
     std::process::exit(exit_code);
 }
 
-fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::IndexError> {
+fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, ferret_indexer_core::IndexError> {
     match cli.command {
         Command::Search {
             query,
@@ -1787,18 +1787,18 @@ fn run(cli: Cli, color: &ColorConfig) -> Result<ExitCode, indexrs_core::IndexErr
 
 **Step 2: Verify compilation and tests**
 
-Run: `cargo check -p indexrs-cli && cargo test -p indexrs-cli`
+Run: `cargo check -p ferret-indexer-cli && cargo test -p ferret-indexer-cli`
 Expected: compiles and all tests PASS.
 
 **Step 3: Run clippy and fmt**
 
-Run: `cargo clippy -p indexrs-cli -- -D warnings && cargo fmt --all -- --check`
+Run: `cargo clippy -p ferret-indexer-cli -- -D warnings && cargo fmt --all -- --check`
 Expected: no issues.
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-cli/src/main.rs
+git add ferret-indexer-cli/src/main.rs
 git commit -m "feat(cli): wire up files, search, and preview commands in main (HHC-52, HHC-53, HHC-54)"
 ```
 
@@ -1807,13 +1807,13 @@ git commit -m "feat(cli): wire up files, search, and preview commands in main (H
 ### Task 10: On-Demand Daemon via Unix Domain Socket (HHC-57)
 
 **Files:**
-- Modify: `indexrs-cli/Cargo.toml` (add `serde`, `serde_json`)
-- Create: `indexrs-cli/src/daemon.rs`
-- Modify: `indexrs-cli/src/main.rs` (add `mod daemon;`, add `--daemon` flag or auto-detect)
+- Modify: `ferret-indexer-cli/Cargo.toml` (add `serde`, `serde_json`)
+- Create: `ferret-indexer-cli/src/daemon.rs`
+- Modify: `ferret-indexer-cli/src/main.rs` (add `mod daemon;`, add `--daemon` flag or auto-detect)
 
 **Step 1: Write tests for daemon protocol**
 
-Create `indexrs-cli/src/daemon.rs` with tests:
+Create `ferret-indexer-cli/src/daemon.rs` with tests:
 
 ```rust
 #[cfg(test)]
@@ -1860,26 +1860,26 @@ mod tests {
     fn test_socket_path() {
         let root = PathBuf::from("/tmp/test-repo");
         let path = socket_path(&root);
-        assert_eq!(path, PathBuf::from("/tmp/test-repo/.indexrs/sock"));
+        assert_eq!(path, PathBuf::from("/tmp/test-repo/.ferret_index/sock"));
     }
 }
 ```
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-cli -- daemon`
+Run: `cargo test -p ferret-indexer-cli -- daemon`
 Expected: compilation error.
 
 **Step 3: Implement daemon module**
 
-Add to `indexrs-cli/Cargo.toml`:
+Add to `ferret-indexer-cli/Cargo.toml`:
 
 ```toml
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
 
-Implement `indexrs-cli/src/daemon.rs`:
+Implement `ferret-indexer-cli/src/daemon.rs`:
 
 ```rust
 use std::path::{Path, PathBuf};
@@ -1890,8 +1890,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
 
-use indexrs_core::error::IndexError;
-use indexrs_core::SegmentManager;
+use ferret_indexer_core::error::IndexError;
+use ferret_indexer_core::SegmentManager;
 
 /// Idle timeout before daemon self-terminates.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
@@ -1936,7 +1936,7 @@ pub enum DaemonResponse {
 
 /// Return the Unix socket path for a given repo root.
 pub fn socket_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(".indexrs").join("sock")
+    repo_root.join(".ferret_index").join("sock")
 }
 
 /// Try to connect to a running daemon. Returns None if no daemon is running.
@@ -1957,8 +1957,8 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
 
     let listener = UnixListener::bind(&sock_path).map_err(IndexError::Io)?;
 
-    let indexrs_dir = repo_root.join(".indexrs");
-    let manager = std::sync::Arc::new(SegmentManager::new(&indexrs_dir)?);
+    let ferret_dir = repo_root.join(".ferret_index");
+    let manager = std::sync::Arc::new(SegmentManager::new(&ferret_dir)?);
 
     loop {
         match timeout(IDLE_TIMEOUT, listener.accept()).await {
@@ -2049,19 +2049,19 @@ Add `mod daemon;` to `main.rs`.
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-cli -- daemon`
+Run: `cargo test -p ferret-indexer-cli -- daemon`
 Expected: all tests PASS.
 
 **Step 5: Implement daemon auto-start in main.rs**
 
-Add logic to `run()`: before executing a command, check if a daemon is running via `try_connect()`. If so, send the request over the socket. If not, fall back to direct execution (current behavior). The daemon can be explicitly started with `indexrs daemon start`.
+Add logic to `run()`: before executing a command, check if a daemon is running via `try_connect()`. If so, send the request over the socket. If not, fall back to direct execution (current behavior). The daemon can be explicitly started with `ferret daemon start`.
 
 This is a larger change — connect the protocol to the actual command implementations.
 
 **Step 6: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs indexrs-cli/src/main.rs indexrs-cli/Cargo.toml
+git add ferret-indexer-cli/src/daemon.rs ferret-indexer-cli/src/main.rs ferret-indexer-cli/Cargo.toml
 git commit -m "feat(cli): add on-demand daemon with Unix domain socket (HHC-57)"
 ```
 
@@ -2104,10 +2104,10 @@ git commit -m "docs: add fzf recipes with shell functions and editor integration
 | 2 | HHC-55 | Streaming writer, SIGPIPE, exit codes |
 | 3 | HHC-52/53/54 | Updated CLI argument definitions |
 | 4 | HHC-55 | Repo/index discovery |
-| 5 | HHC-52 | `indexrs files` with filtering and sorting |
+| 5 | HHC-52 | `ferret files` with filtering and sorting |
 | 6 | HHC-53 | Core: `search_segments_with_pattern_and_options` |
-| 7 | HHC-53 | `indexrs search` with vimgrep output |
-| 8 | HHC-54 | `indexrs preview` with bat delegation |
+| 7 | HHC-53 | `ferret search` with vimgrep output |
+| 8 | HHC-54 | `ferret preview` with bat delegation |
 | 9 | HHC-52/53/54/55 | Main.rs wiring and integration |
 | 10 | HHC-57 | On-demand daemon via Unix socket |
 | 11 | HHC-56 | Shell functions and editor recipes docs |

@@ -13,7 +13,7 @@
 ### Task 1: Add progress callback to SegmentWriter
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs:228-325` (build, build_inner)
+- Modify: `ferret-indexer-core/src/segment.rs:228-325` (build, build_inner)
 
 **Step 1: Write the failing test**
 
@@ -23,7 +23,7 @@ Add this test inside the existing `#[cfg(test)] mod tests` block in `segment.rs`
 #[test]
 fn test_build_with_progress_callback_count() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let files = vec![
@@ -56,7 +56,7 @@ fn test_build_with_progress_callback_count() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_build_with_progress_callback_count`
+Run: `cargo test -p ferret-indexer-core -- test_build_with_progress_callback_count`
 Expected: FAIL — `build_with_progress` method doesn't exist yet.
 
 **Step 3: Implement the changes**
@@ -135,16 +135,16 @@ The key change inside the loop: add `on_file_done();` as the **last line** of th
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-core -- test_build_with_progress`
+Run: `cargo test -p ferret-indexer-core -- test_build_with_progress`
 Expected: PASS
 
-Run: `cargo test -p indexrs-core -- test_segment_writer`
+Run: `cargo test -p ferret-indexer-core -- test_segment_writer`
 Expected: PASS (existing tests still work since `build` delegates to `build_with_progress`)
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/segment.rs
+git add ferret-indexer-core/src/segment.rs
 git commit -m "feat(segment): add build_with_progress callback to SegmentWriter"
 ```
 
@@ -153,7 +153,7 @@ git commit -m "feat(segment): add build_with_progress callback to SegmentWriter"
 ### Task 2: Add index_files_with_progress to SegmentManager
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs:203-244`
+- Modify: `ferret-indexer-core/src/segment_manager.rs:203-244`
 
 **Step 1: Write the failing test**
 
@@ -163,10 +163,10 @@ Add this test inside the existing `#[cfg(test)] mod tests` block in `segment_man
 #[test]
 fn test_index_files_with_progress() {
     let dir = tempfile::tempdir().unwrap();
-    let indexrs_dir = dir.path().join(".indexrs");
-    std::fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+    let ferret_dir = dir.path().join(".ferret_index");
+    std::fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
-    let manager = SegmentManager::new(&indexrs_dir).unwrap();
+    let manager = SegmentManager::new(&ferret_dir).unwrap();
     let files = vec![
         InputFile {
             path: "a.rs".to_string(),
@@ -207,7 +207,7 @@ fn test_index_files_with_progress() {
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_index_files_with_progress`
+Run: `cargo test -p ferret-indexer-core -- test_index_files_with_progress`
 Expected: FAIL — method doesn't exist.
 
 **Step 3: Implement `index_files_with_progress`**
@@ -270,16 +270,16 @@ pub fn index_files_with_progress<F: FnMut(usize, usize)>(
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p indexrs-core -- test_index_files_with_progress`
+Run: `cargo test -p ferret-indexer-core -- test_index_files_with_progress`
 Expected: PASS
 
-Run: `cargo test -p indexrs-core`
+Run: `cargo test -p ferret-indexer-core`
 Expected: All existing tests still pass.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat(segment-manager): add index_files_with_progress for per-file progress reporting"
 ```
 
@@ -288,7 +288,7 @@ git commit -m "feat(segment-manager): add index_files_with_progress for per-file
 ### Task 3: Use progress callback in build_index example
 
 **Files:**
-- Modify: `indexrs-core/examples/build_index.rs:84-101` (full_build function)
+- Modify: `ferret-indexer-core/examples/build_index.rs:84-101` (full_build function)
 
 **Step 1: Update `full_build` to use `index_files_with_progress`**
 
@@ -329,10 +329,10 @@ fn full_build(dir: &PathBuf, manager: &SegmentManager) -> Result<(), Box<dyn std
 
 **Step 2: Verify it compiles and runs**
 
-Run: `cargo clippy -p indexrs-core --example build_index -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core --example build_index -- -D warnings`
 Expected: No new warnings (the pre-existing `&PathBuf` warning may remain).
 
-Run: `cargo run -p indexrs-core --example build_index --release -- .`
+Run: `cargo run -p ferret-indexer-core --example build_index --release -- .`
 Expected: You should see inline progress like:
 ```
 === Full Index Build ===
@@ -351,6 +351,6 @@ Expected: All tests pass.
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/examples/build_index.rs
+git add ferret-indexer-core/examples/build_index.rs
 git commit -m "feat(examples): use progress callback for segment build in build_index"
 ```

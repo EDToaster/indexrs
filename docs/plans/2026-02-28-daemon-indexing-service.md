@@ -4,7 +4,7 @@
 
 **Goal:** Integrate `HybridDetector` into the daemon with checkpoint-based catch-up so the index stays fresh during active use and recovers cleanly after restart.
 
-**Architecture:** The daemon starts serving queries immediately from the on-disk index, then runs catch-up in a background task (git-checkpoint fast path, hash-walk fallback). After catch-up, `HybridDetector` keeps the index live. A `stale` flag in the response protocol lets the CLI warn users on stderr. `indexrs init` handles the initial full build.
+**Architecture:** The daemon starts serving queries immediately from the on-disk index, then runs catch-up in a background task (git-checkpoint fast path, hash-walk fallback). After catch-up, `HybridDetector` keeps the index live. A `stale` flag in the response protocol lets the CLI warn users on stderr. `ferret init` handles the initial full build.
 
 **Tech Stack:** Rust, tokio (async), serde_json (checkpoint file), blake3 (content hashing), Unix domain sockets (daemon IPC)
 
@@ -13,14 +13,14 @@
 ### Task 1: Checkpoint persistence module
 
 **Files:**
-- Create: `indexrs-core/src/checkpoint.rs`
-- Modify: `indexrs-core/src/lib.rs` (add `pub mod checkpoint; pub use checkpoint::...;`)
+- Create: `ferret-indexer-core/src/checkpoint.rs`
+- Modify: `ferret-indexer-core/src/lib.rs` (add `pub mod checkpoint; pub use checkpoint::...;`)
 - Test: inline `#[cfg(test)] mod tests` in `checkpoint.rs`
 
 **Step 1: Write failing tests for Checkpoint struct and read/write**
 
 ```rust
-// indexrs-core/src/checkpoint.rs
+// ferret-indexer-core/src/checkpoint.rs
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -62,12 +62,12 @@ impl Checkpoint {
     }
 }
 
-/// Read a checkpoint from `.indexrs/checkpoint.json`.
+/// Read a checkpoint from `.ferret_index/checkpoint.json`.
 ///
 /// Returns `Ok(None)` if the file does not exist.
 /// Returns `Err` if the file exists but cannot be read or parsed.
-pub fn read_checkpoint(indexrs_dir: &Path) -> Result<Option<Checkpoint>> {
-    let path = indexrs_dir.join("checkpoint.json");
+pub fn read_checkpoint(ferret_dir: &Path) -> Result<Option<Checkpoint>> {
+    let path = ferret_dir.join("checkpoint.json");
     if !path.exists() {
         return Ok(None);
     }
@@ -77,12 +77,12 @@ pub fn read_checkpoint(indexrs_dir: &Path) -> Result<Option<Checkpoint>> {
     Ok(Some(checkpoint))
 }
 
-/// Write a checkpoint atomically to `.indexrs/checkpoint.json`.
+/// Write a checkpoint atomically to `.ferret_index/checkpoint.json`.
 ///
 /// Uses temp-file-then-rename for crash safety.
-pub fn write_checkpoint(indexrs_dir: &Path, checkpoint: &Checkpoint) -> Result<()> {
-    let path = indexrs_dir.join("checkpoint.json");
-    let tmp_path = indexrs_dir.join("checkpoint.json.tmp");
+pub fn write_checkpoint(ferret_dir: &Path, checkpoint: &Checkpoint) -> Result<()> {
+    let path = ferret_dir.join("checkpoint.json");
+    let tmp_path = ferret_dir.join("checkpoint.json.tmp");
     let data =
         serde_json::to_string_pretty(checkpoint).map_err(|e| IndexError::Io(std::io::Error::other(e)))?;
     std::fs::write(&tmp_path, data)?;
@@ -176,12 +176,12 @@ mod tests {
 
 The struct, functions, and tests are all in one file. Write the complete file above.
 
-Run: `cargo test -p indexrs-core -- checkpoint`
+Run: `cargo test -p ferret-indexer-core -- checkpoint`
 Expected: All tests PASS.
 
 **Step 3: Register module in lib.rs**
 
-Add to `indexrs-core/src/lib.rs` after the existing module declarations:
+Add to `ferret-indexer-core/src/lib.rs` after the existing module declarations:
 
 ```rust
 pub mod checkpoint;
@@ -190,13 +190,13 @@ pub use checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
 
 **Step 4: Run full workspace check**
 
-Run: `cargo check --workspace && cargo test -p indexrs-core -- checkpoint`
+Run: `cargo check --workspace && cargo test -p ferret-indexer-core -- checkpoint`
 Expected: All pass.
 
 **Step 5: Commit**
 
 ```bash
-git add indexrs-core/src/checkpoint.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/checkpoint.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(HHC-83): add checkpoint persistence module"
 ```
 
@@ -205,15 +205,15 @@ git commit -m "feat(HHC-83): add checkpoint persistence module"
 ### Task 2: Staleness flag in daemon response protocol
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:57-66` (add `stale` to `Done`)
-- Modify: `indexrs-cli/src/daemon.rs:83-119` (pass `caught_up` through daemon)
-- Modify: `indexrs-cli/src/daemon.rs:198-333` (pass `caught_up` to response)
-- Modify: `indexrs-cli/src/daemon.rs:377-428` (CLI prints warning on stale)
+- Modify: `ferret-indexer-cli/src/daemon.rs:57-66` (add `stale` to `Done`)
+- Modify: `ferret-indexer-cli/src/daemon.rs:83-119` (pass `caught_up` through daemon)
+- Modify: `ferret-indexer-cli/src/daemon.rs:198-333` (pass `caught_up` to response)
+- Modify: `ferret-indexer-cli/src/daemon.rs:377-428` (CLI prints warning on stale)
 - Test: inline tests in `daemon.rs`
 
 **Step 1: Add `stale` field to `DaemonResponse::Done`**
 
-In `indexrs-cli/src/daemon.rs`, modify the `Done` variant (line 61):
+In `ferret-indexer-cli/src/daemon.rs`, modify the `Done` variant (line 61):
 
 ```rust
     /// End of results with summary.
@@ -239,8 +239,8 @@ pub async fn start_daemon(repo_root: &Path) -> Result<(), IndexError> {
 
     let listener = UnixListener::bind(&sock_path).map_err(IndexError::Io)?;
 
-    let indexrs_dir = repo_root.join(".indexrs");
-    let manager = std::sync::Arc::new(SegmentManager::new(&indexrs_dir)?);
+    let ferret_dir = repo_root.join(".ferret_index");
+    let manager = std::sync::Arc::new(SegmentManager::new(&ferret_dir)?);
 
     // Start as not-caught-up. Will be flipped to true after background
     // catch-up completes (wired in a later task).
@@ -367,13 +367,13 @@ Update all other tests that match on `DaemonResponse::Done` to include the `stal
 
 **Step 6: Run all tests**
 
-Run: `cargo test -p indexrs-cli`
+Run: `cargo test -p ferret-indexer-cli`
 Expected: All pass.
 
 **Step 7: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(HHC-83): add stale flag to daemon response protocol"
 ```
 
@@ -382,8 +382,8 @@ git commit -m "feat(HHC-83): add stale flag to daemon response protocol"
 ### Task 3: Hash-based diff module
 
 **Files:**
-- Create: `indexrs-core/src/hash_diff.rs`
-- Modify: `indexrs-core/src/lib.rs` (add module + re-export)
+- Create: `ferret-indexer-core/src/hash_diff.rs`
+- Modify: `ferret-indexer-core/src/lib.rs` (add module + re-export)
 - Test: inline `#[cfg(test)] mod tests` in `hash_diff.rs`
 
 This module walks the file tree, compares blake3 hashes against what's stored in segment metadata, and emits `ChangeEvent`s for anything that differs.
@@ -391,7 +391,7 @@ This module walks the file tree, compares blake3 hashes against what's stored in
 **Step 1: Write the module with tests**
 
 ```rust
-// indexrs-core/src/hash_diff.rs
+// ferret-indexer-core/src/hash_diff.rs
 
 //! Hash-based diff: compare on-disk files against indexed segment metadata.
 //!
@@ -547,7 +547,7 @@ mod tests {
         let content = b"fn hello() { let x = 1; }";
         std::fs::write(repo.join("hello.rs"), content).unwrap();
 
-        let seg_dir = repo.join(".indexrs").join("segments");
+        let seg_dir = repo.join(".ferret_index").join("segments");
         std::fs::create_dir_all(&seg_dir).unwrap();
         let segment = build_segment(
             &seg_dir,
@@ -583,7 +583,7 @@ mod tests {
         let new_content = b"fn new() { let y = 2; }";
         std::fs::write(repo.join("file.rs"), new_content).unwrap();
 
-        let seg_dir = repo.join(".indexrs").join("segments");
+        let seg_dir = repo.join(".ferret_index").join("segments");
         std::fs::create_dir_all(&seg_dir).unwrap();
         let segment = build_segment(
             &seg_dir,
@@ -613,7 +613,7 @@ mod tests {
             .output()
             .unwrap();
         // File in index but not on disk.
-        let seg_dir = repo.join(".indexrs").join("segments");
+        let seg_dir = repo.join(".ferret_index").join("segments");
         std::fs::create_dir_all(&seg_dir).unwrap();
         let segment = build_segment(
             &seg_dir,
@@ -637,7 +637,7 @@ mod tests {
 
 **Step 2: Register module in lib.rs**
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod hash_diff;
@@ -646,29 +646,29 @@ pub use hash_diff::hash_diff;
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-core -- hash_diff`
+Run: `cargo test -p ferret-indexer-core -- hash_diff`
 Expected: All pass.
 
 **Step 4: Commit**
 
 ```bash
-git add indexrs-core/src/hash_diff.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/hash_diff.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(HHC-83): add hash-based diff module for catch-up fallback"
 ```
 
 ---
 
-### Task 4: `indexrs init` command
+### Task 4: `ferret init` command
 
 **Files:**
-- Create: `indexrs-cli/src/init.rs`
-- Modify: `indexrs-cli/src/args.rs:48-163` (add `Init` variant)
-- Modify: `indexrs-cli/src/main.rs:1` (add `mod init;`)
-- Modify: `indexrs-cli/src/main.rs:49-172` (add match arm)
+- Create: `ferret-indexer-cli/src/init.rs`
+- Modify: `ferret-indexer-cli/src/args.rs:48-163` (add `Init` variant)
+- Modify: `ferret-indexer-cli/src/main.rs:1` (add `mod init;`)
+- Modify: `ferret-indexer-cli/src/main.rs:49-172` (add match arm)
 
 **Step 1: Add `Init` variant to `Command` enum**
 
-In `indexrs-cli/src/args.rs`, add before the `Status` variant:
+In `ferret-indexer-cli/src/args.rs`, add before the `Status` variant:
 
 ```rust
     /// Initialize the index for this repository (required before first search)
@@ -682,28 +682,28 @@ In `indexrs-cli/src/args.rs`, add before the `Status` variant:
 **Step 2: Create `init.rs` module**
 
 ```rust
-// indexrs-cli/src/init.rs
+// ferret-indexer-cli/src/init.rs
 
 use std::path::Path;
 use std::time::Instant;
 
-use indexrs_core::checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
-use indexrs_core::error::IndexError;
-use indexrs_core::git_diff::GitChangeDetector;
-use indexrs_core::segment::InputFile;
-use indexrs_core::walker::DirectoryWalkerBuilder;
-use indexrs_core::{SegmentManager, should_index_file, DEFAULT_MAX_FILE_SIZE};
+use ferret_indexer_core::checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
+use ferret_indexer_core::error::IndexError;
+use ferret_indexer_core::git_diff::GitChangeDetector;
+use ferret_indexer_core::segment::InputFile;
+use ferret_indexer_core::walker::DirectoryWalkerBuilder;
+use ferret_indexer_core::{SegmentManager, should_index_file, DEFAULT_MAX_FILE_SIZE};
 
-/// Run the `indexrs init` command.
+/// Run the `ferret init` command.
 ///
 /// Walks the repo tree, builds the full index, and writes a checkpoint.
 /// If `force` is false and an index already exists, returns an error.
 pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
-    let indexrs_dir = repo_root.join(".indexrs");
+    let ferret_dir = repo_root.join(".ferret_index");
 
     // Check for existing index unless --force.
     if !force {
-        if let Ok(Some(_)) = read_checkpoint(&indexrs_dir) {
+        if let Ok(Some(_)) = read_checkpoint(&ferret_dir) {
             return Err(IndexError::Io(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "index already exists. Use --force to rebuild.",
@@ -713,7 +713,7 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
 
     // If forcing, remove existing segments.
     if force {
-        let segments_dir = indexrs_dir.join("segments");
+        let segments_dir = ferret_dir.join("segments");
         if segments_dir.exists() {
             eprintln!("Removing existing index...");
             std::fs::remove_dir_all(&segments_dir)?;
@@ -761,14 +761,14 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     eprintln!("Indexing {file_count} files...");
 
     // Build the index.
-    let manager = SegmentManager::new(&indexrs_dir)?;
+    let manager = SegmentManager::new(&ferret_dir)?;
     manager.index_files(files)?;
 
     // Write checkpoint.
     let git = GitChangeDetector::new(repo_root.to_path_buf());
     let git_commit = git.get_head_sha().ok();
     let checkpoint = Checkpoint::new(git_commit, file_count);
-    write_checkpoint(&indexrs_dir, &checkpoint)?;
+    write_checkpoint(&ferret_dir, &checkpoint)?;
 
     let elapsed = start.elapsed();
     eprintln!(
@@ -782,7 +782,7 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
 
 **Step 3: Wire into main.rs**
 
-Add `mod init;` to the top of `indexrs-cli/src/main.rs`.
+Add `mod init;` to the top of `ferret-indexer-cli/src/main.rs`.
 
 Add the match arm in the `run()` function (after `Command::Reindex`):
 
@@ -796,7 +796,7 @@ Add the match arm in the `run()` function (after `Command::Reindex`):
 
 **Step 4: Verify `DEFAULT_MAX_FILE_SIZE` is re-exported**
 
-Check if `DEFAULT_MAX_FILE_SIZE` is already exported from `indexrs-core`. If not, add it to the `pub use binary::{...}` line in `indexrs-core/src/lib.rs`.
+Check if `DEFAULT_MAX_FILE_SIZE` is already exported from `ferret-indexer-core`. If not, add it to the `pub use binary::{...}` line in `ferret-indexer-core/src/lib.rs`.
 
 **Step 5: Run workspace check**
 
@@ -805,14 +805,14 @@ Expected: Clean compile.
 
 **Step 6: Manual smoke test**
 
-Run: `cargo run -p indexrs-cli -- init --repo .`
-Expected: Walks the indexrs repo, indexes files, prints progress to stderr, creates `.indexrs/checkpoint.json`.
+Run: `cargo run -p ferret-indexer-cli -- init --repo .`
+Expected: Walks the ferret repo, indexes files, prints progress to stderr, creates `.ferret_index/checkpoint.json`.
 
 **Step 7: Commit**
 
 ```bash
-git add indexrs-cli/src/init.rs indexrs-cli/src/args.rs indexrs-cli/src/main.rs indexrs-core/src/lib.rs
-git commit -m "feat(HHC-83): implement indexrs init command"
+git add ferret-indexer-cli/src/init.rs ferret-indexer-cli/src/args.rs ferret-indexer-cli/src/main.rs ferret-indexer-core/src/lib.rs
+git commit -m "feat(HHC-83): implement ferret init command"
 ```
 
 ---
@@ -820,16 +820,16 @@ git commit -m "feat(HHC-83): implement indexrs init command"
 ### Task 5: Daemon background catch-up
 
 **Files:**
-- Create: `indexrs-core/src/catchup.rs`
-- Modify: `indexrs-core/src/lib.rs` (add module + re-export)
-- Modify: `indexrs-cli/src/daemon.rs:83-119` (call catch-up on start)
+- Create: `ferret-indexer-core/src/catchup.rs`
+- Modify: `ferret-indexer-core/src/lib.rs` (add module + re-export)
+- Modify: `ferret-indexer-cli/src/daemon.rs:83-119` (call catch-up on start)
 
 This task adds a `run_catchup()` function to core that the daemon calls as a background task on startup.
 
 **Step 1: Write the catch-up module with tests**
 
 ```rust
-// indexrs-core/src/catchup.rs
+// ferret-indexer-core/src/catchup.rs
 
 //! Catch-up logic for daemon startup.
 //!
@@ -860,10 +860,10 @@ use crate::segment_manager::SegmentManager;
 /// 5. Write updated checkpoint.
 pub fn run_catchup(
     repo_root: &Path,
-    indexrs_dir: &Path,
+    ferret_dir: &Path,
     manager: &Arc<SegmentManager>,
 ) -> Result<Vec<ChangeEvent>> {
-    let checkpoint = read_checkpoint(indexrs_dir)?;
+    let checkpoint = read_checkpoint(ferret_dir)?;
 
     // Try git fast path.
     let changes = match try_git_catchup(repo_root, &checkpoint) {
@@ -899,7 +899,7 @@ pub fn run_catchup(
     let snapshot = manager.snapshot();
     let file_count: u64 = snapshot.iter().map(|s| s.entry_count() as u64).sum();
     let new_checkpoint = Checkpoint::new(git_commit, file_count);
-    write_checkpoint(indexrs_dir, &new_checkpoint)?;
+    write_checkpoint(ferret_dir, &new_checkpoint)?;
 
     Ok(changes)
 }
@@ -951,14 +951,14 @@ mod tests {
         let repo = dir.path();
         init_git_repo(repo);
 
-        let indexrs_dir = repo.join(".indexrs");
-        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-        let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+        let ferret_dir = repo.join(".ferret_index");
+        fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+        let manager = Arc::new(SegmentManager::new(&ferret_dir).unwrap());
 
         // Write a file on disk but don't index it.
         fs::write(repo.join("new.rs"), "fn new() { let x = 1; }").unwrap();
 
-        let changes = run_catchup(repo, &indexrs_dir, &manager).unwrap();
+        let changes = run_catchup(repo, &ferret_dir, &manager).unwrap();
 
         assert!(
             changes.iter().any(|e| e.path.to_string_lossy().contains("new.rs")),
@@ -966,7 +966,7 @@ mod tests {
         );
 
         // Checkpoint should be written.
-        let cp = read_checkpoint(&indexrs_dir).unwrap();
+        let cp = read_checkpoint(&ferret_dir).unwrap();
         assert!(cp.is_some());
     }
 
@@ -976,20 +976,20 @@ mod tests {
         let repo = dir.path();
         init_git_repo(repo);
 
-        let indexrs_dir = repo.join(".indexrs");
-        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-        let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+        let ferret_dir = repo.join(".ferret_index");
+        fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+        let manager = Arc::new(SegmentManager::new(&ferret_dir).unwrap());
 
         // Write a checkpoint with the current HEAD.
         let git = GitChangeDetector::new(repo.to_path_buf());
         let head = git.get_head_sha().unwrap();
         let cp = Checkpoint::new(Some(head), 0);
-        write_checkpoint(&indexrs_dir, &cp).unwrap();
+        write_checkpoint(&ferret_dir, &cp).unwrap();
 
         // Create an untracked file (will show in git ls-files).
         fs::write(repo.join("added.rs"), "fn added() { let x = 1; }").unwrap();
 
-        let changes = run_catchup(repo, &indexrs_dir, &manager).unwrap();
+        let changes = run_catchup(repo, &ferret_dir, &manager).unwrap();
 
         assert!(
             changes.iter().any(|e| e.path.to_string_lossy().contains("added.rs")),
@@ -1003,21 +1003,21 @@ mod tests {
         let repo = dir.path();
         init_git_repo(repo);
 
-        let indexrs_dir = repo.join(".indexrs");
-        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-        let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+        let ferret_dir = repo.join(".ferret_index");
+        fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+        let manager = Arc::new(SegmentManager::new(&ferret_dir).unwrap());
 
         // Write checkpoint at current HEAD, no changes.
         let git = GitChangeDetector::new(repo.to_path_buf());
         let head = git.get_head_sha().unwrap();
         let cp = Checkpoint::new(Some(head), 0);
-        write_checkpoint(&indexrs_dir, &cp).unwrap();
+        write_checkpoint(&ferret_dir, &cp).unwrap();
 
-        let changes = run_catchup(repo, &indexrs_dir, &manager).unwrap();
+        let changes = run_catchup(repo, &ferret_dir, &manager).unwrap();
         assert!(changes.is_empty());
 
         // Checkpoint should still be present.
-        let cp2 = read_checkpoint(&indexrs_dir).unwrap();
+        let cp2 = read_checkpoint(&ferret_dir).unwrap();
         assert!(cp2.is_some());
     }
 }
@@ -1025,7 +1025,7 @@ mod tests {
 
 **Step 2: Register module in lib.rs**
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod catchup;
@@ -1034,12 +1034,12 @@ pub use catchup::run_catchup;
 
 **Step 3: Run tests**
 
-Run: `cargo test -p indexrs-core -- catchup`
+Run: `cargo test -p ferret-indexer-core -- catchup`
 Expected: All pass.
 
 **Step 4: Wire catch-up into daemon startup**
 
-In `indexrs-cli/src/daemon.rs`, modify `start_daemon()` to spawn a background catch-up task. After creating the manager and `caught_up` flag, before the accept loop:
+In `ferret-indexer-cli/src/daemon.rs`, modify `start_daemon()` to spawn a background catch-up task. After creating the manager and `caught_up` flag, before the accept loop:
 
 ```rust
     // Start as not-caught-up.
@@ -1050,10 +1050,10 @@ In `indexrs-cli/src/daemon.rs`, modify `start_daemon()` to spawn a background ca
         let mgr = manager.clone();
         let cu = caught_up.clone();
         let repo = repo_root.to_path_buf();
-        let idir = indexrs_dir.clone();
+        let idir = ferret_dir.clone();
         tokio::spawn(async move {
             match tokio::task::spawn_blocking(move || {
-                indexrs_core::run_catchup(&repo, &idir, &mgr)
+                ferret_indexer_core::run_catchup(&repo, &idir, &mgr)
             })
             .await
             {
@@ -1086,7 +1086,7 @@ Expected: All pass.
 **Step 6: Commit**
 
 ```bash
-git add indexrs-core/src/catchup.rs indexrs-core/src/lib.rs indexrs-cli/src/daemon.rs
+git add ferret-indexer-core/src/catchup.rs ferret-indexer-core/src/lib.rs ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(HHC-83): add daemon background catch-up on startup"
 ```
 
@@ -1095,7 +1095,7 @@ git commit -m "feat(HHC-83): add daemon background catch-up on startup"
 ### Task 6: Wire HybridDetector into daemon
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs` (start HybridDetector after catch-up)
+- Modify: `ferret-indexer-cli/src/daemon.rs` (start HybridDetector after catch-up)
 
 **Step 1: Start HybridDetector after catch-up completes**
 
@@ -1107,14 +1107,14 @@ Expand the background catch-up task in `start_daemon()` to start the `HybridDete
         let mgr = manager.clone();
         let cu = caught_up.clone();
         let repo = repo_root.to_path_buf();
-        let idir = indexrs_dir.clone();
+        let idir = ferret_dir.clone();
         tokio::spawn(async move {
             // Phase 1: catch-up.
             match tokio::task::spawn_blocking({
                 let repo = repo.clone();
                 let idir = idir.clone();
                 let mgr = mgr.clone();
-                move || indexrs_core::run_catchup(&repo, &idir, &mgr)
+                move || ferret_indexer_core::run_catchup(&repo, &idir, &mgr)
             })
             .await
             {
@@ -1159,9 +1159,9 @@ Expand the background catch-up task in `start_daemon()` to start the `HybridDete
 Add this function in `daemon.rs` (before `start_daemon`):
 
 ```rust
-use indexrs_core::checkpoint::{Checkpoint, write_checkpoint};
-use indexrs_core::git_diff::GitChangeDetector;
-use indexrs_core::HybridDetector;
+use ferret_indexer_core::checkpoint::{Checkpoint, write_checkpoint};
+use ferret_indexer_core::git_diff::GitChangeDetector;
+use ferret_indexer_core::HybridDetector;
 
 /// Run the HybridDetector event loop, applying changes to the index.
 ///
@@ -1169,7 +1169,7 @@ use indexrs_core::HybridDetector;
 /// (which happens when the detector is dropped).
 fn run_live_indexing(
     repo_root: &Path,
-    indexrs_dir: &Path,
+    ferret_dir: &Path,
     manager: &Arc<SegmentManager>,
 ) -> Result<(), IndexError> {
     let mut detector = HybridDetector::new(repo_root.to_path_buf())?;
@@ -1192,7 +1192,7 @@ fn run_live_indexing(
         let snapshot = manager.snapshot();
         let file_count: u64 = snapshot.iter().map(|s| s.entry_count() as u64).sum();
         let cp = Checkpoint::new(git_commit, file_count);
-        if let Err(e) = write_checkpoint(indexrs_dir, &cp) {
+        if let Err(e) = write_checkpoint(ferret_dir, &cp) {
             tracing::warn!(error = %e, "failed to update checkpoint");
         }
 
@@ -1216,17 +1216,17 @@ Expected: All pass.
 **Step 4: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs
+git add ferret-indexer-cli/src/daemon.rs
 git commit -m "feat(HHC-83): wire HybridDetector into daemon for live indexing"
 ```
 
 ---
 
-### Task 7: `indexrs reindex` implementation
+### Task 7: `ferret reindex` implementation
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs` (add `Reindex` request type + handler)
-- Modify: `indexrs-cli/src/main.rs:162-165` (implement reindex command)
+- Modify: `ferret-indexer-cli/src/daemon.rs` (add `Reindex` request type + handler)
+- Modify: `ferret-indexer-cli/src/main.rs:162-165` (implement reindex command)
 
 **Step 1: Add `Reindex` variant to `DaemonRequest`**
 
@@ -1249,7 +1249,7 @@ In the match arm inside `handle_connection`, add before the closing `line.clear(
                 let idir = manager.base_dir().to_path_buf();
                 tokio::spawn(async move {
                     let _ = tokio::task::spawn_blocking(move || {
-                        indexrs_core::run_catchup(&repo, &idir, &Arc::new(/* ... */))
+                        ferret_indexer_core::run_catchup(&repo, &idir, &Arc::new(/* ... */))
                     }).await;
                 });
                 // For simplicity, just respond Done immediately.
@@ -1342,8 +1342,8 @@ In `main.rs`, before the `Command::Search` and `Command::Files` handlers call `r
 
 ```rust
             let repo_root = repo::find_repo_root(cli.repo.as_deref())?;
-            if !repo_root.join(".indexrs").join("segments").exists() {
-                eprintln!("error: no index found. Run 'indexrs init' first.");
+            if !repo_root.join(".ferret_index").join("segments").exists() {
+                eprintln!("error: no index found. Run 'ferret init' first.");
                 return Ok(ExitCode::Error);
             }
 ```
@@ -1356,8 +1356,8 @@ Expected: All pass.
 **Step 7: Commit**
 
 ```bash
-git add indexrs-cli/src/daemon.rs indexrs-cli/src/main.rs
-git commit -m "feat(HHC-83): implement indexrs reindex command and no-index guard"
+git add ferret-indexer-cli/src/daemon.rs ferret-indexer-cli/src/main.rs
+git commit -m "feat(HHC-83): implement ferret reindex command and no-index guard"
 ```
 
 ---

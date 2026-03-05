@@ -4,7 +4,7 @@
 
 **Goal:** Build the file metadata index mapping file_id to metadata, with a path string pool and binary on-disk format.
 
-**Architecture:** Single module `metadata.rs` in indexrs-core containing `FileMetadata` (entry struct), `MetadataBuilder` (in-memory builder with add/lookup/serialize), and `MetadataReader` (zero-copy reader over byte slices). Binary format uses fixed-size 58-byte entries in meta.bin with a separate paths.bin string pool.
+**Architecture:** Single module `metadata.rs` in ferret-indexer-core containing `FileMetadata` (entry struct), `MetadataBuilder` (in-memory builder with add/lookup/serialize), and `MetadataReader` (zero-copy reader over byte slices). Binary format uses fixed-size 58-byte entries in meta.bin with a separate paths.bin string pool.
 
 **Tech Stack:** Rust 2024, serde, little-endian binary format
 
@@ -12,7 +12,7 @@
 
 ## Task 1: Add Language u16 conversion methods
 
-**File:** `indexrs-core/src/types.rs`
+**File:** `ferret-indexer-core/src/types.rs`
 
 Add `to_u16()` and `from_u16()` methods to the `Language` enum for binary serialization:
 
@@ -25,13 +25,13 @@ impl Language {
 
 Mapping: Rust=0, Python=1, TypeScript=2, JavaScript=3, Go=4, C=5, Cpp=6, Java=7, Ruby=8, Shell=9, Markdown=10, Unknown=0xFFFF.
 
-**Test:** `cargo test -p indexrs-core -- types::tests::test_language_u16` -- passes.
+**Test:** `cargo test -p ferret-indexer-core -- types::tests::test_language_u16` -- passes.
 
 ---
 
 ## Task 2: Define FileMetadata struct and MetadataBuilder (skeleton + tests)
 
-**File:** `indexrs-core/src/metadata.rs` (NEW)
+**File:** `ferret-indexer-core/src/metadata.rs` (NEW)
 
 Define `FileMetadata` struct with all fields from the spec. Define `MetadataBuilder` with `new()`, `add_file()`, `next_file_id()`, `get()`, `get_by_path()`, `file_count()`, `iter()`.
 
@@ -42,23 +42,23 @@ Write failing tests first:
 - `test_builder_file_count` -- count matches number of added files
 - `test_builder_empty` -- empty builder has count 0, get returns None
 
-**Test:** `cargo test -p indexrs-core -- metadata` -- tests fail (not yet implemented), then implement and pass.
+**Test:** `cargo test -p ferret-indexer-core -- metadata` -- tests fail (not yet implemented), then implement and pass.
 
 ---
 
 ## Task 3: Implement MetadataBuilder methods
 
-**File:** `indexrs-core/src/metadata.rs`
+**File:** `ferret-indexer-core/src/metadata.rs`
 
 Implement all MetadataBuilder methods. The builder stores entries in a Vec, uses a HashMap<String, usize> for path-to-index lookup.
 
-**Test:** `cargo test -p indexrs-core -- metadata::tests::test_builder` -- all pass.
+**Test:** `cargo test -p ferret-indexer-core -- metadata::tests::test_builder` -- all pass.
 
 ---
 
 ## Task 4: Implement binary serialization (write_to)
 
-**File:** `indexrs-core/src/metadata.rs`
+**File:** `ferret-indexer-core/src/metadata.rs`
 
 Implement `MetadataBuilder::write_to()` that writes:
 
@@ -73,13 +73,13 @@ Write failing tests first:
 - `test_binary_size` -- serialized meta.bin size = 10 (header) + entry_count * 58
 - `test_write_empty` -- 0 entries produces valid header-only output
 
-**Test:** `cargo test -p indexrs-core -- metadata::tests::test_binary` -- fail then pass.
+**Test:** `cargo test -p ferret-indexer-core -- metadata::tests::test_binary` -- fail then pass.
 
 ---
 
 ## Task 5: Implement MetadataReader
 
-**File:** `indexrs-core/src/metadata.rs`
+**File:** `ferret-indexer-core/src/metadata.rs`
 
 Implement `MetadataReader::new()`, `get()`, `entry_count()`. Reader validates magic and version, reads fixed-size entries, resolves paths from the paths.bin buffer.
 
@@ -90,17 +90,17 @@ Write failing tests:
 - `test_reader_invalid_magic` -- returns IndexError on bad magic
 - `test_reader_invalid_version` -- returns IndexError on bad version
 
-**Test:** `cargo test -p indexrs-core -- metadata::tests::test_reader` -- fail then pass.
+**Test:** `cargo test -p ferret-indexer-core -- metadata::tests::test_reader` -- fail then pass.
 
 ---
 
 ## Task 6: Wire up lib.rs and final verification
 
-**File:** `indexrs-core/src/lib.rs` (update)
+**File:** `ferret-indexer-core/src/lib.rs` (update)
 
 Add `pub mod metadata;` and re-export key types.
 
-- `cargo test -p indexrs-core` -- all tests pass
+- `cargo test -p ferret-indexer-core` -- all tests pass
 - `cargo check --workspace` -- no errors
 - Commit with descriptive message
 

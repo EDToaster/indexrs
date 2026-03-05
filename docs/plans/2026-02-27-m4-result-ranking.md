@@ -6,7 +6,7 @@
 
 **Architecture:** Two new pieces: (1) `ranking.rs` module with a `RankingConfig` struct (tunable weights with sensible defaults) and a `score_file_match()` function that takes match metadata and produces a `[0.0, 1.0]` score. (2) Integration into `multi_search.rs` to replace the current simple `match_count / line_count` scoring with the new weighted ranking, and to use path-alphabetical ordering as tiebreaker. The scoring function is pure (no I/O) and operates on data already available during search: the query string, file path, line matches, mtime from metadata, and match type from the query engine. The `MatchType` enum (Exact, Prefix, Substring, Regex) is defined in `ranking.rs` and defaults to `Substring` for the current literal search pipeline.
 
-**Tech Stack:** Rust 2024, existing `indexrs-core` modules (search, multi_search, metadata, types), `tempfile` (dev)
+**Tech Stack:** Rust 2024, existing `ferret-indexer-core` modules (search, multi_search, metadata, types), `tempfile` (dev)
 
 **Prerequisite:** ASCII case-fold trigrams plan (`2026-02-27-ascii-casefold-trigrams.md`) must be implemented first. No direct impact on ranking, but the upstream search pipeline uses case-folded trigrams.
 
@@ -15,12 +15,12 @@
 ## Task 1: Create `ranking.rs` with `MatchType` enum and `RankingConfig` struct
 
 **Files:**
-- Create: `indexrs-core/src/ranking.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/ranking.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing test
 
-Create `indexrs-core/src/ranking.rs` with a test for constructing a default `RankingConfig`:
+Create `ferret-indexer-core/src/ranking.rs` with a test for constructing a default `RankingConfig`:
 
 ```rust
 //! Result ranking and scoring for search results.
@@ -65,7 +65,7 @@ mod tests {
 
 ### Step 2: Register the module in lib.rs
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod ranking;
@@ -79,7 +79,7 @@ pub use ranking::{MatchType, RankingConfig};
 
 ### Step 3: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_default_config -v`
+Run: `cargo test -p ferret-indexer-core -- test_default_config -v`
 
 Expected: FAIL -- `RankingConfig` and `MatchType` do not exist yet.
 
@@ -170,13 +170,13 @@ impl Default for RankingConfig {
 
 ### Step 5: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_default_config -v && cargo test -p indexrs-core -- test_match_type -v`
+Run: `cargo test -p ferret-indexer-core -- test_default_config -v && cargo test -p ferret-indexer-core -- test_match_type -v`
 
 Expected: PASS.
 
 ### Step 6: Run clippy
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 
 Expected: PASS with no warnings.
 
@@ -185,7 +185,7 @@ Expected: PASS with no warnings.
 ## Task 2: Implement individual scoring signal functions
 
 **Files:**
-- Modify: `indexrs-core/src/ranking.rs`
+- Modify: `ferret-indexer-core/src/ranking.rs`
 
 ### Step 1: Write the failing tests
 
@@ -305,7 +305,7 @@ Add these tests to the `tests` module in `ranking.rs`:
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_path_depth -v`
+Run: `cargo test -p ferret-indexer-core -- test_path_depth -v`
 
 Expected: FAIL -- functions don't exist yet.
 
@@ -380,13 +380,13 @@ pub fn recency_score(mtime_epoch_secs: u64, now_epoch_secs: u64, config: &Rankin
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- ranking -v`
+Run: `cargo test -p ferret-indexer-core -- ranking -v`
 
 Expected: All ranking tests PASS.
 
 ### Step 5: Run clippy
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 
 Expected: PASS with no warnings.
 
@@ -395,7 +395,7 @@ Expected: PASS with no warnings.
 ## Task 3: Implement composite `score_file_match()` function
 
 **Files:**
-- Modify: `indexrs-core/src/ranking.rs`
+- Modify: `ferret-indexer-core/src/ranking.rs`
 
 ### Step 1: Write the failing tests
 
@@ -547,7 +547,7 @@ Add these tests to the `tests` module:
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_score_file_match -v`
+Run: `cargo test -p ferret-indexer-core -- test_score_file_match -v`
 
 Expected: FAIL -- `ScoringInput` and `score_file_match` don't exist yet.
 
@@ -609,13 +609,13 @@ pub fn score_file_match(input: &ScoringInput<'_>, config: &RankingConfig) -> f64
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- ranking -v`
+Run: `cargo test -p ferret-indexer-core -- ranking -v`
 
 Expected: All ranking tests PASS.
 
 ### Step 5: Run clippy
 
-Run: `cargo clippy -p indexrs-core -- -D warnings`
+Run: `cargo clippy -p ferret-indexer-core -- -D warnings`
 
 Expected: PASS with no warnings.
 
@@ -624,7 +624,7 @@ Expected: PASS with no warnings.
 ## Task 4: Integrate ranking into `multi_search.rs`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 ### Step 1: Write the failing test
 
@@ -634,7 +634,7 @@ Add this test to `multi_search.rs`:
     #[test]
     fn test_search_segments_uses_ranking() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs/segments");
+        let base_dir = dir.path().join(".ferret_index/segments");
         std::fs::create_dir_all(&base_dir).unwrap();
 
         // File where query matches the filename (should rank higher)
@@ -673,7 +673,7 @@ Add this test to `multi_search.rs`:
 
 ### Step 2: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_search_segments_uses_ranking -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_uses_ranking -v`
 
 Expected: FAIL -- the current scoring doesn't account for filename or path depth.
 
@@ -743,7 +743,7 @@ With:
 
 ### Step 5: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- multi_search -v`
+Run: `cargo test -p ferret-indexer-core -- multi_search -v`
 
 Expected: All multi_search tests PASS, including the new ranking test.
 
@@ -764,8 +764,8 @@ Expected: PASS with no warnings.
 ## Task 5: Add tiebreaker test and edge case tests
 
 **Files:**
-- Modify: `indexrs-core/src/ranking.rs`
-- Modify: `indexrs-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/ranking.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
 
 ### Step 1: Add edge case tests to ranking.rs
 
@@ -849,7 +849,7 @@ Add to the `tests` module in `multi_search.rs`:
     #[test]
     fn test_search_segments_tiebreaker_alphabetical() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs/segments");
+        let base_dir = dir.path().join(".ferret_index/segments");
         std::fs::create_dir_all(&base_dir).unwrap();
 
         // Two files at same depth, same mtime, same match count
@@ -922,7 +922,7 @@ Expected: PASS.
 
 ### Step 4: Verify the demo still works
 
-Run: `cargo run -p indexrs-core --example demo -- . "fn main" 2>&1 | head -20`
+Run: `cargo run -p ferret-indexer-core --example demo -- . "fn main" 2>&1 | head -20`
 
 Expected: Results are returned with the new ranking applied (files with "main" in the filename should appear first, shallow files preferred).
 

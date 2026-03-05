@@ -4,7 +4,7 @@
 
 **Goal:** Implement a per-segment tombstone bitmap (`TombstoneSet`) for marking deleted and updated files, with binary persistence to `tombstones.bin`, enabling incremental index updates without full segment rewrites.
 
-**Architecture:** Single new module `tombstone.rs` in `indexrs-core` containing `TombstoneSet` -- a set of `FileId`s marked as deleted within a segment. Uses `HashSet<FileId>` internally (simple, no new deps). Persists to `tombstones.bin` using the project's standard binary format pattern: 10-byte header (`magic + version + count`) followed by sorted `u32` file IDs, all little-endian. Writers use atomic temp-file-then-rename for crash safety. Includes free functions mapping `ChangeEvent` kinds to tombstone operations.
+**Architecture:** Single new module `tombstone.rs` in `ferret-indexer-core` containing `TombstoneSet` -- a set of `FileId`s marked as deleted within a segment. Uses `HashSet<FileId>` internally (simple, no new deps). Persists to `tombstones.bin` using the project's standard binary format pattern: 10-byte header (`magic + version + count`) followed by sorted `u32` file IDs, all little-endian. Writers use atomic temp-file-then-rename for crash safety. Includes free functions mapping `ChangeEvent` kinds to tombstone operations.
 
 **Tech Stack:** Rust 2024, `std::collections::HashSet`, `std::io::Write`, `tempfile` (dev), little-endian binary format
 
@@ -12,7 +12,7 @@
 
 ## Task 1: Create tombstone module with TombstoneSet struct and basic tests
 
-**File:** `indexrs-core/src/tombstone.rs` (NEW)
+**File:** `ferret-indexer-core/src/tombstone.rs` (NEW)
 
 Create the module with the `TombstoneSet` struct and its core in-memory API. Write tests first, then implement.
 
@@ -177,13 +177,13 @@ impl Default for TombstoneSet {
 }
 ```
 
-**Test:** `cargo test -p indexrs-core -- tombstone::tests` -- all pass.
+**Test:** `cargo test -p ferret-indexer-core -- tombstone::tests` -- all pass.
 
 ---
 
 ## Task 2: Wire up the module in lib.rs
 
-**File:** `indexrs-core/src/lib.rs` (UPDATE)
+**File:** `ferret-indexer-core/src/lib.rs` (UPDATE)
 
 Add the module declaration and re-export:
 
@@ -199,13 +199,13 @@ pub use tombstone::TombstoneSet;
 
 Place `pub mod tombstone;` alphabetically among the existing module declarations (after `pub mod trigram;`, before `pub mod types;`). Place `pub use tombstone::TombstoneSet;` alphabetically among the re-exports (after the `trigram` re-exports, before the `types` re-exports).
 
-**Test:** `cargo check --workspace` -- no errors. `cargo test -p indexrs-core -- tombstone` -- all pass.
+**Test:** `cargo check --workspace` -- no errors. `cargo test -p ferret-indexer-core -- tombstone` -- all pass.
 
 ---
 
 ## Task 3: Implement binary serialization (write_to)
 
-**File:** `indexrs-core/src/tombstone.rs` (UPDATE)
+**File:** `ferret-indexer-core/src/tombstone.rs` (UPDATE)
 
 Add `write_to` method that writes the tombstone set to a `tombstones.bin` file using atomic rename. Add the necessary imports at the top of the file.
 
@@ -330,13 +330,13 @@ Write these tests:
     }
 ```
 
-**Test:** `cargo test -p indexrs-core -- tombstone` -- all pass.
+**Test:** `cargo test -p ferret-indexer-core -- tombstone` -- all pass.
 
 ---
 
 ## Task 4: Implement binary deserialization (read_from)
 
-**File:** `indexrs-core/src/tombstone.rs` (UPDATE)
+**File:** `ferret-indexer-core/src/tombstone.rs` (UPDATE)
 
 Add `read_from` method that loads a tombstone set from a `tombstones.bin` file, validating magic and version.
 
@@ -518,13 +518,13 @@ Write these tests:
     }
 ```
 
-**Test:** `cargo test -p indexrs-core -- tombstone` -- all pass.
+**Test:** `cargo test -p ferret-indexer-core -- tombstone` -- all pass.
 
 ---
 
 ## Task 5: Add change-handling helper functions
 
-**File:** `indexrs-core/src/tombstone.rs` (UPDATE)
+**File:** `ferret-indexer-core/src/tombstone.rs` (UPDATE)
 
 Add free functions that map `ChangeEvent` semantics to tombstone operations. These functions determine *what tombstone action* to take given a change kind, but the caller is responsible for actually looking up file IDs and creating new segment entries.
 
@@ -592,13 +592,13 @@ Write these tests:
     }
 ```
 
-**Test:** `cargo test -p indexrs-core -- tombstone` -- all pass.
+**Test:** `cargo test -p ferret-indexer-core -- tombstone` -- all pass.
 
 ---
 
 ## Task 6: Update lib.rs re-exports and run full verification
 
-**File:** `indexrs-core/src/lib.rs` (UPDATE)
+**File:** `ferret-indexer-core/src/lib.rs` (UPDATE)
 
 Update the re-exports to include the change-handling functions:
 

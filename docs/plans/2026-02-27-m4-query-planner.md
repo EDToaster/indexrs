@@ -6,7 +6,7 @@
 
 **Architecture:** The query planner is a pure function: `plan_query(query: &Query, segment: &Segment) -> Result<QueryPlan, IndexError>`. It takes the parsed AST and a segment reference (for posting list size estimation), and returns a `QueryPlan` struct describing the execution strategy. The plan is segment-specific because posting list sizes vary per segment. A separate `plan_query_multi(query: &Query, segments: &SegmentList) -> Vec<(SegmentId, QueryPlan)>` function produces plans for all segments in a snapshot. The planner does NOT execute the plan -- execution is handled by HHC-49 and the updated `multi_search.rs`.
 
-**Tech Stack:** Rust 2024, existing `indexrs-core` modules (types, index_reader, metadata, segment, error, trigram), `tempfile` (dev)
+**Tech Stack:** Rust 2024, existing `ferret-indexer-core` modules (types, index_reader, metadata, segment, error, trigram), `tempfile` (dev)
 
 **Prerequisite:** ASCII case-fold trigrams plan (`2026-02-27-ascii-casefold-trigrams.md`) must be implemented first. The index stores lowercase-folded trigrams, so all trigram lookups in the planner use lowercase trigrams. The `case_sensitive` flag on query types does NOT affect planning — it only affects verification (HHC-49). The planner estimates posting list sizes using the same lowercase trigrams for both case-sensitive and case-insensitive queries.
 
@@ -20,12 +20,12 @@
 ## Task 1: Define `QueryPlan` and supporting types
 
 **Files:**
-- Create: `indexrs-core/src/query_plan.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/query_plan.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing test
 
-Create `indexrs-core/src/query_plan.rs` with test-first types:
+Create `ferret-indexer-core/src/query_plan.rs` with test-first types:
 
 ```rust
 //! Query planner: converts a Query AST into an optimized execution plan.
@@ -185,7 +185,7 @@ mod tests {
 
 ### Step 2: Register the module
 
-In `indexrs-core/src/lib.rs`, add:
+In `ferret-indexer-core/src/lib.rs`, add:
 
 ```rust
 pub mod query_plan;
@@ -200,7 +200,7 @@ pub use query_plan::{PreFilter, QueryPlan, ScoredTrigram, VerifyStep};
 ### Step 3: Verify
 
 ```bash
-cargo test -p indexrs-core -- query_plan
+cargo test -p ferret-indexer-core -- query_plan
 cargo clippy --workspace -- -D warnings
 ```
 
@@ -213,11 +213,11 @@ cargo clippy --workspace -- -D warnings
 ## Task 2: Add `estimate_posting_list_size()` to `TrigramIndexReader`
 
 **Files:**
-- Modify: `indexrs-core/src/index_reader.rs`
+- Modify: `ferret-indexer-core/src/index_reader.rs`
 
 ### Step 1: Write the failing test
 
-Add to `indexrs-core/src/index_reader.rs` tests:
+Add to `ferret-indexer-core/src/index_reader.rs` tests:
 
 ```rust
 #[test]
@@ -292,7 +292,7 @@ pub fn estimate_posting_list_size(&self, trigram: Trigram) -> u32 {
 ### Step 3: Verify
 
 ```bash
-cargo test -p indexrs-core -- test_estimate_posting_list_size
+cargo test -p ferret-indexer-core -- test_estimate_posting_list_size
 cargo clippy --workspace -- -D warnings
 ```
 
@@ -305,7 +305,7 @@ cargo clippy --workspace -- -D warnings
 ## Task 3: Implement `plan_query()` for literal queries
 
 **Files:**
-- Modify: `indexrs-core/src/query_plan.rs`
+- Modify: `ferret-indexer-core/src/query_plan.rs`
 
 This task implements the core planner function for the simplest case: a literal substring query with optional language/path filters.
 
@@ -348,7 +348,7 @@ fn build_test_segment(base_dir: &std::path::Path) -> Arc<crate::segment::Segment
 #[test]
 fn test_plan_literal_query() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let plan = plan_literal_query("println", &[], &segment);
@@ -372,7 +372,7 @@ fn test_plan_literal_query() {
 #[test]
 fn test_plan_literal_query_with_language_filter() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let plan = plan_literal_query(
@@ -390,7 +390,7 @@ fn test_plan_literal_query_with_language_filter() {
 #[test]
 fn test_plan_literal_query_short_query() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     // "fn" is only 2 chars -- no trigrams possible
@@ -403,7 +403,7 @@ fn test_plan_literal_query_short_query() {
 #[test]
 fn test_plan_literal_query_absent_trigram() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     // "xyzxyz" contains trigrams not in the index
@@ -418,7 +418,7 @@ fn test_plan_literal_query_absent_trigram() {
 #[test]
 fn test_plan_literal_query_with_path_filter() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let plan = plan_literal_query(
@@ -495,7 +495,7 @@ pub fn plan_literal_query(
 ### Step 3: Verify
 
 ```bash
-cargo test -p indexrs-core -- query_plan
+cargo test -p ferret-indexer-core -- query_plan
 cargo clippy --workspace -- -D warnings
 ```
 
@@ -508,7 +508,7 @@ cargo clippy --workspace -- -D warnings
 ## Task 4: Implement `plan_regex_query()` for regex pattern queries
 
 **Files:**
-- Modify: `indexrs-core/src/query_plan.rs`
+- Modify: `ferret-indexer-core/src/query_plan.rs`
 
 ### Step 1: Write the failing test
 
@@ -516,7 +516,7 @@ cargo clippy --workspace -- -D warnings
 #[test]
 fn test_plan_regex_query() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     // Regex r"fn\s+\w+" has required literal "fn" which is < 3 chars,
@@ -536,7 +536,7 @@ fn test_plan_regex_query() {
 #[test]
 fn test_plan_regex_query_no_extractable_trigrams() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     // Regex r"[a-z]+" has no required literal substrings >= 3 chars
@@ -550,7 +550,7 @@ fn test_plan_regex_query_no_extractable_trigrams() {
 #[test]
 fn test_plan_regex_query_with_filters() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let plan = plan_regex_query(
@@ -686,7 +686,7 @@ fn is_regex_meta(b: u8) -> bool {
 ### Step 3: Verify
 
 ```bash
-cargo test -p indexrs-core -- query_plan
+cargo test -p ferret-indexer-core -- query_plan
 cargo clippy --workspace -- -D warnings
 ```
 
@@ -699,7 +699,7 @@ cargo clippy --workspace -- -D warnings
 ## Task 5: Implement `plan_query()` unified entry point
 
 **Files:**
-- Modify: `indexrs-core/src/query_plan.rs`
+- Modify: `ferret-indexer-core/src/query_plan.rs`
 
 This task adds the unified `plan_query()` function that accepts a `Query` AST (from HHC-46) and dispatches to the appropriate planning function based on the query type. Until HHC-46 is implemented, we define a minimal `QueryInput` enum that captures the essential information the planner needs.
 
@@ -709,7 +709,7 @@ This task adds the unified `plan_query()` function that accepts a `Query` AST (f
 #[test]
 fn test_plan_query_literal() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let input = QueryInput::Literal {
@@ -726,7 +726,7 @@ fn test_plan_query_literal() {
 #[test]
 fn test_plan_query_regex() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let input = QueryInput::Regex {
@@ -744,7 +744,7 @@ fn test_plan_query_regex() {
 #[test]
 fn test_plan_query_multi_segment() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg0 = {
@@ -851,7 +851,7 @@ pub fn plan_query_multi(
 ### Step 3: Verify
 
 ```bash
-cargo test -p indexrs-core -- query_plan
+cargo test -p ferret-indexer-core -- query_plan
 cargo clippy --workspace -- -D warnings
 ```
 
@@ -864,7 +864,7 @@ cargo clippy --workspace -- -D warnings
 ## Task 6: Implement plan optimization -- early termination and trigram deduplication
 
 **Files:**
-- Modify: `indexrs-core/src/query_plan.rs`
+- Modify: `ferret-indexer-core/src/query_plan.rs`
 
 ### Step 1: Write the failing test
 
@@ -872,7 +872,7 @@ cargo clippy --workspace -- -D warnings
 #[test]
 fn test_plan_early_termination_zero_count_trigram() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let plan = plan_literal_query("xyzxyz", &[], &segment);
@@ -886,7 +886,7 @@ fn test_plan_early_termination_zero_count_trigram() {
 #[test]
 fn test_plan_handles_duplicate_trigrams() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     // "aaaa" produces trigram "aaa" twice -- plan should deduplicate
@@ -899,7 +899,7 @@ fn test_plan_handles_duplicate_trigrams() {
 #[test]
 fn test_plan_can_short_circuit() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let plan = plan_literal_query("xyzxyz", &[], &segment);
@@ -911,7 +911,7 @@ fn test_plan_can_short_circuit() {
 #[test]
 fn test_plan_cannot_short_circuit() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     let plan = plan_literal_query("println", &[], &segment);
@@ -940,7 +940,7 @@ impl QueryPlan {
 ### Step 3: Verify
 
 ```bash
-cargo test -p indexrs-core -- query_plan
+cargo test -p ferret-indexer-core -- query_plan
 cargo clippy --workspace -- -D warnings
 ```
 
@@ -953,7 +953,7 @@ cargo clippy --workspace -- -D warnings
 ## Task 7: Add `Debug` and `Display` implementations for query plan types
 
 **Files:**
-- Modify: `indexrs-core/src/query_plan.rs`
+- Modify: `ferret-indexer-core/src/query_plan.rs`
 
 ### Step 1: Write the failing test
 
@@ -1045,7 +1045,7 @@ impl fmt::Display for QueryPlan {
 ### Step 3: Verify
 
 ```bash
-cargo test -p indexrs-core -- query_plan
+cargo test -p ferret-indexer-core -- query_plan
 cargo clippy --workspace -- -D warnings
 ```
 
@@ -1058,7 +1058,7 @@ cargo clippy --workspace -- -D warnings
 ## Task 8: Integration test -- plan correctness validates against actual search results
 
 **Files:**
-- Modify: `indexrs-core/src/query_plan.rs`
+- Modify: `ferret-indexer-core/src/query_plan.rs`
 
 ### Step 1: Write the integration test
 
@@ -1068,7 +1068,7 @@ This test builds a segment, creates a plan, and verifies that the plan's predict
 #[test]
 fn test_plan_trigram_ordering_matches_actual_sizes() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     // Build a segment where different trigrams have very different posting list sizes
@@ -1131,7 +1131,7 @@ fn test_plan_and_execute_literal_search() {
     use crate::index_state::SegmentList;
 
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     // Plan the query
@@ -1157,7 +1157,7 @@ fn test_plan_short_circuit_matches_empty_search() {
     use crate::index_state::SegmentList;
 
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     let segment = build_test_segment(&base_dir);
 
     // Plan for a query that doesn't exist
@@ -1178,7 +1178,7 @@ These tests validate existing functionality. If any test fails, the issue is in 
 ### Step 3: Verify
 
 ```bash
-cargo test -p indexrs-core -- query_plan
+cargo test -p ferret-indexer-core -- query_plan
 cargo clippy --workspace -- -D warnings
 cargo fmt --all -- --check
 ```

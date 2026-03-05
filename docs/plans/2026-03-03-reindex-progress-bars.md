@@ -2,23 +2,23 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add rich indicatif progress bars to `indexrs reindex` and `indexrs init` so users see per-file progress percentages, phase labels, and change breakdowns instead of static text messages.
+**Goal:** Add rich indicatif progress bars to `ferret reindex` and `ferret init` so users see per-file progress percentages, phase labels, and change breakdowns instead of static text messages.
 
-**Architecture:** Three-layer change. (1) Add a `ReindexProgress` enum in `indexrs-core` carrying structured data (phase, counts, totals). Refactor `run_catchup_with_progress` and add `apply_changes_with_progress` to emit these events. (2) Daemon serializes `ReindexProgress` as JSON inside the existing `DaemonResponse::Progress { message }` wire type — no protocol changes. (3) CLI parses the JSON, drives `indicatif` progress bars client-side. Falls back to plain text for unparseable messages. (4) Rewrite `init.rs` to use indicatif instead of the custom `ProgressLine` struct, preserving all existing functionality (skip breakdowns, content bytes, auto-registration).
+**Architecture:** Three-layer change. (1) Add a `ReindexProgress` enum in `ferret-indexer-core` carrying structured data (phase, counts, totals). Refactor `run_catchup_with_progress` and add `apply_changes_with_progress` to emit these events. (2) Daemon serializes `ReindexProgress` as JSON inside the existing `DaemonResponse::Progress { message }` wire type — no protocol changes. (3) CLI parses the JSON, drives `indicatif` progress bars client-side. Falls back to plain text for unparseable messages. (4) Rewrite `init.rs` to use indicatif instead of the custom `ProgressLine` struct, preserving all existing functionality (skip breakdowns, content bytes, auto-registration).
 
-**Tech Stack:** Rust, serde (already in indexrs-core), indicatif (new dep in indexrs-cli)
+**Tech Stack:** Rust, serde (already in ferret-indexer-core), indicatif (new dep in ferret-indexer-cli)
 
 ---
 
-### Task 1: Add `ReindexProgress` enum to indexrs-core
+### Task 1: Add `ReindexProgress` enum to ferret-indexer-core
 
 **Files:**
-- Create: `indexrs-core/src/reindex_progress.rs`
-- Modify: `indexrs-core/src/lib.rs:1-40` (add module + re-export)
+- Create: `ferret-indexer-core/src/reindex_progress.rs`
+- Modify: `ferret-indexer-core/src/lib.rs:1-40` (add module + re-export)
 
 **Step 1: Create the `ReindexProgress` enum**
 
-Create `indexrs-core/src/reindex_progress.rs`:
+Create `ferret-indexer-core/src/reindex_progress.rs`:
 
 ```rust
 //! Structured progress events emitted during reindex operations.
@@ -72,15 +72,15 @@ pub enum ReindexProgress {
 
 **Step 2: Wire up module and re-export in `lib.rs`**
 
-In `indexrs-core/src/lib.rs`, add `pub mod reindex_progress;` after the `pub mod recovery;` line, and add `pub use reindex_progress::ReindexProgress;` after the `recover_segments` re-export line.
+In `ferret-indexer-core/src/lib.rs`, add `pub mod reindex_progress;` after the `pub mod recovery;` line, and add `pub use reindex_progress::ReindexProgress;` after the `recover_segments` re-export line.
 
-**Step 3: Run `cargo check -p indexrs-core`**
+**Step 3: Run `cargo check -p ferret-indexer-core`**
 
 Expected: PASS — new module compiles, no consumers yet.
 
 **Step 4: Add serde roundtrip test**
 
-Append to the bottom of `indexrs-core/src/reindex_progress.rs`:
+Append to the bottom of `ferret-indexer-core/src/reindex_progress.rs`:
 
 ```rust
 #[cfg(test)]
@@ -134,7 +134,7 @@ mod tests {
 
 **Step 5: Run tests**
 
-Run: `cargo test -p indexrs-core -- test_serde_roundtrip`
+Run: `cargo test -p ferret-indexer-core -- test_serde_roundtrip`
 Expected: 4 PASS
 
 **Step 6: Commit**
@@ -148,7 +148,7 @@ feat(core): add ReindexProgress enum for structured reindex events
 ### Task 2: Add `apply_changes_with_progress` to `SegmentManager`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs:373-491` (add new method)
+- Modify: `ferret-indexer-core/src/segment_manager.rs:373-491` (add new method)
 
 **Step 1: Write the failing test**
 
@@ -161,13 +161,13 @@ Add at the bottom of the `#[cfg(test)] mod tests` block in `segment_manager.rs`:
 
         let dir = tempfile::tempdir().unwrap();
         let repo_dir = dir.path();
-        let indexrs_dir = repo_dir.join(".indexrs");
-        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
+        let ferret_dir = repo_dir.join(".ferret_index");
+        fs::create_dir_all(ferret_dir.join("segments")).unwrap();
 
         // Write a source file.
         fs::write(repo_dir.join("hello.rs"), "fn hello() {}").unwrap();
 
-        let manager = SegmentManager::new(&indexrs_dir).unwrap();
+        let manager = SegmentManager::new(&ferret_dir).unwrap();
 
         let changes = vec![ChangeEvent {
             path: PathBuf::from("hello.rs"),
@@ -192,7 +192,7 @@ Add at the bottom of the `#[cfg(test)] mod tests` block in `segment_manager.rs`:
 
 **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p indexrs-core -- test_apply_changes_with_progress_reports_events`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes_with_progress_reports_events`
 Expected: FAIL — method doesn't exist.
 
 **Step 3: Implement `apply_changes_with_progress`**
@@ -345,10 +345,10 @@ Add after the existing `apply_changes` method in `segment_manager.rs`. This is a
 
 **Step 4: Run tests**
 
-Run: `cargo test -p indexrs-core -- test_apply_changes_with_progress`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes_with_progress`
 Expected: PASS
 
-Run: `cargo test -p indexrs-core -- test_apply_changes`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes`
 Expected: PASS (existing tests unchanged)
 
 **Step 5: Commit**
@@ -362,8 +362,8 @@ feat(core): add apply_changes_with_progress to SegmentManager
 ### Task 3: Refactor `run_catchup_with_progress` to emit `ReindexProgress`
 
 **Files:**
-- Modify: `indexrs-core/src/catchup.rs:38-98`
-- Modify: `indexrs-core/src/lib.rs:40` (update re-export)
+- Modify: `ferret-indexer-core/src/catchup.rs:38-98`
+- Modify: `ferret-indexer-core/src/lib.rs:40` (update re-export)
 
 **Step 1: Update the test first**
 
@@ -378,21 +378,21 @@ Replace `test_catchup_with_progress_reports_phases` in `catchup.rs` with:
         let repo = dir.path();
         init_git_repo(repo);
 
-        let indexrs_dir = repo.join(".indexrs");
-        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-        let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+        let ferret_dir = repo.join(".ferret_index");
+        fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+        let manager = Arc::new(SegmentManager::new(&ferret_dir).unwrap());
 
         // Write checkpoint at current HEAD.
         let git = GitChangeDetector::new(repo.to_path_buf());
         let head = git.get_head_sha().unwrap();
         let cp = Checkpoint::new(Some(head), 0);
-        write_checkpoint(&indexrs_dir, &cp).unwrap();
+        write_checkpoint(&ferret_dir, &cp).unwrap();
 
         // Create an untracked file so there's something to detect.
         fs::write(repo.join("progress.rs"), "fn progress() { let x = 1; }").unwrap();
 
         let events = std::sync::Mutex::new(Vec::new());
-        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, |ev| {
+        let changes = run_catchup_with_progress(repo, &ferret_dir, &manager, |ev| {
             events.lock().unwrap().push(ev);
         })
         .unwrap();
@@ -425,17 +425,17 @@ Replace `test_catchup_with_progress_reports_phases` in `catchup.rs` with:
         let repo = dir.path();
         init_git_repo(repo);
 
-        let indexrs_dir = repo.join(".indexrs");
-        fs::create_dir_all(indexrs_dir.join("segments")).unwrap();
-        let manager = Arc::new(SegmentManager::new(&indexrs_dir).unwrap());
+        let ferret_dir = repo.join(".ferret_index");
+        fs::create_dir_all(ferret_dir.join("segments")).unwrap();
+        let manager = Arc::new(SegmentManager::new(&ferret_dir).unwrap());
 
         let git = GitChangeDetector::new(repo.to_path_buf());
         let head = git.get_head_sha().unwrap();
         let cp = Checkpoint::new(Some(head), 0);
-        write_checkpoint(&indexrs_dir, &cp).unwrap();
+        write_checkpoint(&ferret_dir, &cp).unwrap();
 
         let events = std::sync::Mutex::new(Vec::new());
-        let changes = run_catchup_with_progress(repo, &indexrs_dir, &manager, |ev| {
+        let changes = run_catchup_with_progress(repo, &ferret_dir, &manager, |ev| {
             events.lock().unwrap().push(ev);
         })
         .unwrap();
@@ -451,7 +451,7 @@ Replace `test_catchup_with_progress_reports_phases` in `catchup.rs` with:
 
 **Step 3: Run tests to verify they fail**
 
-Run: `cargo test -p indexrs-core -- test_catchup_with_progress`
+Run: `cargo test -p ferret-indexer-core -- test_catchup_with_progress`
 Expected: FAIL — signature changed.
 
 **Step 4: Rewrite `run_catchup_with_progress`**
@@ -463,13 +463,13 @@ Change the callback from `FnMut(&str)` to `FnMut(ReindexProgress)`:
 /// [`ReindexProgress`] event at each phase so callers can stream status to a UI.
 pub fn run_catchup_with_progress<F: FnMut(ReindexProgress) + Send + Sync>(
     repo_root: &Path,
-    indexrs_dir: &Path,
+    ferret_dir: &Path,
     manager: &Arc<SegmentManager>,
     mut on_progress: F,
 ) -> Result<Vec<ChangeEvent>> {
     use crate::reindex_progress::ReindexProgress;
 
-    let checkpoint = read_checkpoint(indexrs_dir)?;
+    let checkpoint = read_checkpoint(ferret_dir)?;
 
     on_progress(ReindexProgress::DetectingChanges);
 
@@ -534,7 +534,7 @@ pub fn run_catchup_with_progress<F: FnMut(ReindexProgress) + Send + Sync>(
     let snapshot = manager.snapshot();
     let file_count: u64 = snapshot.iter().map(|s| s.entry_count() as u64).sum();
     let new_checkpoint = Checkpoint::new(git_commit, file_count);
-    write_checkpoint(indexrs_dir, &new_checkpoint)?;
+    write_checkpoint(ferret_dir, &new_checkpoint)?;
 
     Ok(changes)
 }
@@ -545,10 +545,10 @@ Also update `run_catchup` to adapt the old no-op:
 ```rust
 pub fn run_catchup(
     repo_root: &Path,
-    indexrs_dir: &Path,
+    ferret_dir: &Path,
     manager: &Arc<SegmentManager>,
 ) -> Result<Vec<ChangeEvent>> {
-    run_catchup_with_progress(repo_root, indexrs_dir, manager, |_| {})
+    run_catchup_with_progress(repo_root, ferret_dir, manager, |_| {})
 }
 ```
 
@@ -561,7 +561,7 @@ pub use catchup::{run_catchup, run_catchup_with_progress};
 
 **Step 5: Run tests**
 
-Run: `cargo test -p indexrs-core -- test_catchup`
+Run: `cargo test -p ferret-indexer-core -- test_catchup`
 Expected: ALL PASS
 
 **Step 6: Commit**
@@ -575,7 +575,7 @@ feat(core): emit structured ReindexProgress from run_catchup_with_progress
 ### Task 4: Update daemon to serialize `ReindexProgress` as JSON
 
 **Files:**
-- Modify: `indexrs-cli/src/daemon.rs:990-1047` (reindex handler)
+- Modify: `ferret-indexer-cli/src/daemon.rs:990-1047` (reindex handler)
 
 **Step 1: Update the reindex handler**
 
@@ -585,13 +585,13 @@ Replace the `DaemonRequest::Reindex` handler in `daemon.rs`. The change: the pro
 DaemonRequest::Reindex => {
     let start = Instant::now();
     let repo = repo_root.to_path_buf();
-    let idir = indexrs_dir.to_path_buf();
+    let idir = ferret_dir.to_path_buf();
     let mgr = manager.clone();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
     let handle = tokio::task::spawn_blocking(move || {
-        indexrs_core::run_catchup_with_progress(&repo, &idir, &mgr, |event| {
+        ferret_indexer_core::run_catchup_with_progress(&repo, &idir, &mgr, |event| {
             if let Ok(json) = serde_json::to_string(&event) {
                 let _ = tx.send(json);
             }
@@ -659,11 +659,11 @@ feat(daemon): serialize ReindexProgress as JSON in progress frames
 ### Task 5: Add `indicatif` dependency and reindex progress renderer to CLI
 
 **Files:**
-- Modify: `indexrs-cli/Cargo.toml` (add indicatif)
-- Create: `indexrs-cli/src/reindex_display.rs`
-- Modify: `indexrs-cli/src/main.rs:225-238` (replace run_via_daemon with custom handler)
+- Modify: `ferret-indexer-cli/Cargo.toml` (add indicatif)
+- Create: `ferret-indexer-cli/src/reindex_display.rs`
+- Modify: `ferret-indexer-cli/src/main.rs:225-238` (replace run_via_daemon with custom handler)
 
-**Step 1: Add `indicatif` to `indexrs-cli/Cargo.toml`**
+**Step 1: Add `indicatif` to `ferret-indexer-cli/Cargo.toml`**
 
 Add to `[dependencies]`:
 ```toml
@@ -672,7 +672,7 @@ indicatif = "0.17"
 
 **Step 2: Create `reindex_display.rs`**
 
-Create `indexrs-cli/src/reindex_display.rs`:
+Create `ferret-indexer-cli/src/reindex_display.rs`:
 
 ```rust
 //! Renders structured [`ReindexProgress`] events as indicatif progress bars.
@@ -680,17 +680,17 @@ Create `indexrs-cli/src/reindex_display.rs`:
 use std::io::BufReader;
 
 use indicatif::{ProgressBar, ProgressStyle};
-use indexrs_core::ReindexProgress;
-use indexrs_daemon::types::DaemonResponse;
-use indexrs_daemon::wire;
+use ferret_indexer_core::ReindexProgress;
+use ferret_indexer_daemon::types::DaemonResponse;
+use ferret_indexer_daemon::wire;
 use tokio::io::AsyncWriteExt;
 use tokio::net::unix::OwnedWriteHalf;
 
 use crate::daemon::{ensure_daemon, ExitCode};
-use indexrs_core::IndexError;
-use indexrs_daemon::types::DaemonRequest;
+use ferret_indexer_core::IndexError;
+use ferret_indexer_daemon::types::DaemonRequest;
 
-/// Run `indexrs reindex` with indicatif progress bars.
+/// Run `ferret reindex` with indicatif progress bars.
 pub async fn run_reindex_with_progress(
     repo_root: &std::path::Path,
 ) -> Result<ExitCode, IndexError> {
@@ -939,7 +939,7 @@ Address clippy/fmt/test failures if any.
 
 If a repo is available:
 ```bash
-cargo run -p indexrs-cli -- reindex
+cargo run -p ferret-indexer-cli -- reindex
 ```
 
 Expected output (for a repo with changes):
@@ -965,7 +965,7 @@ chore: clippy and fmt fixes for reindex progress bars
 ### Task 7: Rewrite `init.rs` to use indicatif progress bars
 
 **Files:**
-- Modify: `indexrs-cli/src/init.rs` (replace `ProgressLine` with indicatif)
+- Modify: `ferret-indexer-cli/src/init.rs` (replace `ProgressLine` with indicatif)
 
 This task replaces the custom `ProgressLine` struct with `indicatif` progress bars while preserving **all** existing functionality:
 - Force mode (remove existing index)
@@ -979,20 +979,20 @@ This task replaces the custom `ProgressLine` struct with `indicatif` progress ba
 
 **Step 1: Rewrite `init.rs`**
 
-Replace the full contents of `indexrs-cli/src/init.rs`:
+Replace the full contents of `ferret-indexer-cli/src/init.rs`:
 
 ```rust
 use std::path::Path;
 use std::time::Instant;
 
 use indicatif::{ProgressBar, ProgressStyle};
-use indexrs_core::checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
-use indexrs_core::error::IndexError;
-use indexrs_core::git_diff::GitChangeDetector;
-use indexrs_core::registry::{add_repo, config_file_path, load_config, save_config};
-use indexrs_core::segment::InputFile;
-use indexrs_core::walker::DirectoryWalkerBuilder;
-use indexrs_core::{DEFAULT_MAX_FILE_SIZE, SegmentManager, should_index_file};
+use ferret_indexer_core::checkpoint::{Checkpoint, read_checkpoint, write_checkpoint};
+use ferret_indexer_core::error::IndexError;
+use ferret_indexer_core::git_diff::GitChangeDetector;
+use ferret_indexer_core::registry::{add_repo, config_file_path, load_config, save_config};
+use ferret_indexer_core::segment::InputFile;
+use ferret_indexer_core::walker::DirectoryWalkerBuilder;
+use ferret_indexer_core::{DEFAULT_MAX_FILE_SIZE, SegmentManager, should_index_file};
 
 /// Format a number with comma separators (e.g. 1234567 -> "1,234,567").
 fn fmt_count(n: usize) -> String {
@@ -1036,16 +1036,16 @@ fn new_spinner(msg: &str) -> ProgressBar {
     sp
 }
 
-/// Run the `indexrs init` command.
+/// Run the `ferret init` command.
 ///
 /// Walks the repo tree, builds the full index, and writes a checkpoint.
 /// If `force` is false and an index already exists, returns an error.
 pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
-    let indexrs_dir = repo_root.join(".indexrs");
+    let ferret_dir = repo_root.join(".ferret_index");
 
     // Check for existing index unless --force.
     if !force {
-        match read_checkpoint(&indexrs_dir) {
+        match read_checkpoint(&ferret_dir) {
             Ok(Some(_)) => {
                 return Err(IndexError::Io(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
@@ -1059,12 +1059,12 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
 
     // If forcing, remove existing segments and stale checkpoint.
     if force {
-        let segments_dir = indexrs_dir.join("segments");
+        let segments_dir = ferret_dir.join("segments");
         if segments_dir.exists() {
             eprintln!("Removing existing index...");
             std::fs::remove_dir_all(&segments_dir)?;
         }
-        let checkpoint_path = indexrs_dir.join("checkpoint.json");
+        let checkpoint_path = ferret_dir.join("checkpoint.json");
         if checkpoint_path.exists() {
             std::fs::remove_file(&checkpoint_path)?;
         }
@@ -1131,7 +1131,7 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
                 skipped_size.fetch_add(1, Ordering::Relaxed);
                 return None;
             }
-            if indexrs_core::is_binary_path(&wf.path) {
+            if ferret_indexer_core::is_binary_path(&wf.path) {
                 skipped_binary.fetch_add(1, Ordering::Relaxed);
                 return None;
             }
@@ -1224,7 +1224,7 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     );
     bar.set_message(fmt_bytes(total_content_bytes));
 
-    let manager = SegmentManager::new(&indexrs_dir)?;
+    let manager = SegmentManager::new(&ferret_dir)?;
     let bar_ref = &bar;
     manager.index_files_with_progress(files, |done, _total| {
         if done % 100 == 0 || done == total_files {
@@ -1246,7 +1246,7 @@ pub fn run_init(repo_root: &Path, force: bool) -> Result<(), IndexError> {
     let git = GitChangeDetector::new(repo_root.to_path_buf());
     let git_commit = git.get_head_sha().ok();
     let checkpoint = Checkpoint::new(git_commit, file_count);
-    write_checkpoint(&indexrs_dir, &checkpoint)?;
+    write_checkpoint(&ferret_dir, &checkpoint)?;
 
     // ── Summary ──────────────────────────────────────────────────────
     let elapsed = start.elapsed();
@@ -1327,10 +1327,10 @@ Expected: PASS
 
 **Step 3: Run existing tests**
 
-Run: `cargo test -p indexrs-cli -- test_fmt_count`
+Run: `cargo test -p ferret-indexer-cli -- test_fmt_count`
 Expected: PASS
 
-Run: `cargo test -p indexrs-cli -- test_fmt_bytes`
+Run: `cargo test -p ferret-indexer-cli -- test_fmt_bytes`
 Expected: PASS
 
 **Step 4: Run full workspace tests**

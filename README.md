@@ -1,17 +1,17 @@
-# indexrs
+# ferret
 
 Fast local code search using trigram indexing. Inspired by [Google Code Search](https://swtch.com/~rsc/regexp/regexp4.html) and [zoekt](https://github.com/sourcegraph/zoekt).
 
-indexrs builds a trigram index over source files, enabling substring search without scanning every file. Queries that would take seconds with `grep -r` return in milliseconds.
+ferret builds a trigram index over source files, enabling substring search without scanning every file. Queries that would take seconds with `grep -r` return in milliseconds.
 
 ## How it works
 
-Every 3-byte sequence (trigram) in each source file is recorded in a posting list. To search for `"parse"`, indexrs extracts the trigrams `"par"`, `"ars"`, `"rse"`, looks up which files contain all three, then verifies the actual match in the narrowed candidate set.
+Every 3-byte sequence (trigram) in each source file is recorded in a posting list. To search for `"parse"`, ferret extracts the trigrams `"par"`, `"ars"`, `"rse"`, looks up which files contain all three, then verifies the actual match in the narrowed candidate set.
 
 The index is stored as immutable **segments** on disk. File changes are handled incrementally — modified files are tombstoned in old segments and re-indexed into new ones. Background compaction merges fragmented segments.
 
 ```
-.indexrs/segments/
+.ferret_index/segments/
   seg_0001/
     trigrams.bin     # Trigram posting lists (delta-varint encoded)
     meta.bin         # File metadata (58-byte fixed entries)
@@ -24,22 +24,22 @@ The index is stored as immutable **segments** on disk. File changes are handled 
 
 ```bash
 # Build from source (inside this repo)
-cargo install --path indexrs-cli
+cargo install --path ferret-cli
 
 # Index a repository (run from within the repo that you're indexing)
-indexrs init
+ferret init
 
 # Search for a substring
-indexrs search "fn main"
+ferret search "fn main"
 
 # Search with the advanced query language
-indexrs search --query 'language:rust "fn main" NOT test'
+ferret search --query 'language:rust "fn main" NOT test'
 
 # List indexed files
-indexrs files
+ferret files
 
 # Show index status
-indexrs status
+ferret status
 ```
 
 ## Search modes
@@ -49,15 +49,15 @@ indexrs status
 Without `--query`, the search argument is treated as a plain substring. Flags control matching behavior:
 
 ```bash
-indexrs search "parseQuery"                  # Smart case (default): case-sensitive because of uppercase
-indexrs search "parsequery"                  # Smart case: case-insensitive (all lowercase)
-indexrs search -i "ParseQuery"              # Force case-insensitive
-indexrs search --case-sensitive "foo"        # Force case-sensitive
-indexrs search --regex 'fn\s+\w+'           # Regex mode
-indexrs search --language rust "struct"      # Filter by language
-indexrs search --path 'src/' "TODO"          # Filter by path
-indexrs search -C 3 "error"                 # Show 3 lines of context
-indexrs search -n 50 "import"               # Limit to 50 results
+ferret search "parseQuery"                  # Smart case (default): case-sensitive because of uppercase
+ferret search "parsequery"                  # Smart case: case-insensitive (all lowercase)
+ferret search -i "ParseQuery"              # Force case-insensitive
+ferret search --case-sensitive "foo"        # Force case-sensitive
+ferret search --regex 'fn\s+\w+'           # Regex mode
+ferret search --language rust "struct"      # Filter by language
+ferret search --path 'src/' "TODO"          # Filter by path
+ferret search -C 3 "error"                 # Show 3 lines of context
+ferret search -n 50 "import"               # Limit to 50 results
 ```
 
 ### Query language (`--query`)
@@ -65,7 +65,7 @@ indexrs search -n 50 "import"               # Limit to 50 results
 The `--query` flag enables an advanced query language with boolean operators, filters, and pattern types inside a single expression.
 
 ```bash
-indexrs search --query '<query expression>'
+ferret search --query '<query expression>'
 ```
 
 `--query` is mutually exclusive with `--regex`, `--case-sensitive`, `--ignore-case`, `--smart-case`, `--language`, and `--path` — those features are expressed inside the query string instead.
@@ -92,34 +92,34 @@ indexrs search --query '<query expression>'
 
 ```bash
 # Files containing both "Result" and "Error"
-indexrs search --query 'Result Error'
+ferret search --query 'Result Error'
 
 # Either println or eprintln in Rust files
-indexrs search --query 'language:rust println OR eprintln'
+ferret search --query 'language:rust println OR eprintln'
 
 # Regex for function definitions, excluding test files
-indexrs search --query '/fn\s+\w+/ NOT test'
+ferret search --query '/fn\s+\w+/ NOT test'
 
 # Exact phrase in files under src/
-indexrs search --query 'path:src/ "fn main"'
+ferret search --query 'path:src/ "fn main"'
 
 # Case-sensitive match for a specific identifier
-indexrs search --query 'case:yes ParseError'
+ferret search --query 'case:yes ParseError'
 
 # Combine path and language filters
-indexrs search --query 'path:src/ lang:rs "pub fn"'
+ferret search --query 'path:src/ lang:rs "pub fn"'
 
 # Find TODO or FIXME comments in Python files
-indexrs search --query 'language:python TODO OR FIXME'
+ferret search --query 'language:python TODO OR FIXME'
 
 # Regex for import statements, excluding vendor directories
-indexrs search --query '/^import\s/ NOT path:vendor/'
+ferret search --query '/^import\s/ NOT path:vendor/'
 
 # Match a struct definition but not its usage in tests
-indexrs search --query '"pub struct" NOT path:tests/'
+ferret search --query '"pub struct" NOT path:tests/'
 
 # Multiple exclusions
-indexrs search --query 'language:rust async NOT test NOT example'
+ferret search --query 'language:rust async NOT test NOT example'
 ```
 
 ### Supported languages
@@ -130,11 +130,11 @@ Both full names and common extensions work (`language:rust` and `lang:rs` are eq
 
 ## Web interface
 
-indexrs includes a browser-based search UI powered by [htmx](https://htmx.org/). Start it with:
+ferret includes a browser-based search UI powered by [htmx](https://htmx.org/). Start it with:
 
 ```bash
-indexrs web              # default port 4040
-indexrs web --port 8080  # custom port
+ferret web              # default port 4040
+ferret web --port 8080  # custom port
 ```
 
 **Search-as-you-type** — results update live as you type, with match highlighting and file grouping:
@@ -160,36 +160,36 @@ cargo build --workspace
 ## Testing
 
 ```bash
-cargo test --workspace                     # All tests
-cargo test -p indexrs-core                 # Core library only
-cargo test -p indexrs-core -- test_name    # Single test
-cargo clippy --workspace -- -D warnings   # Lint
-cargo fmt --all -- --check                # Format check
+cargo test --workspace                          # All tests
+cargo test -p ferret-indexer-core               # Core library only
+cargo test -p ferret-indexer-core -- test_name  # Single test
+cargo clippy --workspace -- -D warnings         # Lint
+cargo fmt --all -- --check                      # Format check
 ```
 
 ## CLI commands
 
 | Command | Description |
 |---|---|
-| `indexrs init` | Build the index for the current repository |
-| `indexrs search <query>` | Search code (plain substring, regex, or query language) |
-| `indexrs files` | List indexed files with optional language/path filters |
-| `indexrs status` | Show index stats (segment count, file count) |
-| `indexrs reindex` | Incremental reindex (`--full` for complete rebuild) |
-| `indexrs estimate` | Estimate index size and peak RAM without building |
-| `indexrs repos` | Manage registered repositories (list, add, remove) |
-| `indexrs preview <file>` | Preview file contents with syntax highlighting |
-| `indexrs web` | Start the web interface (default port 4040) |
-| `indexrs mcp` | Run as an MCP server over stdio |
+| `ferret init` | Build the index for the current repository |
+| `ferret search <query>` | Search code (plain substring, regex, or query language) |
+| `ferret files` | List indexed files with optional language/path filters |
+| `ferret status` | Show index stats (segment count, file count) |
+| `ferret reindex` | Incremental reindex (`--full` for complete rebuild) |
+| `ferret estimate` | Estimate index size and peak RAM without building |
+| `ferret repos` | Manage registered repositories (list, add, remove) |
+| `ferret preview <file>` | Preview file contents with syntax highlighting |
+| `ferret web` | Start the web interface (default port 4040) |
+| `ferret mcp` | Run as an MCP server over stdio |
 
 ## Workspace crates
 
 | Crate | Description |
 |---|---|
-| `indexrs-core` | Library with all indexing, search, query parsing, and change detection logic |
-| `indexrs-cli` | CLI binary with daemon-backed search, file listing, index management, MCP server, and web interface |
-| `indexrs-daemon` | Daemon protocol library — TLV wire format, Unix socket client helpers, structured JSON response types |
-| `indexrs-web` | Web interface library — axum server, htmx frontend, JSON API, SSE streaming, daemon proxy |
+| `ferret-indexer-core` | Library with all indexing, search, query parsing, and change detection logic |
+| `ferret-indexer-cli` | CLI binary with daemon-backed search, file listing, index management, MCP server, and web interface |
+| `ferret-indexer-daemon` | Daemon protocol library — TLV wire format, Unix socket client helpers, structured JSON response types |
+| `ferret-indexer-web` | Web interface library — axum server, htmx frontend, JSON API, SSE streaming, daemon proxy |
 
 ## Architecture
 

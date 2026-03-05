@@ -4,23 +4,23 @@
 
 **Goal:** Implement a `SegmentManager` that owns the full segment lifecycle -- scanning existing segments from disk, building new segments from files, applying incremental file changes with tombstoning, publishing segment lists via `IndexState` for lock-free reads, and compacting fragmented segments in the background.
 
-**Architecture:** A single new module `segment_manager.rs` in `indexrs-core` containing `SegmentManager`. It wraps an `IndexState` (from `index_state.rs`) for snapshot isolation, uses a `Mutex` to serialize writers, and maintains an `AtomicU32` counter for monotonically increasing segment IDs. The manager delegates to the existing `SegmentWriter` for building segments (both fresh and compacted), uses `TombstoneSet` for marking stale entries, and reads metadata via `Segment::get_metadata()` for path-based lookups during change application. Compaction reads all non-tombstoned entries from N segments, builds a single new segment via `SegmentWriter`, atomically swaps the segment list, then deletes old segment directories. The core compaction logic is synchronous and testable; `compact_background()` wraps it in `tokio::spawn`. This plan depends on `index_state.rs` existing (from the multi-segment-query plan HHC-43). If `IndexState` does not exist yet when this plan is executed, Task 1 creates a minimal version.
+**Architecture:** A single new module `segment_manager.rs` in `ferret-indexer-core` containing `SegmentManager`. It wraps an `IndexState` (from `index_state.rs`) for snapshot isolation, uses a `Mutex` to serialize writers, and maintains an `AtomicU32` counter for monotonically increasing segment IDs. The manager delegates to the existing `SegmentWriter` for building segments (both fresh and compacted), uses `TombstoneSet` for marking stale entries, and reads metadata via `Segment::get_metadata()` for path-based lookups during change application. Compaction reads all non-tombstoned entries from N segments, builds a single new segment via `SegmentWriter`, atomically swaps the segment list, then deletes old segment directories. The core compaction logic is synchronous and testable; `compact_background()` wraps it in `tokio::spawn`. This plan depends on `index_state.rs` existing (from the multi-segment-query plan HHC-43). If `IndexState` does not exist yet when this plan is executed, Task 1 creates a minimal version.
 
-**Tech Stack:** Rust 2024, `std::sync::{Arc, Mutex, atomic::AtomicU32}`, `tokio::spawn` (for background compaction), existing `indexrs-core` modules (segment, tombstone, index_state, intersection, metadata, content, types, error, changes), `tempfile` (dev)
+**Tech Stack:** Rust 2024, `std::sync::{Arc, Mutex, atomic::AtomicU32}`, `tokio::spawn` (for background compaction), existing `ferret-indexer-core` modules (segment, tombstone, index_state, intersection, metadata, content, types, error, changes), `tempfile` (dev)
 
 ---
 
 ## Task 1: Create `index_state.rs` if it does not exist, or verify it does
 
 **Files:**
-- Create (if missing): `indexrs-core/src/index_state.rs`
-- Modify (if creating): `indexrs-core/src/lib.rs`
+- Create (if missing): `ferret-indexer-core/src/index_state.rs`
+- Modify (if creating): `ferret-indexer-core/src/lib.rs`
 
 This task is **conditional**. It may have already been created by the multi-segment-query plan (HHC-43). Check first.
 
 ### Step 1: Check if `index_state.rs` exists
 
-Run: `ls indexrs-core/src/index_state.rs 2>/dev/null && echo "EXISTS" || echo "MISSING"`
+Run: `ls ferret-indexer-core/src/index_state.rs 2>/dev/null && echo "EXISTS" || echo "MISSING"`
 
 **If EXISTS:** Skip to Step 5 (verify it compiles).
 
@@ -28,7 +28,7 @@ Run: `ls indexrs-core/src/index_state.rs 2>/dev/null && echo "EXISTS" || echo "M
 
 ### Step 2: Create the module
 
-Create `indexrs-core/src/index_state.rs`:
+Create `ferret-indexer-core/src/index_state.rs`:
 
 ```rust
 //! Index state management with snapshot isolation.
@@ -117,7 +117,7 @@ mod tests {
 
 ### Step 3: Register in lib.rs
 
-Add to `indexrs-core/src/lib.rs` module declarations (alphabetically between `hybrid_detector` and `index_reader`):
+Add to `ferret-indexer-core/src/lib.rs` module declarations (alphabetically between `hybrid_detector` and `index_reader`):
 
 ```rust
 pub mod index_state;
@@ -131,7 +131,7 @@ pub use index_state::{IndexState, SegmentList};
 
 ### Step 4: Run test to verify
 
-Run: `cargo test -p indexrs-core -- test_index_state_new_is_empty -v`
+Run: `cargo test -p ferret-indexer-core -- test_index_state_new_is_empty -v`
 
 Expected: PASS
 
@@ -144,7 +144,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit (only if you created the file)
 
 ```bash
-git add indexrs-core/src/index_state.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/index_state.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(index_state): add IndexState with snapshot isolation for segment list"
 ```
 
@@ -153,14 +153,14 @@ git commit -m "feat(index_state): add IndexState with snapshot isolation for seg
 ## Task 2: Add `tombstone_ratio()` and `needs_tombstone()`/`needs_new_entry()` helpers to tombstone module
 
 **Files:**
-- Modify: `indexrs-core/src/tombstone.rs`
-- Modify: `indexrs-core/src/lib.rs` (re-exports)
+- Modify: `ferret-indexer-core/src/tombstone.rs`
+- Modify: `ferret-indexer-core/src/lib.rs` (re-exports)
 
 The current `TombstoneSet` does not have a `tombstone_ratio()` method or the change-event helper functions. The segment manager needs both.
 
 ### Step 1: Write the failing tests
 
-Add to the `tests` module in `indexrs-core/src/tombstone.rs`:
+Add to the `tests` module in `ferret-indexer-core/src/tombstone.rs`:
 
 ```rust
     #[test]
@@ -213,13 +213,13 @@ Add to the `tests` module in `indexrs-core/src/tombstone.rs`:
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_tombstone_ratio -v`
+Run: `cargo test -p ferret-indexer-core -- test_tombstone_ratio -v`
 
 Expected: FAIL -- `tombstone_ratio` method does not exist.
 
 ### Step 3: Implement tombstone_ratio and helper functions
 
-Add to the `impl TombstoneSet` block in `indexrs-core/src/tombstone.rs`:
+Add to the `impl TombstoneSet` block in `ferret-indexer-core/src/tombstone.rs`:
 
 ```rust
     /// Compute the ratio of tombstoned files to total files in the segment.
@@ -269,7 +269,7 @@ pub fn needs_new_entry(kind: &ChangeKind) -> bool {
 
 ### Step 4: Update lib.rs re-exports
 
-Update the tombstone re-export line in `indexrs-core/src/lib.rs`:
+Update the tombstone re-export line in `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub use tombstone::{TombstoneSet, needs_new_entry, needs_tombstone};
@@ -277,7 +277,7 @@ pub use tombstone::{TombstoneSet, needs_new_entry, needs_tombstone};
 
 ### Step 5: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- tombstone -v`
+Run: `cargo test -p ferret-indexer-core -- tombstone -v`
 
 Expected: All tombstone tests PASS.
 
@@ -290,7 +290,7 @@ Expected: No errors or warnings.
 ### Step 7: Commit
 
 ```bash
-git add indexrs-core/src/tombstone.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/tombstone.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(tombstone): add tombstone_ratio(), needs_tombstone(), needs_new_entry()"
 ```
 
@@ -299,13 +299,13 @@ git commit -m "feat(tombstone): add tombstone_ratio(), needs_tombstone(), needs_
 ## Task 3: Add `MetadataReader::iter_all()` for reading all entries from a segment
 
 **Files:**
-- Modify: `indexrs-core/src/metadata.rs`
+- Modify: `ferret-indexer-core/src/metadata.rs`
 
 Compaction needs to iterate over every entry in a segment's metadata. The current `MetadataReader` only supports lookup by `FileId`. We add `iter_all()` to return all entries.
 
 ### Step 1: Write the failing test
 
-Add to the `tests` module in `indexrs-core/src/metadata.rs`:
+Add to the `tests` module in `ferret-indexer-core/src/metadata.rs`:
 
 ```rust
     #[test]
@@ -343,13 +343,13 @@ Add to the `tests` module in `indexrs-core/src/metadata.rs`:
 
 ### Step 2: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_reader_iter_all -v`
+Run: `cargo test -p ferret-indexer-core -- test_reader_iter_all -v`
 
 Expected: FAIL -- `iter_all` method does not exist.
 
 ### Step 3: Implement `iter_all()`
 
-Add to the `impl<'a> MetadataReader<'a>` block in `indexrs-core/src/metadata.rs`:
+Add to the `impl<'a> MetadataReader<'a>` block in `ferret-indexer-core/src/metadata.rs`:
 
 ```rust
     /// Iterate over all file metadata entries in order of index position.
@@ -364,7 +364,7 @@ Add to the `impl<'a> MetadataReader<'a>` block in `indexrs-core/src/metadata.rs`
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_reader_iter_all -v`
+Run: `cargo test -p ferret-indexer-core -- test_reader_iter_all -v`
 
 Expected: PASS
 
@@ -377,7 +377,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/metadata.rs
+git add ferret-indexer-core/src/metadata.rs
 git commit -m "feat(metadata): add MetadataReader::iter_all() for iterating all entries"
 ```
 
@@ -386,19 +386,19 @@ git commit -m "feat(metadata): add MetadataReader::iter_all() for iterating all 
 ## Task 4: Add `Segment::metadata_reader()` and `Segment::load_tombstones()` accessors
 
 **Files:**
-- Modify: `indexrs-core/src/segment.rs`
+- Modify: `ferret-indexer-core/src/segment.rs`
 
 The segment manager needs to iterate all metadata entries in a segment (for compaction) and load tombstones (for change application and compaction filtering). Add two new methods to `Segment`.
 
 ### Step 1: Write the failing tests
 
-Add to the `tests` module in `indexrs-core/src/segment.rs`:
+Add to the `tests` module in `ferret-indexer-core/src/segment.rs`:
 
 ```rust
     #[test]
     fn test_segment_metadata_reader() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs/segments");
+        let base_dir = dir.path().join(".ferret_index/segments");
         fs::create_dir_all(&base_dir).unwrap();
 
         let files = vec![
@@ -427,7 +427,7 @@ Add to the `tests` module in `indexrs-core/src/segment.rs`:
     #[test]
     fn test_segment_load_tombstones_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs/segments");
+        let base_dir = dir.path().join(".ferret_index/segments");
         fs::create_dir_all(&base_dir).unwrap();
 
         let files = vec![InputFile {
@@ -446,7 +446,7 @@ Add to the `tests` module in `indexrs-core/src/segment.rs`:
     #[test]
     fn test_segment_load_tombstones_after_write() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs/segments");
+        let base_dir = dir.path().join(".ferret_index/segments");
         fs::create_dir_all(&base_dir).unwrap();
 
         let files = vec![
@@ -480,13 +480,13 @@ Add to the `tests` module in `indexrs-core/src/segment.rs`:
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_segment_metadata_reader -v`
+Run: `cargo test -p ferret-indexer-core -- test_segment_metadata_reader -v`
 
 Expected: FAIL -- `metadata_reader` does not exist.
 
 ### Step 3: Implement the methods
 
-Add these imports at the top of `indexrs-core/src/segment.rs` (if not already present):
+Add these imports at the top of `ferret-indexer-core/src/segment.rs` (if not already present):
 
 ```rust
 use crate::tombstone::TombstoneSet;
@@ -518,7 +518,7 @@ Add to the `impl Segment` block:
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_segment_metadata_reader test_segment_load_tombstones -v`
+Run: `cargo test -p ferret-indexer-core -- test_segment_metadata_reader test_segment_load_tombstones -v`
 
 Expected: All PASS.
 
@@ -531,7 +531,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/segment.rs
+git add ferret-indexer-core/src/segment.rs
 git commit -m "feat(segment): add metadata_reader() and load_tombstones() accessors"
 ```
 
@@ -540,12 +540,12 @@ git commit -m "feat(segment): add metadata_reader() and load_tombstones() access
 ## Task 5: Create `SegmentManager` struct skeleton with `new()` and `next_segment_id()`
 
 **Files:**
-- Create: `indexrs-core/src/segment_manager.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing tests
 
-Create `indexrs-core/src/segment_manager.rs`:
+Create `ferret-indexer-core/src/segment_manager.rs`:
 
 ```rust
 //! Segment lifecycle manager with background compaction.
@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn test_new_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
 
         let manager = SegmentManager::new(&base_dir).unwrap();
         let snap = manager.snapshot();
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn test_next_segment_id_monotonic() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
 
         let manager = SegmentManager::new(&base_dir).unwrap();
         let id0 = manager.next_segment_id();
@@ -608,7 +608,7 @@ mod tests {
 
 ### Step 2: Register the module in lib.rs
 
-Add to `indexrs-core/src/lib.rs` module declarations (alphabetically, after `segment`):
+Add to `ferret-indexer-core/src/lib.rs` module declarations (alphabetically, after `segment`):
 
 ```rust
 pub mod segment_manager;
@@ -622,13 +622,13 @@ pub use segment_manager::SegmentManager;
 
 ### Step 3: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_new_empty_dir -v`
+Run: `cargo test -p ferret-indexer-core -- test_new_empty_dir -v`
 
 Expected: FAIL -- `SegmentManager` struct does not exist.
 
 ### Step 4: Implement the struct skeleton
 
-Add to `indexrs-core/src/segment_manager.rs`, above the `#[cfg(test)]` module:
+Add to `ferret-indexer-core/src/segment_manager.rs`, above the `#[cfg(test)]` module:
 
 ```rust
 /// Default maximum number of segments before compaction is recommended.
@@ -643,7 +643,7 @@ const DEFAULT_MAX_TOMBSTONE_RATIO: f32 = 0.30;
 /// (for snapshot isolation), a writer mutex (serializes indexing/compaction),
 /// and a monotonic segment ID counter.
 pub struct SegmentManager {
-    /// Base directory for the index (e.g. `.indexrs/`). Segments live
+    /// Base directory for the index (e.g. `.ferret_index/`). Segments live
     /// under `<base_dir>/segments/`.
     base_dir: PathBuf,
 
@@ -671,7 +671,7 @@ impl SegmentManager {
     ///
     /// # Arguments
     ///
-    /// * `base_dir` - The index root directory (e.g. `.indexrs/`).
+    /// * `base_dir` - The index root directory (e.g. `.ferret_index/`).
     ///
     /// # Errors
     ///
@@ -743,7 +743,7 @@ impl SegmentManager {
 
 ### Step 5: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- segment_manager -v`
+Run: `cargo test -p ferret-indexer-core -- segment_manager -v`
 
 Expected: All PASS.
 
@@ -756,7 +756,7 @@ Expected: No errors or warnings.
 ### Step 7: Commit
 
 ```bash
-git add indexrs-core/src/segment_manager.rs indexrs-core/src/lib.rs
+git add ferret-indexer-core/src/segment_manager.rs ferret-indexer-core/src/lib.rs
 git commit -m "feat(segment_manager): add SegmentManager skeleton with new() and next_segment_id()"
 ```
 
@@ -765,17 +765,17 @@ git commit -m "feat(segment_manager): add SegmentManager skeleton with new() and
 ## Task 6: Implement `add_segment()` and `index_files()`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 ### Step 1: Write the failing tests
 
-Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
+Add to the `tests` module in `ferret-indexer-core/src/segment_manager.rs`:
 
 ```rust
     #[test]
     fn test_add_segment() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let segments_dir = base_dir.join("segments");
         fs::create_dir_all(&segments_dir).unwrap();
 
@@ -803,7 +803,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_index_files() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
 
         let manager = SegmentManager::new(&base_dir).unwrap();
 
@@ -834,7 +834,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_index_files_multiple_calls() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
 
         let manager = SegmentManager::new(&base_dir).unwrap();
 
@@ -863,7 +863,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_index_files_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
 
         let manager = SegmentManager::new(&base_dir).unwrap();
         manager.index_files(vec![]).unwrap();
@@ -876,7 +876,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_add_segment -v`
+Run: `cargo test -p ferret-indexer-core -- test_add_segment -v`
 
 Expected: FAIL -- `add_segment` method does not exist.
 
@@ -922,7 +922,7 @@ Add to the `impl SegmentManager` block:
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- segment_manager -v`
+Run: `cargo test -p ferret-indexer-core -- segment_manager -v`
 
 Expected: All PASS.
 
@@ -935,7 +935,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat(segment_manager): implement add_segment() and index_files()"
 ```
 
@@ -944,13 +944,13 @@ git commit -m "feat(segment_manager): implement add_segment() and index_files()"
 ## Task 7: Implement `apply_changes()`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 This is the core incremental update method. For each change event, it tombstones old entries in existing segments and builds a new segment with created/modified/renamed files.
 
 ### Step 1: Write the failing tests
 
-Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
+Add to the `tests` module in `ferret-indexer-core/src/segment_manager.rs`:
 
 ```rust
     use std::path::PathBuf;
@@ -958,7 +958,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_apply_changes_create() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let repo_dir = dir.path().join("repo");
         fs::create_dir_all(&repo_dir).unwrap();
 
@@ -985,7 +985,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_apply_changes_modify() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let repo_dir = dir.path().join("repo");
         fs::create_dir_all(&repo_dir).unwrap();
 
@@ -1028,7 +1028,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_apply_changes_delete() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let repo_dir = dir.path().join("repo");
         fs::create_dir_all(&repo_dir).unwrap();
 
@@ -1061,7 +1061,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_apply_changes_mixed() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let repo_dir = dir.path().join("repo");
         fs::create_dir_all(&repo_dir).unwrap();
 
@@ -1120,7 +1120,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_apply_changes -v`
+Run: `cargo test -p ferret-indexer-core -- test_apply_changes -v`
 
 Expected: FAIL -- `apply_changes` method does not exist.
 
@@ -1261,7 +1261,7 @@ Add a private helper method and the public `apply_changes()` to the `impl Segmen
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- segment_manager -v`
+Run: `cargo test -p ferret-indexer-core -- segment_manager -v`
 
 Expected: All PASS.
 
@@ -1274,7 +1274,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat(segment_manager): implement apply_changes() with tombstoning"
 ```
 
@@ -1283,17 +1283,17 @@ git commit -m "feat(segment_manager): implement apply_changes() with tombstoning
 ## Task 8: Implement `should_compact()` and `compact()`
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 ### Step 1: Write the failing tests
 
-Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
+Add to the `tests` module in `ferret-indexer-core/src/segment_manager.rs`:
 
 ```rust
     #[test]
     fn test_should_compact_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let manager = SegmentManager::new(&base_dir).unwrap();
         assert!(!manager.should_compact());
     }
@@ -1301,7 +1301,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_should_compact_too_many_segments() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let manager = SegmentManager::new(&base_dir).unwrap();
 
         // Add 11 segments (exceeds default threshold of 10)
@@ -1321,7 +1321,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_should_compact_high_tombstone_ratio() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let repo_dir = dir.path().join("repo");
         fs::create_dir_all(&repo_dir).unwrap();
 
@@ -1352,7 +1352,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_compact_merges_segments() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let manager = SegmentManager::new(&base_dir).unwrap();
 
         // Create 3 segments with 1 file each
@@ -1391,7 +1391,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_compact_excludes_tombstoned() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let repo_dir = dir.path().join("repo");
         fs::create_dir_all(&repo_dir).unwrap();
 
@@ -1434,7 +1434,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_compact_cleans_old_dirs() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let segments_dir = base_dir.join("segments");
 
         let manager = SegmentManager::new(&base_dir).unwrap();
@@ -1473,7 +1473,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_compact_empty_index() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let manager = SegmentManager::new(&base_dir).unwrap();
 
         // Compacting an empty index should be a no-op
@@ -1486,7 +1486,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
     #[test]
     fn test_compact_single_segment_no_tombstones() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
         let manager = SegmentManager::new(&base_dir).unwrap();
 
         manager
@@ -1508,7 +1508,7 @@ Add to the `tests` module in `indexrs-core/src/segment_manager.rs`:
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_should_compact -v`
+Run: `cargo test -p ferret-indexer-core -- test_should_compact -v`
 
 Expected: FAIL -- `should_compact` does not exist.
 
@@ -1632,7 +1632,7 @@ Add to the `impl SegmentManager` block:
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- segment_manager -v`
+Run: `cargo test -p ferret-indexer-core -- segment_manager -v`
 
 Expected: All PASS.
 
@@ -1645,7 +1645,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat(segment_manager): implement should_compact() and compact()"
 ```
 
@@ -1654,7 +1654,7 @@ git commit -m "feat(segment_manager): implement should_compact() and compact()"
 ## Task 9: Implement `compact_background()` for async compaction
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 ### Step 1: Write the test
 
@@ -1664,7 +1664,7 @@ Add to the `tests` module:
     #[tokio::test]
     async fn test_compact_background() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
 
         let manager = Arc::new(SegmentManager::new(&base_dir).unwrap());
 
@@ -1692,7 +1692,7 @@ Add to the `tests` module:
 
 ### Step 2: Run test to verify it fails
 
-Run: `cargo test -p indexrs-core -- test_compact_background -v`
+Run: `cargo test -p ferret-indexer-core -- test_compact_background -v`
 
 Expected: FAIL -- `compact_background` does not exist.
 
@@ -1720,7 +1720,7 @@ Add to the `impl SegmentManager` block:
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_compact_background -v`
+Run: `cargo test -p ferret-indexer-core -- test_compact_background -v`
 
 Expected: PASS
 
@@ -1733,7 +1733,7 @@ Expected: No errors or warnings.
 ### Step 6: Commit
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "feat(segment_manager): add compact_background() for async compaction"
 ```
 
@@ -1742,7 +1742,7 @@ git commit -m "feat(segment_manager): add compact_background() for async compact
 ## Task 10: Implement `reopen()` for loading existing segments from disk
 
 **Files:**
-- Modify: `indexrs-core/src/segment_manager.rs`
+- Modify: `ferret-indexer-core/src/segment_manager.rs`
 
 This test verifies that creating a new `SegmentManager` at a directory that already has segments correctly loads them.
 
@@ -1754,7 +1754,7 @@ Add to the `tests` module:
     #[test]
     fn test_reopen_existing_segments() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
 
         // Create a manager and index some files
         {
@@ -1804,7 +1804,7 @@ Add to the `tests` module:
     #[test]
     fn test_reopen_after_compact() {
         let dir = tempfile::tempdir().unwrap();
-        let base_dir = dir.path().join(".indexrs");
+        let base_dir = dir.path().join(".ferret_index");
 
         {
             let manager = SegmentManager::new(&base_dir).unwrap();
@@ -1829,14 +1829,14 @@ Add to the `tests` module:
 
 ### Step 2: Run tests
 
-Run: `cargo test -p indexrs-core -- test_reopen -v`
+Run: `cargo test -p ferret-indexer-core -- test_reopen -v`
 
 Expected: PASS -- the `new()` method from Task 5 already scans existing segments.
 
 ### Step 3: Commit
 
 ```bash
-git add indexrs-core/src/segment_manager.rs
+git add ferret-indexer-core/src/segment_manager.rs
 git commit -m "test(segment_manager): add reopen tests for persistence verification"
 ```
 
@@ -1862,7 +1862,7 @@ Run: `cargo fmt --all`
 
 ### Step 4: Verify the module structure
 
-At this point, `indexrs-core/src/segment_manager.rs` should contain:
+At this point, `ferret-indexer-core/src/segment_manager.rs` should contain:
 
 - `SegmentManager` struct with fields: `base_dir`, `segments_dir`, `next_id` (AtomicU32), `state` (IndexState), `write_lock` (Mutex)
 - `SegmentManager::new(base_dir)` -- creates manager, scans existing segments
@@ -1914,7 +1914,7 @@ These are the exact module APIs that `SegmentManager` calls. The implementer sho
 ## Reference: On-Disk Layout
 
 ```
-.indexrs/
+.ferret_index/
   segments/
     seg_0000/
       trigrams.bin
@@ -1929,7 +1929,7 @@ These are the exact module APIs that `SegmentManager` calls. The implementer sho
 After compaction:
 
 ```
-.indexrs/
+.ferret_index/
   segments/
     seg_0003/           <- merged segment (old seg_0000..0002 deleted)
       trigrams.bin

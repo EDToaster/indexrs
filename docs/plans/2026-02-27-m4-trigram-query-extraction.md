@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Implement a `query_trigrams` module in `indexrs-core` that extracts trigram sets from parsed `Query` ASTs to drive efficient index lookups. The module handles literal queries (direct trigram extraction), regex queries (literal fragment extraction via `regex-syntax` HIR analysis), phrase queries, boolean combinators (AND/OR/NOT), and graceful fallback when no trigrams can be extracted.
+**Goal:** Implement a `query_trigrams` module in `ferret-indexer-core` that extracts trigram sets from parsed `Query` ASTs to drive efficient index lookups. The module handles literal queries (direct trigram extraction), regex queries (literal fragment extraction via `regex-syntax` HIR analysis), phrase queries, boolean combinators (AND/OR/NOT), and graceful fallback when no trigrams can be extracted.
 
-**Architecture:** A new module `query_trigrams.rs` in `indexrs-core` containing:
+**Architecture:** A new module `query_trigrams.rs` in `ferret-indexer-core` containing:
 - `TrigramQuery` enum representing the trigram lookup strategy for a query (AND-set, OR-of-AND-sets, or full-scan fallback)
 - `extract_query_trigrams(query: &Query) -> TrigramQuery` as the main entry point, performing recursive case analysis over the `Query` AST
 - `extract_regex_literals(pattern: &str) -> Vec<Vec<u8>>` for extracting required literal byte sequences from regex patterns using `regex-syntax::hir::literal::Extractor`
@@ -12,7 +12,7 @@
 
 The module bridges the query parser (HHC-46) and query planner (HHC-48): the parser produces a `Query` AST, this module extracts trigrams from it, and the planner uses those trigrams to look up posting lists and build an execution plan.
 
-**Tech Stack:** Rust 2024, `regex-syntax` 0.8.x (already a transitive dependency of `regex` 1.x -- will be added as a direct dependency), existing `indexrs-core` modules (`trigram`, `types`), `tempfile` (dev)
+**Tech Stack:** Rust 2024, `regex-syntax` 0.8.x (already a transitive dependency of `regex` 1.x -- will be added as a direct dependency), existing `ferret-indexer-core` modules (`trigram`, `types`), `tempfile` (dev)
 
 **Dependencies:** This plan depends on the `Query` AST type from HHC-46 (query parser). The confirmed AST shape from the parser-planner agent:
 
@@ -74,13 +74,13 @@ pub struct PhraseQuery {
 ## Task 1: Add `regex-syntax` as a direct dependency
 
 **Files:**
-- Modify: `indexrs-core/Cargo.toml`
+- Modify: `ferret-indexer-core/Cargo.toml`
 
 ### Step 1: Add `regex-syntax` to `[dependencies]`
 
 `regex-syntax` 0.8.x is already a transitive dependency (via `regex` 1.x -> `regex-syntax` 0.8.10). Add it as a direct dependency to use its HIR literal extraction API.
 
-Add to `indexrs-core/Cargo.toml` under `[dependencies]`:
+Add to `ferret-indexer-core/Cargo.toml` under `[dependencies]`:
 
 ```toml
 regex-syntax = "0.8"
@@ -88,11 +88,11 @@ regex-syntax = "0.8"
 
 ### Step 2: Verify it compiles
 
-Run: `cargo check -p indexrs-core`
+Run: `cargo check -p ferret-indexer-core`
 
 ### Acceptance Criteria
 - `regex-syntax` is listed in `Cargo.toml` as a direct dependency
-- `cargo check -p indexrs-core` passes
+- `cargo check -p ferret-indexer-core` passes
 - No version conflicts (the version should resolve to the same 0.8.x already in the lock file)
 
 ---
@@ -100,12 +100,12 @@ Run: `cargo check -p indexrs-core`
 ## Task 2: Define the `TrigramQuery` type and stub module
 
 **Files:**
-- Create: `indexrs-core/src/query_trigrams.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/query_trigrams.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Create the module with type definitions
 
-Create `indexrs-core/src/query_trigrams.rs`:
+Create `ferret-indexer-core/src/query_trigrams.rs`:
 
 ```rust
 //! Trigram extraction from parsed query ASTs.
@@ -183,7 +183,7 @@ impl TrigramQuery {
 
 ### Step 2: Register the module in `lib.rs`
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod query_trigrams;
@@ -244,20 +244,20 @@ mod tests {
 
 ### Step 4: Verify
 
-Run: `cargo test -p indexrs-core -- query_trigrams`
+Run: `cargo test -p ferret-indexer-core -- query_trigrams`
 
 ### Acceptance Criteria
 - `TrigramQuery` enum is defined with `All`, `Any`, `None` variants
 - Module is registered in `lib.rs` and exported
 - All unit tests pass
-- `cargo clippy -p indexrs-core -- -D warnings` passes
+- `cargo clippy -p ferret-indexer-core -- -D warnings` passes
 
 ---
 
 ## Task 3: Implement trigram extraction for literal and phrase queries
 
 **Files:**
-- Modify: `indexrs-core/src/query_trigrams.rs`
+- Modify: `ferret-indexer-core/src/query_trigrams.rs`
 
 This task implements the simplest case: extracting trigrams from plain literal strings and exact phrases. These are the most common query types. Thanks to the case-folded index, the function does NOT need a `case_sensitive` parameter — all trigram extraction always produces lowercase trigrams to match the index.
 
@@ -369,7 +369,7 @@ pub fn extract_literal_trigrams(text: &str) -> TrigramQuery {
 
 ### Step 3: Verify
 
-Run: `cargo test -p indexrs-core -- query_trigrams`
+Run: `cargo test -p ferret-indexer-core -- query_trigrams`
 
 ### Acceptance Criteria
 - `extract_literal_trigrams` correctly extracts trigrams from strings >= 3 bytes
@@ -384,7 +384,7 @@ Run: `cargo test -p indexrs-core -- query_trigrams`
 ## Task 4: Implement regex literal extraction via `regex-syntax`
 
 **Files:**
-- Modify: `indexrs-core/src/query_trigrams.rs`
+- Modify: `ferret-indexer-core/src/query_trigrams.rs`
 
 This is the most complex task. We use `regex-syntax` to parse a regex pattern into HIR, then use the `hir::literal::Extractor` to find required literal byte sequences, and finally extract trigrams from those literals.
 
@@ -520,7 +520,7 @@ fn extract_regex_trigrams(pattern: &str) -> TrigramQuery {
 
 ### Step 3: Verify
 
-Run: `cargo test -p indexrs-core -- query_trigrams`
+Run: `cargo test -p ferret-indexer-core -- query_trigrams`
 
 ### Step 4: Handle alternation patterns better
 
@@ -560,14 +560,14 @@ if let HirKind::Alternation(branches) = hir.kind() {
 - Pure wildcard patterns (`.*`, `.+`, `\d+`) produce `TrigramQuery::None`
 - Invalid regex patterns produce `TrigramQuery::None` (no panics)
 - Short literal-only patterns (< 3 chars) produce `TrigramQuery::None`
-- `cargo clippy -p indexrs-core -- -D warnings` passes
+- `cargo clippy -p ferret-indexer-core -- -D warnings` passes
 
 ---
 
 ## Task 5: Implement the main `extract_query_trigrams` function over the Query AST
 
 **Files:**
-- Modify: `indexrs-core/src/query_trigrams.rs`
+- Modify: `ferret-indexer-core/src/query_trigrams.rs`
 
 This task implements the recursive extraction over the full `Query` AST. It depends on the `Query` type from HHC-46. If that type is not yet available, define a local placeholder in `#[cfg(test)]` and use the real type once it lands.
 
@@ -983,7 +983,7 @@ use crate::query_parser::{Query, LiteralQuery, RegexQuery, PhraseQuery};
 
 ### Step 4: Verify
 
-Run: `cargo test -p indexrs-core -- query_trigrams`
+Run: `cargo test -p ferret-indexer-core -- query_trigrams`
 
 ### Acceptance Criteria
 - `extract_query_trigrams` handles all `Query` variants correctly
@@ -999,14 +999,14 @@ Run: `cargo test -p indexrs-core -- query_trigrams`
 - Cross-product of `Any`-`Any` is capped at 64 branches
 - Test-only `Query` types match the confirmed HHC-46 AST shape
 - All tests pass
-- `cargo clippy -p indexrs-core -- -D warnings` passes
+- `cargo clippy -p ferret-indexer-core -- -D warnings` passes
 
 ---
 
 ## Task 6: Integration tests with real index reader
 
 **Files:**
-- Modify: `indexrs-core/src/query_trigrams.rs`
+- Modify: `ferret-indexer-core/src/query_trigrams.rs`
 
 Write integration tests that combine trigram extraction with actual index lookups to verify the end-to-end pipeline works.
 
@@ -1113,7 +1113,7 @@ mod integration_tests {
 
 ### Step 2: Verify
 
-Run: `cargo test -p indexrs-core -- query_trigrams::integration_tests`
+Run: `cargo test -p ferret-indexer-core -- query_trigrams::integration_tests`
 
 ### Acceptance Criteria
 - Integration tests demonstrate the full pipeline: query -> trigram extraction -> index lookup -> correct candidates
@@ -1127,8 +1127,8 @@ Run: `cargo test -p indexrs-core -- query_trigrams::integration_tests`
 ## Task 7: Wire up module exports and documentation
 
 **Files:**
-- Modify: `indexrs-core/src/query_trigrams.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Modify: `ferret-indexer-core/src/query_trigrams.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Add public exports
 

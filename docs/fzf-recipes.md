@@ -1,9 +1,9 @@
-# fzf Recipes for indexrs
+# fzf Recipes for ferret
 
-Copy-paste-ready shell functions, keybindings, and editor integrations for using indexrs with fzf.
+Copy-paste-ready shell functions, keybindings, and editor integrations for using ferret with fzf.
 
 **Prerequisites:**
-- `indexrs` binary in `$PATH`
+- `ferret` binary in `$PATH`
 - [fzf](https://github.com/junegunn/fzf) 0.40+ installed
 - [bat](https://github.com/sharkdp/bat) recommended for syntax-highlighted previews
 
@@ -21,7 +21,7 @@ Fuzzy-find an indexed file with syntax-highlighted preview.
 # ixf - Interactive file finder
 ixf() {
   local file
-  file=$(indexrs files --color=always | fzf \
+  file=$(ferret files --color=always | fzf \
     --ansi \
     --scheme=path \
     --prompt 'file> ' \
@@ -41,15 +41,15 @@ Type to search the index with live reload. All filtering is server-side.
 # ixg - Interactive grep/content search
 ixg() {
   local result
-  result=$(indexrs search "${1:-}" --color=always --limit=1000 | fzf \
+  result=$(ferret search "${1:-}" --color=always --limit=1000 | fzf \
     --ansi \
     --disabled \
     --query "${1:-}" \
     --delimiter : \
     --prompt 'grep> ' \
     --header 'Type to search index | CTRL-R: regex | CTRL-Y: copy path' \
-    --bind 'change:reload:indexrs search {q} --color=always --limit=1000 || true' \
-    --bind 'ctrl-r:transform:[[ $FZF_PROMPT == "grep> " ]] && echo "change-prompt(regex> )+reload(indexrs search {q} --regex --color=always --limit=1000 || true)" || echo "change-prompt(grep> )+reload(indexrs search {q} --color=always --limit=1000 || true)"' \
+    --bind 'change:reload:ferret search {q} --color=always --limit=1000 || true' \
+    --bind 'ctrl-r:transform:[[ $FZF_PROMPT == "grep> " ]] && echo "change-prompt(regex> )+reload(ferret search {q} --regex --color=always --limit=1000 || true)" || echo "change-prompt(grep> )+reload(ferret search {q} --color=always --limit=1000 || true)"' \
     --bind 'ctrl-y:execute-silent(echo -n {1} | pbcopy)+abort' \
     --preview 'bat --style=numbers --color=always --highlight-line {2} -- {1} 2>/dev/null' \
     --preview-window 'right,60%,border-left,+{2}+3/2,~3')
@@ -63,10 +63,10 @@ ixg() {
 ```
 
 Key details:
-- `--disabled` turns off fzf's built-in fuzzy matching; all filtering is done server-side by indexrs
+- `--disabled` turns off fzf's built-in fuzzy matching; all filtering is done server-side by ferret
 - `--delimiter :` lets fzf parse `file:line:col:content` fields
 - `--preview-window '+{2}+3/2,~3'` scrolls preview to the matched line, centered
-- `|| true` prevents fzf from showing an error when indexrs returns no results
+- `|| true` prevents fzf from showing an error when ferret returns no results
 - CTRL-R toggles between literal and regex mode
 
 ### `ixs` -- Interactive Symbol Search (Placeholder)
@@ -77,7 +77,7 @@ Search indexed symbols (functions, types, constants). Symbol indexing is planned
 # ixs - Interactive symbol search
 ixs() {
   local result
-  result=$(indexrs symbols "${1:-}" --color=always | fzf \
+  result=$(ferret symbols "${1:-}" --color=always | fzf \
     --ansi \
     --disabled \
     --query "${1:-}" \
@@ -85,13 +85,13 @@ ixs() {
     --prompt 'symbol> ' \
     --header 'Search symbols | CTRL-K: filter kind' \
     --with-nth '1,2' \
-    --bind 'change:reload:indexrs symbols {q} --color=always || true' \
+    --bind 'change:reload:ferret symbols {q} --color=always || true' \
     --bind 'ctrl-k:transform:
       case $FZF_PROMPT in
-        "symbol> ") echo "change-prompt(fn> )+reload(indexrs symbols {q} --kind=fn --color=always || true)" ;;
-        "fn> ")     echo "change-prompt(struct> )+reload(indexrs symbols {q} --kind=struct --color=always || true)" ;;
-        "struct> ") echo "change-prompt(trait> )+reload(indexrs symbols {q} --kind=trait --color=always || true)" ;;
-        *)          echo "change-prompt(symbol> )+reload(indexrs symbols {q} --color=always || true)" ;;
+        "symbol> ") echo "change-prompt(fn> )+reload(ferret symbols {q} --kind=fn --color=always || true)" ;;
+        "fn> ")     echo "change-prompt(struct> )+reload(ferret symbols {q} --kind=struct --color=always || true)" ;;
+        "struct> ") echo "change-prompt(trait> )+reload(ferret symbols {q} --kind=trait --color=always || true)" ;;
+        *)          echo "change-prompt(symbol> )+reload(ferret symbols {q} --color=always || true)" ;;
       esac' \
     --preview 'bat --style=numbers --color=always --highlight-line {4} -- {3} 2>/dev/null' \
     --preview-window 'right,60%,border-left,+{4}+3/2,~3')
@@ -118,11 +118,11 @@ ix() {
     --delimiter : \
     --prompt 'grep> ' \
     --header $'CTRL-F: files | CTRL-G: grep | CTRL-S: symbols | CTRL-/: toggle preview\n' \
-    --bind 'start:reload:indexrs search {q} --color=always --limit=1000 || true' \
-    --bind 'change:reload:indexrs search {q} --color=always --limit=1000 || true' \
-    --bind 'ctrl-f:unbind(change)+change-prompt(file> )+enable-search+reload(indexrs files --color=always)' \
-    --bind 'ctrl-g:rebind(change)+change-prompt(grep> )+disable-search+reload(indexrs search {q} --color=always --limit=1000 || true)' \
-    --bind 'ctrl-s:rebind(change)+change-prompt(symbol> )+disable-search+reload(indexrs symbols {q} --color=always || true)' \
+    --bind 'start:reload:ferret search {q} --color=always --limit=1000 || true' \
+    --bind 'change:reload:ferret search {q} --color=always --limit=1000 || true' \
+    --bind 'ctrl-f:unbind(change)+change-prompt(file> )+enable-search+reload(ferret files --color=always)' \
+    --bind 'ctrl-g:rebind(change)+change-prompt(grep> )+disable-search+reload(ferret search {q} --color=always --limit=1000 || true)' \
+    --bind 'ctrl-s:rebind(change)+change-prompt(symbol> )+disable-search+reload(ferret symbols {q} --color=always || true)' \
     --preview '[[ -n {2} ]] && bat --style=numbers --color=always --highlight-line {2} -- {1} 2>/dev/null || bat --style=numbers,header --color=always -- {} 2>/dev/null' \
     --preview-window 'right,60%,border-left')
   if [[ -n "$result" ]]; then
@@ -139,7 +139,7 @@ ix() {
 ```
 
 Mode switching logic:
-- **CTRL-G (grep)**: `disable-search` turns off fzf filtering, `rebind(change)` re-enables the reload-on-change binding. Typing queries indexrs.
+- **CTRL-G (grep)**: `disable-search` turns off fzf filtering, `rebind(change)` re-enables the reload-on-change binding. Typing queries ferret.
 - **CTRL-F (files)**: `enable-search` turns on fzf filtering, `unbind(change)` stops reloading. Typing filters the file list locally (fast).
 - **CTRL-S (symbols)**: Same as grep mode -- server-side search via reload.
 
@@ -175,7 +175,7 @@ When inside tmux, use fzf's `--tmux` flag for floating popup windows:
 ixf() {
   local fzf_opts=()
   [[ -n "$TMUX" ]] && fzf_opts+=(--tmux 'center,80%,70%')
-  indexrs files --color=always | fzf "${fzf_opts[@]}" \
+  ferret files --color=always | fzf "${fzf_opts[@]}" \
     --ansi --scheme=path \
     --preview 'bat --style=numbers,header --color=always -- {}' \
     --preview-window 'right,60%,border-left' \
@@ -191,21 +191,21 @@ This pattern works with any of the shell functions above -- add the `fzf_opts` l
 
 ### fzf.vim Commands
 
-Add to `~/.config/nvim/plugin/indexrs.vim` (or equivalent):
+Add to `~/.config/nvim/plugin/ferret.vim` (or equivalent):
 
 ```vim
-" File search via indexrs
+" File search via ferret
 command! IxFiles call fzf#run(fzf#wrap({
-  \ 'source': 'indexrs files --color=always',
+  \ 'source': 'ferret files --color=always',
   \ 'options': ['--ansi', '--scheme=path',
   \             '--preview', 'bat --style=numbers,header --color=always -- {}',
   \             '--preview-window', 'right,60%,border-left'],
   \ }))
 
-" Content search via indexrs with live reload
-command! -nargs=* IxGrep call s:indexrs_grep(<q-args>)
-function! s:indexrs_grep(query)
-  let command_fmt = 'indexrs search %s --color=always --limit=1000 || true'
+" Content search via ferret with live reload
+command! -nargs=* IxGrep call s:ferret_grep(<q-args>)
+function! s:ferret_grep(query)
+  let command_fmt = 'ferret search %s --color=always --limit=1000 || true'
   let initial_command = printf(command_fmt, shellescape(a:query))
   let reload_command = printf(command_fmt, '{q}')
   let spec = {
@@ -219,10 +219,10 @@ function! s:indexrs_grep(query)
   call fzf#run(fzf#wrap(spec))
 endfunction
 
-" Symbol search via indexrs
-command! -nargs=* IxSymbols call s:indexrs_symbols(<q-args>)
-function! s:indexrs_symbols(query)
-  let command_fmt = 'indexrs symbols %s --color=always || true'
+" Symbol search via ferret
+command! -nargs=* IxSymbols call s:ferret_symbols(<q-args>)
+function! s:ferret_symbols(query)
+  let command_fmt = 'ferret symbols %s --color=always || true'
   let initial_command = printf(command_fmt, shellescape(a:query))
   let reload_command = printf(command_fmt, '{q}')
   let spec = {
@@ -246,7 +246,7 @@ nnoremap <leader>iw :IxGrep <C-R><C-W><CR>
 
 ### telescope.nvim
 
-indexrs can serve as a custom picker source for telescope.nvim. A `telescope-indexrs.nvim` plugin would call indexrs as a subprocess and feed results into telescope's pipeline. The key requirement is that indexrs outputs one result per line in a parseable format, which the CLI satisfies.
+ferret can serve as a custom picker source for telescope.nvim. A `telescope-ferret.nvim` plugin would call ferret as a subprocess and feed results into telescope's pipeline. The key requirement is that ferret outputs one result per line in a parseable format, which the CLI satisfies.
 
 ---
 

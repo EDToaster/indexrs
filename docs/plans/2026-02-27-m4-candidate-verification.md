@@ -6,7 +6,7 @@
 
 **Architecture:** The new `verify.rs` module provides a `ContentVerifier` that takes a `MatchPattern` enum (Literal, Regex, LiteralCaseInsensitive) and verifies candidate files against actual content. Internally it: (1) builds a `LineIndex` (precomputed newline byte offsets) for O(1) byte-offset-to-line-number conversion, (2) runs the pattern match to get byte-offset ranges, (3) maps byte offsets to line numbers and column positions to build `LineMatch` entries, (4) collects context lines around each match, and (5) merges adjacent context blocks when matches are within `2*context_lines` of each other. The existing `verify_content_matches()` in `multi_search.rs` is replaced by delegating to `ContentVerifier`. The `search.rs` types are extended with `ContextBlock` and `ContextLine` for rich context output. `multi_search.rs` is updated to accept a `MatchPattern` instead of a raw `&str`.
 
-**Tech Stack:** Rust 2024, `regex` crate (already in Cargo.toml), existing `indexrs-core` modules (search, multi_search, content, metadata, segment, types, error), `tempfile` (dev)
+**Tech Stack:** Rust 2024, `regex` crate (already in Cargo.toml), existing `ferret-indexer-core` modules (search, multi_search, content, metadata, segment, types, error), `tempfile` (dev)
 
 **Prerequisite:** ASCII case-fold trigrams plan (`2026-02-27-ascii-casefold-trigrams.md`) must be implemented first. The index stores lowercase-folded trigrams, so the verification step receives candidates found via case-insensitive trigram lookup. This means:
 - For **case-insensitive queries** (the default): candidates from the folded index are correct, and `LiteralCaseInsensitive` verification confirms them.
@@ -17,11 +17,11 @@
 ## Task 1: Add `MatchPattern` enum and context types to `search.rs`
 
 **Files:**
-- Modify: `indexrs-core/src/search.rs`
+- Modify: `ferret-indexer-core/src/search.rs`
 
 ### Step 1: Write the failing tests
 
-Add tests to `indexrs-core/src/search.rs` at the end of the existing `mod tests` block:
+Add tests to `ferret-indexer-core/src/search.rs` at the end of the existing `mod tests` block:
 
 ```rust
 #[test]
@@ -77,13 +77,13 @@ fn test_context_block_construction() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_match_pattern -v`
+Run: `cargo test -p ferret-indexer-core -- test_match_pattern -v`
 
 Expected: FAIL -- `MatchPattern`, `ContextLine`, `ContextBlock` do not exist.
 
 ### Step 3: Implement the types
 
-Add to `indexrs-core/src/search.rs`, after the existing `use` statements and before `LineMatch`:
+Add to `ferret-indexer-core/src/search.rs`, after the existing `use` statements and before `LineMatch`:
 
 ```rust
 /// The pattern type used for content verification.
@@ -131,13 +131,13 @@ pub struct ContextBlock {
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_match_pattern test_context -v`
+Run: `cargo test -p ferret-indexer-core -- test_match_pattern test_context -v`
 
 Expected: PASS.
 
 ### Step 5: Add re-exports to lib.rs
 
-Update `indexrs-core/src/lib.rs` to export the new types:
+Update `ferret-indexer-core/src/lib.rs` to export the new types:
 
 ```rust
 pub use search::{ContextBlock, ContextLine, FileMatch, LineMatch, MatchPattern, SearchResult};
@@ -152,12 +152,12 @@ Run: `cargo check --workspace`
 ## Task 2: Create `verify.rs` with `LineIndex` for byte-offset-to-line mapping
 
 **Files:**
-- Create: `indexrs-core/src/verify.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Create: `ferret-indexer-core/src/verify.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing tests
 
-Create `indexrs-core/src/verify.rs` with a module doc comment and tests for `LineIndex`:
+Create `ferret-indexer-core/src/verify.rs` with a module doc comment and tests for `LineIndex`:
 
 ```rust
 //! Content verification for trigram search candidates.
@@ -241,7 +241,7 @@ mod tests {
 
 ### Step 2: Register the module in lib.rs
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub mod verify;
@@ -249,13 +249,13 @@ pub mod verify;
 
 ### Step 3: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_line_index -v`
+Run: `cargo test -p ferret-indexer-core -- test_line_index -v`
 
 Expected: FAIL -- `LineIndex` does not exist.
 
 ### Step 4: Implement `LineIndex`
 
-Add to `indexrs-core/src/verify.rs`, above the test module:
+Add to `ferret-indexer-core/src/verify.rs`, above the test module:
 
 ```rust
 /// Precomputed index of newline positions for O(1) byte-offset-to-line mapping.
@@ -346,7 +346,7 @@ impl LineIndex {
 
 ### Step 5: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_line_index -v`
+Run: `cargo test -p ferret-indexer-core -- test_line_index -v`
 
 Expected: PASS.
 
@@ -355,7 +355,7 @@ Expected: PASS.
 ## Task 3: Implement `ContentVerifier` with literal and regex matching
 
 **Files:**
-- Modify: `indexrs-core/src/verify.rs`
+- Modify: `ferret-indexer-core/src/verify.rs`
 
 ### Step 1: Write the failing tests
 
@@ -469,13 +469,13 @@ fn test_verify_case_insensitive_no_match() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_verify_literal test_verify_regex test_verify_case -v`
+Run: `cargo test -p ferret-indexer-core -- test_verify_literal test_verify_regex test_verify_case -v`
 
 Expected: FAIL -- `ContentVerifier` does not exist.
 
 ### Step 3: Implement `ContentVerifier`
 
-Add to `indexrs-core/src/verify.rs`, after `LineIndex`:
+Add to `ferret-indexer-core/src/verify.rs`, after `LineIndex`:
 
 ```rust
 use regex::Regex;
@@ -648,7 +648,7 @@ fn line_start_offset(line_index: &LineIndex, line_number: u32) -> usize {
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_verify_literal test_verify_regex test_verify_case -v`
+Run: `cargo test -p ferret-indexer-core -- test_verify_literal test_verify_regex test_verify_case -v`
 
 Expected: PASS.
 
@@ -657,7 +657,7 @@ Expected: PASS.
 ## Task 4: Implement context line extraction and merging
 
 **Files:**
-- Modify: `indexrs-core/src/verify.rs`
+- Modify: `ferret-indexer-core/src/verify.rs`
 
 ### Step 1: Write the failing tests
 
@@ -750,7 +750,7 @@ fn test_context_no_matches() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_context -v`
+Run: `cargo test -p ferret-indexer-core -- test_context -v`
 
 Expected: FAIL -- `verify_with_context()` does not exist.
 
@@ -842,7 +842,7 @@ pub fn verify_with_context(&self, content: &[u8]) -> Vec<ContextBlock> {
 
 ### Step 4: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_context -v`
+Run: `cargo test -p ferret-indexer-core -- test_context -v`
 
 Expected: PASS.
 
@@ -851,8 +851,8 @@ Expected: PASS.
 ## Task 5: Integrate `ContentVerifier` into `multi_search.rs`
 
 **Files:**
-- Modify: `indexrs-core/src/multi_search.rs`
-- Modify: `indexrs-core/src/lib.rs`
+- Modify: `ferret-indexer-core/src/multi_search.rs`
+- Modify: `ferret-indexer-core/src/lib.rs`
 
 ### Step 1: Write the failing tests
 
@@ -864,7 +864,7 @@ use crate::search::MatchPattern;
 #[test]
 fn test_search_segments_with_pattern_literal() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -887,7 +887,7 @@ fn test_search_segments_with_pattern_literal() {
 #[test]
 fn test_search_segments_with_pattern_regex() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -910,7 +910,7 @@ fn test_search_segments_with_pattern_regex() {
 #[test]
 fn test_search_segments_with_pattern_case_insensitive() {
     let dir = tempfile::tempdir().unwrap();
-    let base_dir = dir.path().join(".indexrs/segments");
+    let base_dir = dir.path().join(".ferret_index/segments");
     std::fs::create_dir_all(&base_dir).unwrap();
 
     let seg = build_segment(
@@ -933,7 +933,7 @@ fn test_search_segments_with_pattern_case_insensitive() {
 
 ### Step 2: Run tests to verify they fail
 
-Run: `cargo test -p indexrs-core -- test_search_segments_with_pattern -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_with_pattern -v`
 
 Expected: FAIL -- `search_segments_with_pattern` does not exist.
 
@@ -1062,7 +1062,7 @@ pub fn search_segments_with_pattern(
 
 ### Step 4: Update lib.rs exports
 
-Add to `indexrs-core/src/lib.rs`:
+Add to `ferret-indexer-core/src/lib.rs`:
 
 ```rust
 pub use multi_search::{search_segments, search_segments_with_pattern};
@@ -1071,7 +1071,7 @@ pub use verify::ContentVerifier;
 
 ### Step 5: Run tests to verify they pass
 
-Run: `cargo test -p indexrs-core -- test_search_segments_with_pattern -v`
+Run: `cargo test -p ferret-indexer-core -- test_search_segments_with_pattern -v`
 
 Expected: PASS.
 
@@ -1086,7 +1086,7 @@ Expected: PASS -- the original `search_segments()` is unchanged and still works.
 ## Task 6: Add edge case tests and run full suite
 
 **Files:**
-- Modify: `indexrs-core/src/verify.rs`
+- Modify: `ferret-indexer-core/src/verify.rs`
 
 ### Step 1: Add comprehensive edge case tests
 
