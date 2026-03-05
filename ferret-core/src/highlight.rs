@@ -144,12 +144,63 @@ impl FileHighlight {
 
 use std::sync::LazyLock;
 
-use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
+use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxSet};
 
 use crate::types::Language;
 
 /// Shared syntect SyntaxSet — loaded once, reused across all tokenization calls.
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+
+/// Maximum number of lines to tokenize per file. Files exceeding this limit
+/// are skipped entirely (tokenize_file returns None) to avoid spending
+/// excessive CPU time on large/generated files.
+const MAX_TOKENIZE_LINES: usize = 5_000;
+
+/// Maximum file size in bytes to tokenize. Files exceeding this are skipped.
+const MAX_TOKENIZE_BYTES: usize = 200_000;
+
+/// Pre-interned scope prefixes for zero-allocation classification in the hot path.
+/// Each `Scope::new()` call interns atoms once; subsequent `is_prefix_of()` checks
+/// are pure integer comparisons with no allocation or locking.
+struct ScopePrefixes {
+    comment: Scope,
+    string: Scope,
+    constant_numeric: Scope,
+    constant: Scope,
+    keyword: Scope,
+    storage_type: Scope,
+    storage: Scope,
+    entity_name_function: Scope,
+    entity_name_type: Scope,
+    entity_name_macro: Scope,
+    entity_name: Scope,
+    variable: Scope,
+    support_function: Scope,
+    support_type: Scope,
+    support_macro: Scope,
+    punctuation: Scope,
+    meta_attribute: Scope,
+}
+
+static SCOPE_PREFIXES: LazyLock<ScopePrefixes> = LazyLock::new(|| ScopePrefixes {
+    comment: Scope::new("comment").unwrap(),
+    string: Scope::new("string").unwrap(),
+    constant_numeric: Scope::new("constant.numeric").unwrap(),
+    constant: Scope::new("constant").unwrap(),
+    keyword: Scope::new("keyword").unwrap(),
+    storage_type: Scope::new("storage.type").unwrap(),
+    storage: Scope::new("storage").unwrap(),
+    entity_name_function: Scope::new("entity.name.function").unwrap(),
+    entity_name_type: Scope::new("entity.name.type").unwrap(),
+    entity_name_macro: Scope::new("entity.name.macro").unwrap(),
+    entity_name: Scope::new("entity.name").unwrap(),
+    variable: Scope::new("variable").unwrap(),
+    support_function: Scope::new("support.function").unwrap(),
+    support_type: Scope::new("support.type").unwrap(),
+    support_macro: Scope::new("support.macro").unwrap(),
+    punctuation: Scope::new("punctuation").unwrap(),
+    meta_attribute: Scope::new("meta.attribute").unwrap(),
+});
 
 /// Map our Language enum to syntect file extensions.
 fn language_to_syntect_ext(lang: Language) -> Option<&'static str> {
@@ -196,58 +247,61 @@ fn language_to_syntect_ext(lang: Language) -> Option<&'static str> {
 }
 
 /// Classify a syntect scope stack into our 16-category TokenKind.
+///
+/// Uses pre-interned [`Scope`] prefixes and [`Scope::is_prefix_of`] for
+/// zero-allocation, lock-free classification in the hot path.
 fn classify_scope(stack: &ScopeStack) -> TokenKind {
-    for scope in stack.as_slice().iter().rev() {
-        let s = format!("{scope}");
-        if s.starts_with("comment") {
+    let p = &*SCOPE_PREFIXES;
+    for &scope in stack.as_slice().iter().rev() {
+        if p.comment.is_prefix_of(scope) {
             return TokenKind::Comment;
         }
-        if s.starts_with("string") {
+        if p.string.is_prefix_of(scope) {
             return TokenKind::String;
         }
-        if s.starts_with("constant.numeric") {
+        if p.constant_numeric.is_prefix_of(scope) {
             return TokenKind::Number;
         }
-        if s.starts_with("constant") {
+        if p.constant.is_prefix_of(scope) {
             return TokenKind::Constant;
         }
-        if s.starts_with("keyword") {
+        if p.keyword.is_prefix_of(scope) {
             return TokenKind::Keyword;
         }
-        if s.starts_with("storage.type") {
+        if p.storage_type.is_prefix_of(scope) {
             return TokenKind::Type;
         }
-        if s.starts_with("storage") {
+        if p.storage.is_prefix_of(scope) {
             return TokenKind::Keyword;
         }
-        if s.starts_with("entity.name.function") {
+        if p.entity_name_function.is_prefix_of(scope) {
             return TokenKind::Function;
         }
-        if s.starts_with("entity.name.type") {
+        if p.entity_name_type.is_prefix_of(scope) {
             return TokenKind::Type;
         }
-        if s.starts_with("entity.name.macro") {
+        if p.entity_name_macro.is_prefix_of(scope) {
             return TokenKind::Macro;
         }
-        if s.starts_with("entity.name") {
+        if p.entity_name.is_prefix_of(scope) {
             return TokenKind::Function;
         }
-        if s.starts_with("variable") {
+        if p.variable.is_prefix_of(scope) {
             return TokenKind::Variable;
         }
-        if s.starts_with("support.function") {
+        if p.support_function.is_prefix_of(scope) {
             return TokenKind::Function;
         }
-        if s.starts_with("support.type") {
+        if p.support_type.is_prefix_of(scope) {
             return TokenKind::Type;
         }
-        if s.starts_with("support.macro") {
+        if p.support_macro.is_prefix_of(scope) {
             return TokenKind::Macro;
         }
-        if s.starts_with("punctuation") {
+        if p.punctuation.is_prefix_of(scope) {
             return TokenKind::Punctuation;
         }
-        if s.starts_with("meta.attribute") {
+        if p.meta_attribute.is_prefix_of(scope) {
             return TokenKind::Attribute;
         }
     }
@@ -259,6 +313,15 @@ fn classify_scope(stack: &ScopeStack) -> TokenKind {
 /// Returns `Some(line_tokens)` if the language is recognized by syntect,
 /// or `None` if unsupported. Callers should skip highlight storage for `None`.
 pub fn tokenize_file(content: &[u8], language: Language) -> Option<Vec<Vec<Token>>> {
+    // Skip large files to avoid excessive CPU time on generated/minified content.
+    if content.len() > MAX_TOKENIZE_BYTES {
+        return None;
+    }
+    let line_count = content.iter().filter(|&&b| b == b'\n').count();
+    if line_count > MAX_TOKENIZE_LINES {
+        return None;
+    }
+
     let ext = language_to_syntect_ext(language)?;
     let ss = &*SYNTAX_SET;
     let syntax = ss.find_syntax_by_extension(ext)?;

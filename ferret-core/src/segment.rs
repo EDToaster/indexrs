@@ -387,7 +387,7 @@ impl SegmentWriter {
     ///
     /// This is identical to [`build`](Self::build) but accepts a progress
     /// callback so callers can report indexing progress.
-    pub fn build_with_progress<F: FnMut()>(
+    pub fn build_with_progress<F: Fn() + Sync>(
         self,
         files: Vec<InputFile>,
         on_file_done: F,
@@ -415,12 +415,12 @@ impl SegmentWriter {
         }
     }
 
-    fn build_inner<F: FnMut()>(
+    fn build_inner<F: Fn() + Sync>(
         &self,
         temp_dir: &Path,
         final_dir: &Path,
         files: Vec<InputFile>,
-        mut on_file_done: F,
+        on_file_done: F,
     ) -> Result<Segment, IndexError> {
         /// Zstd compression level matching `ContentStoreWriter::add_content`.
         const ZSTD_LEVEL: i32 = 3;
@@ -477,6 +477,8 @@ impl SegmentWriter {
                     language,
                 );
 
+                on_file_done();
+
                 ProcessedFile {
                     content_hash,
                     language,
@@ -528,8 +530,6 @@ impl SegmentWriter {
                 highlight_len,
                 highlight_lines,
             });
-
-            on_file_done();
         }
 
         // Finalize posting lists (sort + dedup)
@@ -1348,11 +1348,19 @@ mod tests {
             },
         ];
 
-        let mut count = 0usize;
+        let count = std::sync::atomic::AtomicUsize::new(0);
         let writer = SegmentWriter::new(&base_dir, SegmentId(1));
-        writer.build_with_progress(files, || count += 1).unwrap();
+        writer
+            .build_with_progress(files, || {
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            })
+            .unwrap();
 
-        assert_eq!(count, 3, "callback should fire once per file");
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::Relaxed),
+            3,
+            "callback should fire once per file"
+        );
     }
 
     #[test]
