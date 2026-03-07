@@ -1023,7 +1023,10 @@ mod tests {
 
     #[test]
     fn html_escape_all_special_chars() {
-        assert_eq!(html_escape(r#"<div class="a&b">"#), "&lt;div class=&quot;a&amp;b&quot;&gt;");
+        assert_eq!(
+            html_escape(r#"<div class="a&b">"#),
+            "&lt;div class=&quot;a&amp;b&quot;&gt;"
+        );
     }
 
     #[test]
